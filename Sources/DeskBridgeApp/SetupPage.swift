@@ -24,6 +24,7 @@ struct SetupPage: View {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Text("동봉된 Windows quick-setup EXE를 두 번 클릭하세요. 압축 해제나 PowerShell 명령 입력 없이 Sunshine 설치 → 초기 설정 → Mac 연결 순서로 안내합니다. 파일 설정은 나중에 추가할 수 있어요.")
                                     Link("Sunshine 공식 프로젝트", destination: URL(string: "https://github.com/LizardByte/Sunshine")!)
+                                    QuietHelp(text: "Windows 도우미의 ‘모니터 없이 사용’에서 안내를 확인하세요. 가상 화면 자동 설치는 드라이버 보안 검토로 현재 보류 중입니다. 최초 설정에는 모니터나 다른 접속 수단이 필요합니다.", symbol: "display")
                                     QuietHelp(text: "Sunshine 고급 설정의 LAN과 WAN 암호화 모드를 모두 Mandatory로 설정하세요. 암호화가 준비되지 않은 PC의 화면 연결은 거부됩니다.", symbol: "lock")
                                     HStack(spacing: 12) {
                                         Button("설정 안내 열기") { openGuide() }

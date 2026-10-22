@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
-from windows_check_record import MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
+from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
 
 
 class WindowsPayloadCheckRecordTests(unittest.TestCase):
@@ -15,6 +15,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
             'packaging/windows/Launcher.cs', 'client/windows/Tests.cs', 'client/windows/EngineStore.cs',
             'scripts/tests/ReverseDiscoveryChecks.cs', 'client/windows/QrImageReader.cs',
             'scripts/tests/test_reverse_qr.cs', 'scripts/tests/test_reverse_qr_windows.cs')}
+        source.update({path: '8' * 64 for path in HEADLESS_SOURCE_PATHS})
         decoder = {'sha256': 'e' * 64, 'upstreamCommit': 'f' * 40, 'compilerExitCode': 0}
         self.build = {'sha256': 'a' * 64, 'managedSha256': 'b' * 64,
                       'sourceManifest': source, 'reverseQrDecoder': decoder,
@@ -26,6 +27,12 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                        'decoderResolverIdentityTested': True, 'decoderInitializationIdempotent': True,
                        'macToWindowsQRInterop': False, 'macToWindowsQRFixtureSha256': None,
                        'macCheckerSha256': None, 'macInteropSourceSha256': {},
+                       'headless': {'sourceSha256': {path: source[path] for path in HEADLESS_SOURCE_PATHS},
+                           'headless-native': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-native'],
+                               'freshSyntheticOnly': True, 'nativeApisInvoked': False, 'frameworkCompiler': False},
+                           'headless-setup': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-setup'],
+                               'freshSyntheticOnly': True, 'nativeApisInvoked': False}},
+                       'invocations': [{'label': label + '-synthetic-checks', 'exitCode': 0} for label in ('headless-native', 'headless-setup')],
                        'reverseClient': {
                            'schema': 1, 'status': 'passed', 'suites': ['reverse-client', 'reverse-discovery'],
                            'sourceManifest': source, 'freshSyntheticOnly': True, 'windowsRuntimeTested': False,
@@ -66,12 +73,54 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                 validate_windows_check_record({**self.checks, **changed}, self.build)
 
     def test_missing_or_incomplete_reverse_counts_are_rejected(self):
-        for label in ('reverse-client', 'reverse-discovery', 'reverse-qr'):
+        for label in ('reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup'):
             for invalid in (None, True, 0, MINIMUM_WINDOWS_CHECKS[label] - 1):
                 changed = copy.deepcopy(self.checks)
                 changed['counts'][label] = invalid
                 with self.subTest(label=label, invalid=invalid), self.assertRaises(ValueError):
                     validate_windows_check_record(changed, self.build)
+
+    def test_headless_synthetic_execution_cannot_be_omitted_or_replaced_by_native_calls(self):
+        for label in ('headless-native', 'headless-setup'):
+            for key, value in (('status', 'failed'), ('freshSyntheticOnly', False), ('nativeApisInvoked', True), ('checks', True)):
+                changed = copy.deepcopy(self.checks)
+                changed['headless'][label][key] = value
+                with self.subTest(label=label, key=key), self.assertRaises(ValueError):
+                    validate_windows_check_record(changed, self.build)
+            changed = copy.deepcopy(self.checks)
+            del changed['headless'][label]
+            with self.subTest(label=label, missing=True), self.assertRaises(ValueError):
+                validate_windows_check_record(changed, self.build)
+        changed = copy.deepcopy(self.checks)
+        del changed['headless']
+        with self.assertRaises(ValueError): validate_windows_check_record(changed, self.build)
+
+    def test_headless_source_and_runner_digests_are_required(self):
+        for path in HEADLESS_SOURCE_PATHS:
+            for mode in ('missing', 'changed'):
+                changed = copy.deepcopy(self.checks)
+                if mode == 'missing': del changed['headless']['sourceSha256'][path]
+                else: changed['headless']['sourceSha256'][path] = '9' * 64
+                with self.subTest(path=path, mode=mode), self.assertRaises(ValueError):
+                    validate_windows_check_record(changed, self.build)
+
+    def test_headless_success_requires_one_successful_invocation_per_suite(self):
+        for label in ('headless-native', 'headless-setup'):
+            for mode in ('missing', 'failed', 'duplicate'):
+                changed = copy.deepcopy(self.checks)
+                selected = next(item for item in changed['invocations'] if item['label'] == label + '-synthetic-checks')
+                if mode == 'missing': changed['invocations'].remove(selected)
+                elif mode == 'failed': selected['exitCode'] = 1
+                else: changed['invocations'].append(dict(selected))
+                with self.subTest(label=label, mode=mode), self.assertRaises(ValueError):
+                    validate_windows_check_record(changed, self.build)
+
+    def test_headless_compiler_path_must_be_explicit(self):
+        for value in (None, 'true', 1):
+            changed = copy.deepcopy(self.checks)
+            changed['headless']['headless-native']['frameworkCompiler'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_windows_check_record(changed, self.build)
 
     def test_source_changed_after_reverse_checks_is_rejected(self):
         changed = copy.deepcopy(self.checks)
@@ -148,7 +197,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
         changed['reverseClient']['sourceManifest'] = build['sourceManifest']
         changed.update(macToWindowsQRInterop=True, macToWindowsQRFixtureSha256='5' * 64,
                        macCheckerSha256='6' * 64, macInteropSourceSha256={path: '4' * 64 for path in MAC_INTEROP_SOURCE_PATHS},
-                       invocations=[{'label': 'export-actual-mac-qr-fixture', 'exitCode': 0}])
+                       invocations=changed['invocations'] + [{'label': 'export-actual-mac-qr-fixture', 'exitCode': 0}])
         validate_windows_check_record(changed, build)
         changed['macInteropSourceSha256'][MAC_INTEROP_SOURCE_PATHS[0]] = '7' * 64
         with self.assertRaises(ValueError): validate_windows_check_record(changed, build)

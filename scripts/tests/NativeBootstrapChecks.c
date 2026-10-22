@@ -57,6 +57,33 @@ int main(void) {
         expect(db_dispatch(7,enable)==DB_INVALID,"missing SID accepted");
     }
     {
+        const wchar_t *install[]={L"--elevated-operation",L"InstallVirtualDisplay",L"--zip-path",L"C:\\Knot\\VirtualDisplay.zip",L"--silent"};
+        const wchar_t *remove[]={L"--elevated-operation",L"RemoveVirtualDisplay",L"--instance-id",L"ROOT\\FOREIGN\\0000"};
+        const wchar_t *zip_paths[]={L"C:\\새 폴더\\VirtualDisplay.ZIP",L"D:\\one&two\\driver.zip",L"C:\\$fixture\\driver.zip"};
+        const wchar_t *unsafe_zip[]={L"",L"relative.zip",L"C:relative.zip",L"\\\\host\\share\\driver.zip",L"\\\\?\\C:\\driver.zip",
+            L"C:/driver.zip",L"C:\\a\\..\\driver.zip",L"C:\\a\\.\\driver.zip",L"C:\\a\\\\driver.zip",L"C:\\a.\\driver.zip",
+            L"C:\\a \\driver.zip",L"C:\\driver.zip:stream",L"C:\\driver.zip.exe",L"C:\\driver.msi",L"C:\\*.zip",L"C:\\driver.zip\" --arg"};
+        wchar_t control_path[]=L"C:\\fixture\\a.zip";
+        wchar_t boundary[1026];
+        expect(db_dispatch(4,install)==DB_INSTALL_DISPLAY,"fixed virtual display installation rejected");
+        expect(db_dispatch(3,install)==DB_INVALID && db_dispatch(5,install)==DB_INVALID,"virtual display installation accepted missing or extra args");
+        expect(db_dispatch(2,remove)==DB_REMOVE_DISPLAY,"fixed virtual display removal rejected");
+        expect(db_dispatch(3,remove)==DB_INVALID && db_dispatch(4,remove)==DB_INVALID,"virtual display removal accepted caller-selected identity");
+        remove[2]=L"--silent";
+        expect(db_dispatch(3,remove)==DB_INVALID,"virtual display removal accepted silent bypass");
+        install[2]=L"--msi-path";
+        expect(db_dispatch(4,install)==DB_INVALID,"virtual display installation accepted wrong package argument");
+        install[2]=L"--zip-path";
+        for (i=0;i<sizeof(zip_paths)/sizeof(*zip_paths);++i) { install[3]=zip_paths[i]; expect(db_dispatch(4,install)==DB_INSTALL_DISPLAY,"literal local ZIP rejected"); }
+        for (i=0;i<sizeof(unsafe_zip)/sizeof(*unsafe_zip);++i) { install[3]=unsafe_zip[i]; expect(db_dispatch(4,install)==DB_INVALID,"unsafe ZIP boundary accepted"); }
+        for (i=1;i<32;++i) { control_path[10]=(wchar_t)i; install[3]=control_path; expect(db_dispatch(4,install)==DB_INVALID,"C0 control in ZIP path accepted"); }
+        wcscpy(boundary,L"C:\\"); for (i=3;i<1020;++i) boundary[i]=L'a'; wcscpy(boundary+1020,L".zip"); install[3]=boundary;
+        expect(db_dispatch(4,install)==DB_INSTALL_DISPLAY,"bounded 1024-character ZIP path rejected");
+        boundary[1020]=L'a'; wcscpy(boundary+1021,L".zip");
+        expect(db_dispatch(4,install)==DB_INVALID,"oversized ZIP path accepted");
+        install[3]=NULL; expect(db_dispatch(4,install)==DB_INVALID,"null ZIP path accepted");
+    }
+    {
         const wchar_t *inputs[]={L"",L"plain",L"two words",L"C:\\tail\\",L"a\\\"b",L"a\"b",L"한국어"};
         const wchar_t *outputs[]={L"\"\"",L"\"plain\"",L"\"two words\"",L"\"C:\\tail\\\\\"",L"\"a\\\\\\\"b\"",L"\"a\\\"b\"",L"\"한국어\""};
         for (i=0;i<sizeof(inputs)/sizeof(*inputs);++i) { used=0; quoted[0]=0; expect(db_quote(quoted,1024,&used,inputs[i]) && wcscmp(quoted,outputs[i])==0,"CRT quote mismatch"); }

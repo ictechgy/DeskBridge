@@ -10,7 +10,7 @@ A free, open-source remote desktop app for work: open Windows in a full-screen S
 
 English · [한국어](README.ko.md)
 
-> **Development preview · 0.2.0-preview.15**
+> **Development preview · 0.2.0-preview.16**
 >
 > Real-device installation, video, input, audio and connection performance still need validation. Mac packages are ad-hoc signed and not notarized; Windows executables are unsigned previews. No performance or security advantage over other remote desktop products has been established.
 
@@ -31,6 +31,8 @@ In each row, the computer on the left controls the computer on the right.
 - **Mac app:** Apple Silicon, macOS 26 or later.
 - **Linux:** host only. No Linux client, Wayland, headless or pre-login desktop support.
 - Signing in, unlocking, waking from sleep and using virtual monitors are not guaranteed. The user must be logged in on the shared computer.
+
+Windows has an optional **모니터 없이 사용** (use without a monitor) setup panel. Automatic virtual-display installation is currently blocked pending the third-party driver security review; it is not a ready-to-use headless feature. See [Windows headless status and setup](docs/HEADLESS_WINDOWS.md).
 
 ## Features
 

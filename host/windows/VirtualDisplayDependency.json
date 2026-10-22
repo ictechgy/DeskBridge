@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "version": "25.7.23",
+  "url": "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip",
+  "bytes": 132118,
+  "sha256": "e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a",
+  "releaseCommit": "d437ebc9b44a14ce6e5cc9c8b7f6beb08d6faf77",
+  "architecture": "amd64",
+  "hardwareId": "Root\\MttVDD",
+  "driverVersion": "11.30.4.434",
+  "catalogSignerCertificateSha256": "69dfd3e1cbd49f039463edfe4c0d876c1dc7fdcd3aef08700a41355dc6c15fdb",
+  "settingsSha256": "84b1726e93c4337f48c8ba43f74249357a72340f02dac198b965b7f0381f00b7",
+  "provenance": "Official GitHub release asset digest and exact archive verified 2026-10-23. The x86-named asset contains an AMD64 DLL and NTamd64 INF. Source tag documents behavior; the signed binary is not claimed reproducibly built from that tag. Windows Authenticode and installation acceptance remain runtime checks.",
+  "installEnabled": false,
+  "driverSafetyReviewStatus": "blocked",
+  "installBlockedReason": "upstream-ipc-review"
+}

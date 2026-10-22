@@ -3,9 +3,15 @@
 import re
 
 REQUIRED_WINDOWS_SUITES = ['native-pe', 'managed-payload', 'native-arguments',
-                          'reverse-client', 'reverse-discovery', 'reverse-qr']
-MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 151, 'native-arguments': 95,
-                        'reverse-client': 124, 'reverse-discovery': 195, 'reverse-qr': 65}
+                          'reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup']
+MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 241, 'native-arguments': 154,
+                        'reverse-client': 124, 'reverse-discovery': 195, 'reverse-qr': 65,
+                        'headless-native': 226, 'headless-setup': 104}
+HEADLESS_SOURCE_PATHS = ['host/windows/HeadlessNative.cs', 'host/windows/HeadlessSetup.psm1',
+                         'host/windows/Invoke-DeskBridgeHeadless.ps1', 'host/windows/tests/Test-HeadlessNative.ps1',
+                         'host/windows/tests/Test-HeadlessSetup.ps1', 'scripts/tests/HeadlessNativeChecks.cs',
+                         'host/windows/VirtualDisplayDependency.json', 'host/windows/VirtualDisplayFiles.json',
+                         'host/windows/Knot-vdd_settings.xml']
 MAC_INTEROP_SOURCE_PATHS = ['Sources/DeskBridgeAppChecks/main.swift', 'Sources/DeskBridgeApp/MacHostPage.swift',
                             'Sources/DeskBridgeCore/ConnectionInvitation.swift']
 
@@ -27,6 +33,24 @@ def validate_windows_check_record(checks, build):
                 for label, minimum in MINIMUM_WINDOWS_CHECKS.items())):
         raise ValueError(message)
     source = build['sourceManifest']
+    headless = checks.get('headless', {})
+    if not isinstance(headless, dict):
+        raise ValueError(message)
+    headless_sources = headless.get('sourceSha256', {})
+    if (not isinstance(headless_sources, dict) or set(headless_sources) != set(HEADLESS_SOURCE_PATHS) or
+            any(not _digest(digest) or source.get(path) != digest for path, digest in headless_sources.items())):
+        raise ValueError(message)
+    for label in ('headless-native', 'headless-setup'):
+        result = headless.get(label, {})
+        if (not isinstance(result, dict) or result.get('status') != 'passed' or result.get('checks') != counts[label] or
+                type(result.get('checks')) is not int or result.get('freshSyntheticOnly') is not True or
+                result.get('nativeApisInvoked') is not False):
+            raise ValueError(message)
+        invocations = [entry for entry in checks.get('invocations', []) if isinstance(entry, dict) and entry.get('label') == label + '-synthetic-checks']
+        if len(invocations) != 1 or invocations[0].get('exitCode') != 0:
+            raise ValueError(message)
+    if type(headless['headless-native'].get('frameworkCompiler')) is not bool:
+        raise ValueError(message)
     if type(checks.get('macToWindowsQRInterop')) is not bool:
         raise ValueError(message)
     if checks['macToWindowsQRInterop']:

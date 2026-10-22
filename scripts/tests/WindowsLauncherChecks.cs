@@ -102,7 +102,21 @@ internal static class Checks
             catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException) { count++; continue; }
             throw new Exception("An early/unhandled setup failure was hidden");
         }
+        var headlessResult = launcher.GetMethod("InterpretHeadlessResult", BindingFlags.Static | BindingFlags.NonPublic)!;
+        foreach (int code in new[] { 0, 2, 3010, 1, 1602 })
+        foreach (bool completed in new[] { false, true })
+        foreach (bool rebootRequired in new[] { false, true })
+        {
+            bool accepted = (code == 0 && completed && !rebootRequired) || (code == 3010 && rebootRequired) || code == 2;
+            try
+            {
+                int interpreted = (int)headlessResult.Invoke(null, new object[] { code, completed, rebootRequired })!;
+                Expect(accepted && interpreted == code, "Headless status confused completion, restart, cancellation, or acknowledged failure");
+            }
+            catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException && !accepted) { count++; }
+        }
         var receiptCheck = launcher.GetMethod("HasSetupSuccessReceipt", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var zeroReceiptCheck = launcher.GetMethod("HasZeroLengthReceipt", BindingFlags.Static | BindingFlags.NonPublic)!;
         var receiptFixture = Path.Combine(Path.GetTempPath(), "deskbridge-receipt-checks-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(receiptFixture);
         var receiptPath = Path.Combine(receiptFixture, "operation-success");
@@ -117,6 +131,16 @@ internal static class Checks
             File.Delete(receiptPath); Directory.CreateDirectory(receiptPath);
             Expect(!HasReceipt(), "Directory cannot attest setup completion");
             Directory.Delete(receiptPath);
+            var rebootReceipt = Path.Combine(receiptFixture, "reboot-required");
+            bool HasRebootReceipt() => (bool)zeroReceiptCheck.Invoke(null, new object[] { receiptFixture, "reboot-required" })!;
+            Expect(!HasRebootReceipt(), "Missing receipt cannot attest a pending restart");
+            File.WriteAllBytes(rebootReceipt, Array.Empty<byte>());
+            Expect(HasRebootReceipt() && !HasReceipt(), "Restart receipt must remain distinct from completed operation receipt");
+            File.WriteAllText(rebootReceipt, "not a receipt");
+            Expect(!HasRebootReceipt(), "Nonempty receipt cannot attest a pending restart");
+            File.Delete(rebootReceipt); Directory.CreateDirectory(rebootReceipt);
+            Expect(!HasRebootReceipt(), "Directory cannot attest a pending restart");
+            Directory.Delete(rebootReceipt);
         }
         finally { Directory.Delete(receiptFixture, true); }
         var bootstrap = launcher.GetMethod("ParseBootstrapArguments", BindingFlags.Static | BindingFlags.NonPublic)!;
@@ -181,7 +205,35 @@ internal static class Checks
         }
         foreach (var path in new[] { "relative.msi", @"\\host\share\x.msi", @"C:\x.msi:evil", @"C:\..\x.msi", @"C:\a\.\x.msi", @"C:\a\\x.msi", @"C:\a.\x.msi", "C:/x.msi", @"C:\x.msi"" --arg", @"C:\x.exe", @"C:\" + new string('a',1024) + ".msi" })
             Reject(msiPath, path);
-        using (var dependencyStream = assembly.GetManifestResourceStream("DeskBridge.Payload.SunshineDependency.json")!)
+        foreach (var path in new[] { @"C:\새 폴더\VirtualDisplay.ZIP", @"D:\one&two\driver.zip", @"C:\$fixture\driver.zip", @"C:\" + new string('a',1017) + ".zip" })
+        {
+            var install = broker.Invoke(null, new object[] { new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", path } })!;
+            Expect(Field(install, "Operation") == "InstallVirtualDisplay" && Field(install, "ZipPath") == path && Field(install, "MsiPath") == null,
+                "Virtual display install must retain exactly the bounded ZIP path");
+        }
+        var removeDisplay = broker.Invoke(null, new object[] { new[] { "--elevated-operation", "RemoveVirtualDisplay" } })!;
+        Expect(Field(removeDisplay, "Operation") == "RemoveVirtualDisplay" && Field(removeDisplay, "ZipPath") == null && Field(removeDisplay, "RequestJson") == null,
+            "Virtual display removal must not accept caller-selected paths or device identity");
+        foreach (var input in new[] {
+            new[] { "--elevated-operation", "InstallVirtualDisplay" },
+            new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path" },
+            new[] { "--elevated-operation", "InstallVirtualDisplay", "--msi-path", @"C:\driver.zip" },
+            new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", @"C:\driver.zip", "--silent" },
+            new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", @"C:\driver.zip", "--sha256", new string('a',64) },
+            new[] { "--elevated-operation", "InstallVirtualDisplay", "--url", "https://example.invalid/driver.zip" },
+            new[] { "--elevated-operation", "RemoveVirtualDisplay", "--silent" },
+            new[] { "--elevated-operation", "RemoveVirtualDisplay", "--instance-id", @"ROOT\FOREIGN\0000" },
+            new[] { "--elevated-operation", "RemoveVirtualDisplay", "--zip-path", @"C:\driver.zip" },
+            new[] { "--elevated-operation", "RemoveVirtualDisplay", "--script-path", @"C:\evil.ps1" }
+        }) RejectBroker(broker, input);
+        foreach (var path in new[] { "", "relative.zip", @"C:relative.zip", @"\\host\share\driver.zip", @"\\?\C:\driver.zip", "C:/driver.zip",
+            @"C:\a\..\driver.zip", @"C:\a\.\driver.zip", @"C:\a\\driver.zip", @"C:\a.\driver.zip", @"C:\a \driver.zip", @"C:\driver.zip:stream",
+            @"C:\driver.zip.exe", @"C:\driver.msi", @"C:\*.zip", @"C:\driver.zip"" --arg", @"C:\" + new string('a',1018) + ".zip" })
+            RejectBroker(broker, new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", path });
+        for (int control = 0; control < 32; control++)
+            RejectBroker(broker, new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", @"C:\fixture" + (char)control + "a.zip" });
+        foreach (var dependencyName in new[] { "SunshineDependency.json", "VirtualDisplayDependency.json" })
+        using (var dependencyStream = assembly.GetManifestResourceStream("DeskBridge.Payload." + dependencyName)!)
         using (var dependencyReader = new StreamReader(dependencyStream))
         {
             var dependencyJson = dependencyReader.ReadToEnd();

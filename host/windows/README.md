@@ -59,3 +59,7 @@ Fixed ProgramData state/export paths remain fail-closed when a pre-existing obje
 Uninstall always runs the broker's fixed-resource inventory; a missing `DeskBridgeSFTP` directory never proves inactivity. Missing/unknown recovery state or an unrelated active OpenSSH deployment may block removal and retain the helper. An administrator must review that state manually. This does not authorize taking over or stopping another SSH deployment.
 
 Revocation must also pass a fresh inactivity inventory after its changes; denied firewall deletion, any remaining configured/effective `DeskBridge-SFTP-In-TCP` rule or an unknown same-named OpenSSH worker prevents the broker from attesting completion. It never stops workers outside the dedicated system OpenSSH path. The initial setup compiles its directory helper using private administrator-only CodeDOM temporary files and restores the process temporary-directory settings afterward.
+
+## Optional virtual display
+
+The **모니터 없이 사용** panel provides status, recovery and manual Sunshine guidance. Automatic installation remains disabled by a backend-enforced policy pending third-party driver security acceptance. It is not a ready-to-use headless feature. Knot uninstall retains the device/configuration; explicit managed removal keeps shared driver-store cache. See [headless status and guide](../../docs/HEADLESS_WINDOWS.md).

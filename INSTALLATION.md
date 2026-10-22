@@ -77,3 +77,7 @@ Windows에서 엔진 파일 확인이 계속 실패하면 Knot와 Moonlight 창�
 Ubuntu 24.04 LTS amd64의 로그인한 X11 데스크톱을 지원합니다. Linux용 `.deb`를 시스템 설치 프로그램으로 열고 앱 목록의 **Knot Linux Host**를 실행하세요. 앱에서 공식 Sunshine 받기 → 시스템 설치 → 최초 웹 관리자 계정 입력 → 이 Linux 공유 시작 → 웹 로그인 → QR 순서로 진행합니다. Mac은 **Linux 화면**, Windows는 **Linux 열기**를 선택하세요. 자세한 설치·방화벽·입력 권한·삭제 안내는 함께 제공한 `LINUX-INSTALLATION.md` 또는 소스의 `host/linux/README.md`를 확인하세요.
 
 Wayland·로그인 화면·헤드리스·Linux 파일 전송·Linux 클라이언트는 아직 지원하지 않습니다. Linux 실제 GPU/입력/오디오와 네트워크 성능은 기기에서 검증해야 합니다. 기존 Mac→Windows 파일 기능과 Windows→Mac 화면 연결은 유지합니다.
+
+## 모니터가 없는 Windows PC
+
+Windows 도우미의 **모니터 없이 사용**에서 상태와 설정 안내를 확인할 수 있습니다. 외부 드라이버의 보안 검토가 끝날 때까지 가상 화면 자동 설치는 차단되어 있습니다. 현재는 모니터 또는 HDMI/DisplayPort 더미 플러그로 화면을 제공해야 합니다. 최초 설정에는 다른 접속 수단이 필요하며, 로그인·잠금 해제·절전 복귀는 지원 범위가 아닙니다. [상세 안내](docs/HEADLESS_WINDOWS.md).

@@ -26,7 +26,7 @@ internal sealed class PayloadEntry
 
 internal sealed class BrokerRequest
 {
-    internal string Operation, RequestJson, WindowsAddress, DesktopUserSid, MsiPath;
+    internal string Operation, RequestJson, WindowsAddress, DesktopUserSid, MsiPath, ZipPath;
     internal bool Silent;
 }
 
@@ -177,6 +177,8 @@ internal static class Launcher
 
     private static int RunElevatedOperation(BrokerRequest request, string directory, List<string> written)
     {
+        if (request.Operation == "InstallVirtualDisplay" || request.Operation == "RemoveVirtualDisplay")
+            return RunHeadlessOperation(request, directory, written);
         if (request.Operation == "InstallSunshine")
         {
             SunshinePin pin = ParseSunshinePin(File.ReadAllText(Path.Combine(directory, "SunshineDependency.json")));
@@ -206,6 +208,8 @@ internal static class Launcher
                 return exit;
             }
         }
+        if (request.Operation != "EnableFiles" && request.Operation != "Export" && request.Operation != "DisableFiles")
+            throw new InvalidDataException("지원하지 않는 관리자 작업입니다.");
         string arguments = "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File " + Quote(Path.Combine(directory, "Invoke-DeskBridgeSetup.ps1")) +
             " -SuccessReceipt -Operation " + request.Operation;
         if (request.Silent) arguments += " -NoPause";
@@ -229,9 +233,59 @@ internal static class Launcher
         return InterpretSetupResult(RunAndWait(start), request.Silent, HasSetupSuccessReceipt(directory));
     }
 
+    private static int RunHeadlessOperation(BrokerRequest request, string directory, List<string> written)
+    {
+        if (request.Operation == "InstallVirtualDisplay")
+        {
+            SunshinePin pin = ParseSunshinePin(File.ReadAllText(Path.Combine(directory, "VirtualDisplayDependency.json")));
+            if (new DriveInfo(Path.GetPathRoot(request.ZipPath)).DriveType == DriveType.Network)
+                throw new InvalidDataException("드라이버 설치 파일을 로컬 드라이브로 복사하세요.");
+            AssertOrdinaryAncestors(Path.GetDirectoryName(request.ZipPath));
+            if ((File.GetAttributes(request.ZipPath) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("드라이버 설치 파일에 연결 경로를 사용할 수 없습니다.");
+            string archive = Path.Combine(directory, "VirtualDisplayDriver.zip");
+            using (var source = new FileStream(request.ZipPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                if (source.Length != pin.Bytes) throw new InvalidDataException("드라이버 설치 파일 크기가 다릅니다.");
+                using (var output = new FileStream(archive, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                { written.Add(archive); CopyPinnedInstaller(source, output, pin.Bytes); }
+            }
+            using (var verified = new FileStream(archive, FileMode.Open, FileAccess.Read, FileShare.Read))
+                VerifyHash(verified, pin.Sha256);
+        }
+        foreach (string name in new[] { "operation-success", "reboot-required" })
+        {
+            string path = Path.Combine(directory, name);
+            if (File.Exists(path) || Directory.Exists(path))
+                throw new InvalidDataException("가상 화면 작업 확인 파일이 이미 있습니다. 새 설정 창에서 다시 시도하세요.");
+            written.Add(path);
+        }
+        var start = new ProcessStartInfo(WindowsPowerShell(),
+            "-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File " + Quote(Path.Combine(directory, "Invoke-DeskBridgeHeadless.ps1")) +
+            " -SuccessReceipt -Operation " + request.Operation);
+        start.UseShellExecute = false;
+        start.WorkingDirectory = directory;
+        int result = RunAndWait(start);
+        return InterpretHeadlessResult(result, HasSetupSuccessReceipt(directory), HasZeroLengthReceipt(directory, "reboot-required"));
+    }
+
+    internal static int InterpretHeadlessResult(int result, bool completed, bool rebootRequired)
+    {
+        if (result == 0 && completed && !rebootRequired) return 0;
+        // A reboot receipt means pending work, never an installed/streaming success claim.
+        if (result == 3010 && rebootRequired) return 3010;
+        if (result == 2) return 2;
+        throw new InvalidOperationException("가상 화면 작업을 완료하지 못했습니다. 상태를 다시 확인한 뒤 복구 안내를 따르세요.");
+    }
+
     internal static bool HasSetupSuccessReceipt(string directory)
     {
-        string path = Path.Combine(directory, "operation-success");
+        return HasZeroLengthReceipt(directory, "operation-success");
+    }
+
+    private static bool HasZeroLengthReceipt(string directory, string name)
+    {
+        string path = Path.Combine(directory, name);
         try
         {
             if ((File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0) return false;
@@ -304,6 +358,16 @@ internal static class Launcher
             if (args.Length != 4 || args[2] != "--msi-path") throw new InvalidDataException("올바르지 않은 설치 요청입니다.");
             ValidateMsiPath(args[3]); request.MsiPath = args[3]; return request;
         }
+        if (request.Operation == "InstallVirtualDisplay")
+        {
+            if (args.Length != 4 || args[2] != "--zip-path") throw new InvalidDataException("올바르지 않은 가상 화면 설치 요청입니다.");
+            ValidatePackagePath(args[3], ".zip"); request.ZipPath = args[3]; return request;
+        }
+        if (request.Operation == "RemoveVirtualDisplay")
+        {
+            if (args.Length != 2) throw new InvalidDataException("올바르지 않은 가상 화면 제거 요청입니다.");
+            return request;
+        }
         bool enable = request.Operation == "EnableFiles";
         if ((!enable && request.Operation != "Export") || args.Length != (enable ? 8 : 6) ||
             args[2] != "--request-base64" || args[4] != "--windows-address" || (enable && args[6] != "--desktop-user-sid"))
@@ -340,10 +404,17 @@ internal static class Launcher
 
     internal static void ValidateMsiPath(string path)
     {
+        ValidatePackagePath(path, ".msi");
+    }
+
+    private static void ValidatePackagePath(string path, string extension)
+    {
         if (String.IsNullOrEmpty(path) || path.Length > 1024 || !Regex.IsMatch(path, @"\A[A-Za-z]:\\") ||
-            path.IndexOfAny(new char[] { '"', '\r', '\n', '\0', '/' }) >= 0 || path.IndexOf(':', 2) >= 0 ||
-            !path.EndsWith(".msi", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("로컬 MSI 설치 파일이 필요합니다.");
+            path.IndexOfAny(new char[] { '"', '\r', '\n', '\0', '/', '<', '>', '|', '?', '*' }) >= 0 || path.IndexOf(':', 2) >= 0 ||
+            !path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("올바른 로컬 설치 파일이 필요합니다.");
+        foreach (char value in path)
+            if (value < 32) throw new InvalidDataException("올바른 로컬 설치 파일이 필요합니다.");
         foreach (string part in path.Substring(3).Split('\\'))
             if (part.Length == 0 || part == "." || part == ".." || part.EndsWith(".", StringComparison.Ordinal) || part.EndsWith(" ", StringComparison.Ordinal))
                 throw new InvalidDataException("올바르지 않은 설치 경로입니다.");

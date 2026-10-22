@@ -18,6 +18,8 @@ PAYLOAD_NAMES = (
     "Enable-DeskBridgeSFTP.ps1", "Resume-DeskBridgeSFTP.ps1", "Disable-DeskBridgeSFTP.ps1",
     "SunshineDependency.json", "README.md",
     "ConnectionInvitation.psm1", "Show-ConnectionQR.ps1",
+    "HeadlessSetup.psm1", "HeadlessNative.cs", "Invoke-DeskBridgeHeadless.ps1", "Show-HeadlessSetup.ps1",
+    "VirtualDisplayDependency.json", "VirtualDisplayFiles.json", "Knot-vdd_settings.xml", "VirtualDisplay-NOTICE.txt",
 )
 
 
@@ -49,10 +51,37 @@ def verify_runtime_notices(root):
     return {**provenance['files'], 'NOTICE': hashlib.sha256(notice).hexdigest()}
 
 
+def verify_virtual_display_inputs(root):
+    folder = Path(root) / 'host/windows'
+    pin = json.loads((folder / 'VirtualDisplayDependency.json').read_text())
+    files = json.loads((folder / 'VirtualDisplayFiles.json').read_text())
+    if (pin.get('schema') != 1 or pin.get('bytes') != 132118 or
+            pin.get('sha256') != 'e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a' or
+            pin.get('url') != 'https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip' or
+            pin.get('architecture') != 'amd64' or files.get('schema') != 1):
+        raise ValueError('Unexpected virtual display package pin')
+    expected = {'VirtualDisplayDriver/mttvdd.cat', 'VirtualDisplayDriver/MttVDD.dll',
+                'VirtualDisplayDriver/MttVDD.inf', 'VirtualDisplayDriver/vdd_settings.xml'}
+    inventory = files.get('files', [])
+    if (len(inventory) != 4 or {item['path'] for item in inventory} != expected or
+            any(type(item['bytes']) is not int or not 0 < item['bytes'] <= 300000 or
+                not re.fullmatch('[0-9a-f]{64}', item['sha256']) for item in inventory)):
+        raise ValueError('Invalid virtual display inventory')
+    if hashlib.sha256((folder / 'Knot-vdd_settings.xml').read_bytes()).hexdigest() != pin.get('settingsSha256'):
+        raise ValueError('Virtual display settings differ from the pinned template')
+    notice = (folder / 'VirtualDisplay-NOTICE.txt').read_text()
+    if 'Copyright (c) 2024 Virtual Display' not in notice or 'Permission is hereby granted' not in notice:
+        raise ValueError('Missing virtual display license notice')
+    return {'dependencySha256': hashlib.sha256((folder / 'VirtualDisplayDependency.json').read_bytes()).hexdigest(),
+            'inventorySha256': hashlib.sha256((folder / 'VirtualDisplayFiles.json').read_bytes()).hexdigest(),
+            'settingsSha256': pin['settingsSha256'], 'deviceRuntimeTested': False}
+
+
 def build(compiler, references, output, dotnet=None, native_compiler=None):
     if not native_compiler:
         raise ValueError('Supply the pinned Zig compiler via --native-compiler')
     runtime_notice_hashes = verify_runtime_notices(ROOT)
+    virtual_display = verify_virtual_display_inputs(ROOT)
     native_compiler_sha = hashlib.sha256(Path(native_compiler).read_bytes()).hexdigest()
     version = (ROOT / "VERSION").read_text().strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.]+)?", version):
@@ -168,6 +197,7 @@ def build(compiler, references, output, dotnet=None, native_compiler=None):
               "reverseQrDecoder": decoder_record, "reverseEngine": engine_record,
               "extraResources": {decoder_record['resourceName']: decoder_record['sha256']},
               "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+              "virtualDisplay": virtual_display,
               "windowsRuntimeTested": False, "authenticodeSigned": False}
     manifest.write_text(json.dumps(record, indent=2))
     return record

@@ -6,7 +6,7 @@ import argparse, hashlib, importlib.util, json, os, shutil, subprocess, tempfile
 from windows_resources import NativePE, validate_bootstrap
 from build_snapshot import source_snapshot
 from test_reverse_client import run as run_reverse_client
-from windows_check_record import MAC_INTEROP_SOURCE_PATHS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
+from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -18,6 +18,29 @@ def fixture_module(name):
     spec.loader.exec_module(module)
     return module
 
+
+def run_headless_checks(powershell, invoke, snapshot):
+    """Compile actual native source and exercise production setup with inert fixtures."""
+    if not powershell:
+        if os.name != 'nt':
+            raise ValueError('Supply --powershell for mandatory synthetic headless native/setup checks')
+        powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
+    results = {'sourceSha256': {path: snapshot[path] for path in HEADLESS_SOURCE_PATHS}}
+    for label, script in [('headless-native', 'Test-HeadlessNative.ps1'), ('headless-setup', 'Test-HeadlessSetup.ps1')]:
+        entry = invoke(label + '-synthetic-checks', [powershell, '-NoProfile', '-NonInteractive', '-File', ROOT / 'host/windows/tests' / script])
+        lines = entry['stdout'].strip().splitlines()
+        if not lines:
+            raise ValueError(label + ' checker returned no terminal result')
+        result = json.loads(lines[-1])
+        if (result.get('status') != 'passed' or type(result.get('checks')) is not int or
+                result['checks'] < MINIMUM_WINDOWS_CHECKS[label] or result.get('freshSyntheticOnly') is not True or
+                result.get('nativeApisInvoked') is not False):
+            raise ValueError(label + ' checker returned incomplete or unsafe results')
+        if label == 'headless-native' and type(result.get('frameworkCompiler')) is not bool:
+            raise ValueError('Headless native fixture did not identify its compiler path')
+        results[label] = result
+    return results
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dotnet', required=True)
@@ -26,6 +49,7 @@ if __name__ == '__main__':
     parser.add_argument('--native-compiler', help='Pinned Zig compiler to build pure C checks on Windows')
     parser.add_argument('--compiler', help='C# compiler; defaults to the executable build record')
     parser.add_argument('--references', help='.NET Framework 4.8 references; defaults to the executable build record')
+    parser.add_argument('--powershell', help='Explicit PowerShell executable for mandatory inert headless suites; Windows defaults to system Windows PowerShell')
     args = parser.parse_args()
     check_record = args.executable.resolve().with_suffix('.checks.json')
     check_record.unlink(missing_ok=True)
@@ -71,7 +95,7 @@ if __name__ == '__main__':
             invoke('export-actual-mac-qr-fixture', [args.mac_checker.resolve(), '--synthetic-mac-qr', mac_fixture], timeout=60)
             payload_argv.append(mac_fixture)
         payload_result = json.loads(invoke('execute-managed-payload-checker', payload_argv, timeout=60)['stdout'])
-        if payload_result.get('status') != 'passed' or type(payload_result.get('checks')) is not int or payload_result['checks'] < 151:
+        if payload_result.get('status') != 'passed' or type(payload_result.get('checks')) is not int or payload_result['checks'] < MINIMUM_WINDOWS_CHECKS['managed-payload']:
             raise ValueError('Managed payload checker returned incomplete results')
         if (payload_result.get('embeddedDecoderBindingTested') is not True or
                 payload_result.get('decoderResolverIdentityTested') is not True or
@@ -89,7 +113,7 @@ if __name__ == '__main__':
         native_env = dict(env, ZIG_GLOBAL_CACHE_DIR=str(root / 'zig-global'), ZIG_LOCAL_CACHE_DIR=str(root / 'zig-local'))
         invoke('compile-native-argument-checks', prefix + ['-std=c11', '-Wall', '-Wextra', '-Werror', str(ROOT / 'scripts/tests/NativeBootstrapChecks.c'), '-o', str(native_checks)], native_env)
         native_result = json.loads(invoke('execute-native-argument-checks', [native_checks], timeout=60)['stdout'])
-        if native_result.get('status') != 'passed' or type(native_result.get('checks')) is not int or native_result['checks'] < 95:
+        if native_result.get('status') != 'passed' or type(native_result.get('checks')) is not int or native_result['checks'] < MINIMUM_WINDOWS_CHECKS['native-arguments']:
             raise ValueError('Native argument checker returned incomplete results')
         if args.mac_checker:
             invoke('windows-to-mac-qr-interop', [args.mac_checker.resolve(), '--synthetic-qr-bmp', bmp], timeout=60)
@@ -108,6 +132,7 @@ if __name__ == '__main__':
                 reverse_qr_windows.get('status') != ('PASS' if os.name == 'nt' else 'COMPILED_ONLY') or
                 reverse_qr_windows.get('windowsImageCodecTested') is not (os.name == 'nt')):
             raise ValueError('Native Windows QR fixture result is incomplete or mislabeled')
+        headless = run_headless_checks(args.powershell, invoke, snapshot)
     if source_snapshot(ROOT) != snapshot or hashlib.sha256(native.read_bytes()).hexdigest() != record['sha256']:
         raise ValueError('Inputs changed during Windows checks; rerun')
     if args.mac_checker and hashlib.sha256(args.mac_checker.read_bytes()).hexdigest() != mac_checker_sha:
@@ -115,9 +140,10 @@ if __name__ == '__main__':
     checked = {'schema': 1, 'status': 'passed',
         'suites': REQUIRED_WINDOWS_SUITES,
         'counts': {'native-pe': 1, 'managed-payload': payload_result['checks'], 'native-arguments': native_result['checks'],
-                   **reverse['counts'], 'reverse-qr': reverse_qr['checks']},
+                   **reverse['counts'], 'reverse-qr': reverse_qr['checks'],
+                   'headless-native': headless['headless-native']['checks'], 'headless-setup': headless['headless-setup']['checks']},
         **{key: record[key] for key in ('sha256', 'managedSha256', 'sourceManifest')},
-        'reverseClient': reverse, 'reverseQR': reverse_qr, 'reverseQRWindows': reverse_qr_windows,
+        'reverseClient': reverse, 'reverseQR': reverse_qr, 'reverseQRWindows': reverse_qr_windows, 'headless': headless,
         'embeddedDecoderBindingTested': payload_result['embeddedDecoderBindingTested'],
         'embeddedDecoderSha256': payload_result['embeddedDecoderSha256'],
         'decoderResolverIdentityTested': payload_result['decoderResolverIdentityTested'],

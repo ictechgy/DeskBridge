@@ -111,7 +111,7 @@ namespace DeskBridge.Setup
                                 uri = next; continue;
                             }
                             if (response.Status != 200 || response.Length >= 0 && response.Length != expectedBytes)
-                                throw new IOException("Sunshine 설치 파일 크기를 확인하지 못했습니다.");
+                                throw new IOException("설치 파일 크기를 확인하지 못했습니다.");
                             using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 65536, true))
                             {
                                 created = true;
@@ -131,11 +131,11 @@ namespace DeskBridge.Setup
                                     deadline.Token.ThrowIfCancellationRequested();
                                     if (read == 0) break;
                                     // Reject a chunk before any of its bytes can exceed the pinned bound on disk.
-                                    if (read > expectedBytes - total) throw new IOException("Sunshine 설치 파일이 예상 크기를 초과했습니다.");
+                                    if (read > expectedBytes - total) throw new IOException("설치 파일이 예상 크기를 초과했습니다.");
                                     await output.WriteAsync(buffer, 0, read, deadline.Token).ConfigureAwait(false);
                                     total += read; progress(total);
                                 }
-                                if (total != expectedBytes) throw new IOException("Sunshine 설치 파일을 끝까지 내려받지 못했습니다.");
+                                if (total != expectedBytes) throw new IOException("설치 파일을 끝까지 내려받지 못했습니다.");
                                 await output.FlushAsync(deadline.Token).ConfigureAwait(false);
                             }
                             deadline.Token.ThrowIfCancellationRequested();
@@ -143,7 +143,7 @@ namespace DeskBridge.Setup
                             return;
                         }
                     }
-                    throw new IOException("Sunshine 다운로드를 완료하지 못했습니다.");
+                    throw new IOException("설치 파일 다운로드를 완료하지 못했습니다.");
                 }
                 catch
                 {
