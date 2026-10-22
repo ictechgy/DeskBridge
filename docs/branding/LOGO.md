@@ -1,19 +1,22 @@
-# Nearby panes icon
+# Knot mark
 
-The symbol shows two nearby work surfaces with an open passage between them. The ink, ivory and muted teal palette fits the existing Quiet Sidebar. It contains no name, so the naming recommendation can be evaluated without changing saved app identities or keys.
+The mark uses two rounded loops with alternating over/under crossings. Ivory and muted teal bands on a deep ink rounded tile express separate computers tied into one working environment. The existing Quiet Sidebar layout and semantic interface colors remain unchanged.
 
-Created with the built-in image generation tool on 2026-10-19. The second operation makes the area outside the tile transparent. The selected master is `Assets/Brand/nearby-panes.png`; native containers are `AppIcon.icns` and `AppIcon.ico`. `python3 scripts/build_brand_icons.py` reproduces format/size conversion using macOS sips and iconutil, retaining alpha. The repo's distribution license applies to these project assets. This is not a claim of trademark clearance or exclusive rights.
+## Source and reproduction
 
-Mac packages include the icon and sidebar mark. Windows quick setup and the Inno installer use the ICO. Native 100–200% DPI, Dock, Start menu and small-size visual acceptance remains a device check.
+- Geometry: `scripts/render_brand_mark.swift`.
+- Generated scalable asset: `Assets/Brand/knot.svg`, including an accessible title and description.
+- Generated 1024px master: `Assets/Brand/knot.png`; pixels outside the rounded tile are transparent.
+- Native containers: `Assets/Brand/AppIcon.icns` and `Assets/Brand/AppIcon.ico`.
 
-## Exact generation prompt
+On a Mac with the Swift compiler and macOS icon tools:
 
-```text
-Use case: logo-brand. Asset type: a finished macOS and Windows application icon for an open-source native remote desktop and chosen-file transfer work tool. Primary request: design one original, beautifully resolved, quiet geometric app icon suggesting two nearby desktop panes connected through a small open passage. Native professional productivity app, calm and precise. Composition: one centered bold, memorable symbol composed of two slightly offset rounded window-like planes whose negative space forms a short open passage; generous optical margins, extremely legible at 24 pixels. Opaque deep ink navy rounded-square app tile, warm ivory main symbol and one restrained muted teal accent where the panes meet. Flat vector-like crisp geometry, subtle optical rounding, no gradients, no shadows, no 3D, no photographic textures. No text, no wordmark, no letters, no arrows, no padlock, no chain links, no globe, no computer-stand silhouette, no operating-system logos. Deliver just the single app icon at large square resolution, straight-on, filling the image with an opaque navy background (rounded-square tile fully visible), no mockup scene or surrounding objects. This is an original symbol exploration; do not imitate an existing brand.
+```sh
+python3 scripts/build_brand_icons.py
 ```
 
-## Exact transparency edit prompt
+The renderer constructs new vector geometry using CoreGraphics and emits the SVG and PNG. It opens no application, desktop, user image, preferences or network connection. The converter uses sips/iconutil to create app icon sizes. No image-generation service or runtime asset download is needed.
 
-```text
-Edit target: the attached generated app icon. Change only the white area outside the large navy rounded-square tile to genuine alpha transparency, so it is ready for an ICNS/ICO app icon. Preserve the navy tile, ivory two-pane symbol, teal passage, geometry, colors, proportions and entire design exactly. Square canvas. No added text, no redesign. Transparent outside the tile only; navy and symbols remain opaque.
-```
+Mac packages include the mark and ICNS, Windows uses the ICO, and the Linux desktop package installs the PNG. Static source-asset inspection does not validate Dock, Start menu, GTK or native display behavior on a user's device.
+
+These project assets are distributed under the repository's GPL-3.0-only license. The simple interwoven-loop motif is not represented as trademark clearance or an exclusive symbol.

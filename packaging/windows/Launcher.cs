@@ -68,7 +68,7 @@ internal static class Launcher
             silent = request != null && request.Silent;
             Application.EnableVisualStyles();
             if (request == null && bootstrap == null)
-                throw new InvalidOperationException("배포용 DeskBridge EXE를 실행하세요. 내부 관리 도우미는 직접 실행하지 않습니다.");
+                throw new InvalidOperationException("배포용 Knot EXE를 실행하세요. 내부 관리 도우미는 직접 실행하지 않습니다.");
             ushort processMachine, nativeMachine;
             if (!Environment.Is64BitProcess || !IsWow64Process2(Process.GetCurrentProcess().Handle, out processMachine, out nativeMachine) ||
                 nativeMachine != 0x8664 || Environment.OSVersion.Version.Build < 22000)
@@ -82,12 +82,12 @@ internal static class Launcher
                 if (request == null)
                 {
                     if (elevated)
-                        throw new InvalidOperationException("관리자 창을 닫고 DeskBridge EXE를 평소처럼 두 번 클릭하세요. 필요한 단계에서 관리자 확인을 요청합니다.");
+                        throw new InvalidOperationException("관리자 창을 닫고 Knot EXE를 평소처럼 두 번 클릭하세요. 필요한 단계에서 관리자 확인을 요청합니다.");
                     directory = CreatePrivateDirectory(Path.GetTempPath(), identity.User, false);
                 }
                 else
                 {
-                    if (!elevated) throw new InvalidOperationException("이 작업은 DeskBridge 설정 창의 관리자 확인으로 실행하세요.");
+                    if (!elevated) throw new InvalidOperationException("이 작업은 Knot 설정 창의 관리자 확인으로 실행하세요.");
                     // A protected child of Program Files cannot be renamed via a user's writable temp parent.
                     string parent = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
                     AssertProtectedAncestors(parent);
@@ -118,7 +118,7 @@ internal static class Launcher
         }
         catch (Exception error)
         {
-            if (!silent) MessageBox.Show(error.Message, "DeskBridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            if (!silent) MessageBox.Show(error.Message, "Knot", MessageBoxButtons.OK, MessageBoxIcon.Error);
             // Native outer preserves failure, but does not duplicate an already-shown managed error.
             return silent ? 1 : 2;
         }

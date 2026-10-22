@@ -46,15 +46,15 @@ try {
     $save.Add_Click({
         $dialog=New-Object Windows.Forms.SaveFileDialog
         try {
-            $dialog.Filter='PNG image (*.png)|*.png'; $dialog.FileName='DeskBridge-Connection-QR.png'
+            $dialog.Filter='PNG image (*.png)|*.png'; $dialog.FileName='Knot-Connection-QR.png'
             if ($dialog.ShowDialog($window) -eq 'OK') { $bitmap.Save($dialog.FileName,[Drawing.Imaging.ImageFormat]::Png) }
-        } catch { [Windows.Forms.MessageBox]::Show('QR 이미지를 저장하지 못했습니다. 다른 위치를 선택하세요.','DeskBridge','OK','Error') | Out-Null }
+        } catch { [Windows.Forms.MessageBox]::Show('QR 이미지를 저장하지 못했습니다. 다른 위치를 선택하세요.','Knot','OK','Error') | Out-Null }
         finally { $dialog.Dispose() }
     }); if ($hasQR) { $actions.Controls.Add($save) }
     $copy=New-Object Windows.Forms.Button; $copy.Text='연결 링크 복사'; $copy.Size=New-Object Drawing.Size(200,34)
     $copy.Add_Click({
         try { [Windows.Forms.Clipboard]::SetText($Link) }
-        catch { [Windows.Forms.MessageBox]::Show('링크를 복사하지 못했습니다. 위 링크를 직접 선택해 복사하세요.','DeskBridge','OK','Error') | Out-Null }
+        catch { [Windows.Forms.MessageBox]::Show('링크를 복사하지 못했습니다. 위 링크를 직접 선택해 복사하세요.','Knot','OK','Error') | Out-Null }
     }); $actions.Controls.Add($copy)
     $panel.Add_SizeChanged({
         $available=[Math]::Max(240,$panel.ClientSize.Width-$panel.Padding.Horizontal-[Windows.Forms.SystemInformation]::VerticalScrollBarWidth-12)

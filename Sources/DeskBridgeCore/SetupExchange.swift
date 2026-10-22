@@ -42,7 +42,7 @@ public enum SetupExchange {
         case invalidClientKey
         public var errorDescription: String? {
             switch self {
-            case .invalid: "DeskBridge 설정 파일의 버전·주소·공개 키를 확인하세요."
+            case .invalid: "Knot 설정 파일의 버전·주소·공개 키를 확인하세요."
             case .wrongClient: "현재 선택한 Mac 키로 만든 설정 파일이 아닙니다. 해당 Mac 키를 선택하세요."
             case .addressCount: "Windows에서 허용할 Mac 주소를 1개 이상, 8개 이하로 선택하세요."
             case .invalidClientKey: "Mac 설정 파일에는 Ed25519 공개 키가 필요합니다. Mac 전용 키를 새로 만들거나 Ed25519 키를 선택하세요."

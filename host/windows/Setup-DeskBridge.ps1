@@ -10,15 +10,15 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 try { Assert-DesktopSetupToken } catch {
-    [Windows.Forms.MessageBox]::Show($_.Exception.Message,'DeskBridge','OK','Error') | Out-Null
+    [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Knot','OK','Error') | Out-Null
     return
 }
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or [Environment]::OSVersion.Version.Build -lt 22000) {
-    [Windows.Forms.MessageBox]::Show('이 프리뷰는 Windows 11 x64에서 사용할 수 있습니다. PC의 Windows 버전과 시스템 종류를 확인하세요.','DeskBridge','OK','Error') | Out-Null
+    [Windows.Forms.MessageBox]::Show('이 프리뷰는 Windows 11 x64에서 사용할 수 있습니다. PC의 Windows 버전과 시스템 종류를 확인하세요.','Knot','OK','Error') | Out-Null
     exit 3
 }
 $form = New-Object Windows.Forms.Form
-$form.Text = 'DeskBridge · Windows 연결'; $form.Size = New-Object Drawing.Size(780,760)
+$form.Text = 'Knot · Windows 연결'; $form.Size = New-Object Drawing.Size(780,760)
 $form.MinimumSize = New-Object Drawing.Size(640,480); $form.StartPosition = 'CenterScreen'
 $form.AutoScaleDimensions=New-Object Drawing.SizeF(96,96); $form.AutoScaleMode='Dpi'
 $form.Font = New-Object Drawing.Font('Segoe UI',10)
@@ -67,7 +67,7 @@ function Show-Failure($ErrorRecord) {
     $message=[string]$ErrorRecord.Exception.Message
     if ($message -notmatch '[가-힣]') { $message='Windows 설정을 완료하지 못했습니다. 네트워크와 관리자 권한을 확인하세요. 기존 OpenSSH 설정이나 조직의 보안 정책이 있으면 수동 통합·승인된 배포 안내를 사용하세요.' }
     $status.Text='완료하지 못했습니다. ' + $message
-    [Windows.Forms.MessageBox]::Show($message,'DeskBridge','OK','Error') | Out-Null
+    [Windows.Forms.MessageBox]::Show($message,'Knot','OK','Error') | Out-Null
 }
 function Get-SetupControls($Root) {
     foreach ($control in $Root.Controls) { $control; Get-SetupControls $control }
@@ -84,7 +84,7 @@ $install = Add-Button 'Sunshine 설치' {
     Set-Busy $true; $folder=$null; $client=$null; $verifiedDownload=$null
     try {
         $dep=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'SunshineDependency.json') -Raw | ConvertFrom-Json
-        if ($dep.url -notmatch '^https://github\.com/LizardByte/Sunshine/releases/download/v[0-9.]+/Sunshine-Windows-AMD64-installer\.msi$' -or $dep.sha256 -notmatch '^[0-9a-f]{64}$' -or ($dep.bytes -isnot [int] -and $dep.bytes -isnot [long]) -or $dep.bytes -lt 1 -or $dep.bytes -gt 268435456) { throw 'Sunshine 설치 파일 정보가 올바르지 않습니다. 새 DeskBridge 배포 파일을 사용하세요.' }
+        if ($dep.url -notmatch '^https://github\.com/LizardByte/Sunshine/releases/download/v[0-9.]+/Sunshine-Windows-AMD64-installer\.msi$' -or $dep.sha256 -notmatch '^[0-9a-f]{64}$' -or ($dep.bytes -isnot [int] -and $dep.bytes -isnot [long]) -or $dep.bytes -lt 1 -or $dep.bytes -gt 268435456) { throw 'Sunshine 설치 파일 정보가 올바르지 않습니다. 새 Knot 배포 파일을 사용하세요.' }
         $status.Text='Sunshine 공식 설치 파일을 내려받는 중…'; [Windows.Forms.Application]::DoEvents()
         $folder=Join-Path ([IO.Path]::GetTempPath()) ('DeskBridgeDownload-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $folder | Out-Null
@@ -205,7 +205,7 @@ $null = Add-Text 'Mac의 파일 탭에서 키 만들기 → Mac 주소 찾기 �
 $requestBox = New-Object Windows.Forms.TextBox; $requestBox.ReadOnly=$true; $requestBox.Width=710; $filePanel.Controls.Add($requestBox)
 $load = Add-Button 'Mac 설정 파일 불러오기…' {
     try {
-        $dialog=New-Object Windows.Forms.OpenFileDialog; $dialog.Filter='DeskBridge JSON (*.json)|*.json'
+        $dialog=New-Object Windows.Forms.OpenFileDialog; $dialog.Filter='Knot JSON (*.json)|*.json'
         if ($dialog.ShowDialog() -eq 'OK') {
             try { $request=Read-MacSetup $dialog.FileName } catch { throw 'Mac 설정 파일의 형식이나 공개 키·허용 주소를 확인하지 못했습니다. Mac의 파일 탭에서 새 설정 JSON을 저장해 다시 불러오세요.' }
             $requestBox.Text=$dialog.FileName
@@ -233,7 +233,7 @@ function Invoke-FileSetup([string] $Operation) {
         $message=if ($Operation -eq 'DisableFiles') {'파일 접속을 해제하고 현재 파일 연결을 종료합니다. 공유 파일은 보존됩니다.'} elseif ($Operation -eq 'EnableFiles') {
             'OpenSSH Server, 전용 일반 계정, C:\DeskBridgeShare\files, 선택한 Mac 주소 전용 방화벽을 설정합니다. 공유 파일을 사용할 Windows 사용자: ' + $desktopUser.Name + ' (' + $desktopUser.SID.Value + '). 기존 SSH 설정은 바꾸지 않습니다. 계속할까요?'
         } else {'Windows 호스트 공개 키를 내보내기 위해 관리자 확인이 필요합니다.'}
-        if ([Windows.Forms.MessageBox]::Show($message,'DeskBridge','OKCancel','Information') -ne 'OK') { return }
+        if ([Windows.Forms.MessageBox]::Show($message,'Knot','OKCancel','Information') -ne 'OK') { return }
         if ($LauncherPath) {
             $elevatedExecutable=$LauncherPath
             $arguments='--elevated-operation ' + $Operation
@@ -247,7 +247,7 @@ function Invoke-FileSetup([string] $Operation) {
             if ($desktopUser) { $arguments += ' --desktop-user-sid ' + $desktopUser.SID.Value }
         } else {
             # Source/developer folders are a manual script workflow, outside the primary EXE broker.
-            if ([Windows.Forms.MessageBox]::Show('개발자 폴더의 PowerShell 스크립트를 관리자 권한으로 실행합니다. 배포용 DeskBridge EXE를 사용하는 것이 좋습니다. 계속할까요?','DeskBridge · 수동 개발자 설정','OKCancel','Warning') -ne 'OK') { return }
+            if ([Windows.Forms.MessageBox]::Show('개발자 폴더의 PowerShell 스크립트를 관리자 권한으로 실행합니다. 배포용 Knot EXE를 사용하는 것이 좋습니다. 계속할까요?','Knot · 수동 개발자 설정','OKCancel','Warning') -ne 'OK') { return }
             $elevatedExecutable=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
             $script=Join-Path $PSScriptRoot 'Invoke-DeskBridgeSetup.ps1'
             $arguments='-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "' + $script + '" -Operation ' + $Operation
@@ -269,7 +269,7 @@ function Invoke-FileSetup([string] $Operation) {
         if ($reply.requestID -cne $expected.requestID -or $reply.clientPublicKey -cne $expected.clientPublicKey -or $reply.address -cne $selectedAddress) { throw 'Windows 연결 결과가 현재 Mac 설정과 다릅니다. 설정 파일과 선택한 PC 주소를 다시 확인하세요.' }
         $fingerprint=Get-KeyFingerprint $reply.serverPublicKey
         $status.Text="Windows SSH 지문 (Mac 화면과 비교):`r`n" + $fingerprint
-        $save=New-Object Windows.Forms.SaveFileDialog; $save.Filter='DeskBridge JSON (*.json)|*.json'; $save.FileName='DeskBridge-Windows-Connection.json'
+        $save=New-Object Windows.Forms.SaveFileDialog; $save.Filter='Knot JSON (*.json)|*.json'; $save.FileName='Knot-Windows-Connection.json'
         $saved=Save-DeskBridgeConnectionReply -Reply $reply -Dialog $save
         if ($saved -eq 'Saved') { $status.Text+="`r`n연결 파일을 저장했습니다. Mac에서 불러오세요." }
         else {

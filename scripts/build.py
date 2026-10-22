@@ -67,7 +67,7 @@ if not args.skip_checks:
     run("rtsp-replay-checks", [sys.executable, str(ROOT / "scripts/tests/test_rtsp_replay.py")])
 compile_module("GlimmerEngine", ROOT / "Vendor/Glimmer/GlimmerEngine", "Glimmer")
 compile_module("DeskBridgeCore", ROOT / "Sources/DeskBridgeCore", "DeskBridge")
-app = ROOT / "dist/DeskBridge.app"
+app = ROOT / "dist/Knot.app"
 if app.exists(): shutil.rmtree(app)
 macos = app / "Contents/MacOS"
 frameworks = app / "Contents/Frameworks"
@@ -93,9 +93,9 @@ if not args.skip_checks:
         *map(str, model_sources), "-o", str(BUILD / "DeskBridgeAppChecks")])
 info = {
     "CFBundleExecutable": "DeskBridge", "CFBundleIdentifier": "org.deskbridge.app",
-    "CFBundleName": "DeskBridge", "CFBundleDisplayName": "DeskBridge",
+    "CFBundleName": "Knot", "CFBundleDisplayName": "Knot",
     "CFBundleIconFile": "AppIcon",
-    "CFBundleVersion": "14", "CFBundleShortVersionString": (ROOT / "VERSION").read_text().strip().split("-")[0],
+    "CFBundleVersion": "15", "CFBundleShortVersionString": (ROOT / "VERSION").read_text().strip().split("-")[0],
     "DeskBridgeVersion": (ROOT / "VERSION").read_text().strip(),
     "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "26.0",
     "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",
@@ -105,14 +105,14 @@ info = {
     "NSScreenCaptureUsageDescription": "직접 시작한 이 Mac 공유에서 화면을 선택한 Windows 기기에 전송합니다.",
     "NSAudioCaptureUsageDescription": "직접 시작한 이 Mac 공유에서 시스템 오디오를 선택한 Windows 기기에 전송합니다.",
     "NSMicrophoneUsageDescription": "이 Mac 공유의 Sunshine 설정에서 직접 선택한 오디오 입력을 전송할 때 사용합니다.",
-    "CFBundleURLTypes": [{"CFBundleURLName": "DeskBridge connection", "CFBundleURLSchemes": ["deskbridge"], "CFBundleTypeRole": "Viewer"}],
+    "CFBundleURLTypes": [{"CFBundleURLName": "Knot connection", "CFBundleURLSchemes": ["deskbridge"], "CFBundleTypeRole": "Viewer"}],
     "NSHumanReadableCopyright": "GPLv3. DeskBridge contributors; Glimmer/ugfugl.io; Moonlight contributors.",
 }
 with (app / "Contents/Info.plist").open("wb") as handle: plistlib.dump(info, handle)
 shutil.copy2(ROOT / "LICENSE", resources / "LICENSE")
 shutil.copy2(ROOT / "LICENSE", resources / "LICENSE.txt")
 shutil.copy2(ROOT / "Assets/Brand/AppIcon.icns", resources / "AppIcon.icns")
-shutil.copy2(ROOT / "Assets/Brand/nearby-panes.png", resources / "BrandMark.png")
+shutil.copy2(ROOT / "Assets/Brand/knot.png", resources / "BrandMark.png")
 shutil.copy2(ROOT / "Vendor/Glimmer/CREDITS.md", resources / "GLIMMER_CREDITS.md")
 shutil.copy2(ROOT / "Vendor/QRCodegen/NOTICE", resources / "QR_CODEGEN_LICENSE.txt")
 if (ROOT / "host/windows/README.md").exists():

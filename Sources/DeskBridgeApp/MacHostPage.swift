@@ -38,7 +38,7 @@ struct MacHostPage: View {
                         Spacer()
                         QuietBadge(title: phaseTitle, symbol: host.phase == .running ? "display" : "display.trianglebadge.exclamationmark")
                     }
-                    Text("아래 ‘이 Mac 공유 시작’으로 실행한 뒤, macOS 권한 요청이나 시스템 설정에 실제로 표시된 앱(DeskBridge 또는 Sunshine)의 화면 및 시스템 오디오 기록·손쉬운 사용 권한을 직접 승인하세요. 승인 후 ‘공유 끄기’ → ‘이 Mac 공유 시작’으로 다시 시작하세요. 전체 디스크 접근·원격 로그인·클립보드 동기화는 켜지 않습니다.")
+                    Text("아래 ‘이 Mac 공유 시작’으로 실행한 뒤, macOS 권한 요청이나 시스템 설정에 실제로 표시된 앱(Knot 또는 Sunshine)의 화면 및 시스템 오디오 기록·손쉬운 사용 권한을 직접 승인하세요. 승인 후 ‘공유 끄기’ → ‘이 Mac 공유 시작’으로 다시 시작하세요. 전체 디스크 접근·원격 로그인·클립보드 동기화는 켜지 않습니다.")
                         .foregroundStyle(.secondary)
                     HStack {
                         Button("화면 기록 설정") { openSettings("Privacy_ScreenCapture") }
@@ -60,12 +60,12 @@ struct MacHostPage: View {
                         Button("Sunshine 초기 설정 / PIN") { open(MacHostPolicy.webURL) }.disabled(host.phase != .running)
                     }
                     StatusPanel(status: host.status, error: host.errorMessage, busy: host.busy || host.downloading)
-                    QuietHelp(text: "공유는 이 앱이 켠 프로세스에만 적용됩니다. DeskBridge를 종료하면 함께 끕니다. Sunshine 웹의 Restart 대신 여기서 공유 끄기 → 다시 시작을 사용하세요.")
+                    QuietHelp(text: "공유는 이 앱이 켠 프로세스에만 적용됩니다. Knot를 종료하면 함께 끕니다. Sunshine 웹의 Restart 대신 여기서 공유 끄기 → 다시 시작을 사용하세요.")
                 }.padding(16).quietPanel()
 
                 VStack(alignment: .leading, spacing: 14) {
                     Text("3. Windows에서 연결").font(.headline)
-                    Text("같은 Wi-Fi 또는 기존 Tailscale로 연결하세요. Windows DeskBridge의 ‘Mac 열기’에서 ‘QR 이미지 가져오기…’를 누르거나, 연결 링크 내용을 붙여 넣고 ‘링크 미리보기’를 누르세요. 주소를 확인한 뒤 ‘선택한 주소 사용’을 누르세요.")
+                    Text("같은 Wi-Fi 또는 기존 Tailscale로 연결하세요. Windows Knot의 ‘Mac 열기’에서 ‘QR 이미지 가져오기…’를 누르거나, 연결 링크 내용을 붙여 넣고 ‘링크 미리보기’를 누르세요. 주소를 확인한 뒤 ‘선택한 주소 사용’을 누르세요.")
                         .foregroundStyle(.secondary)
                     Text("Windows에서 ‘화면 엔진 받기’ → ‘PIN으로 Mac 연결’을 진행하세요. Moonlight 창의 PIN을 이 Mac의 ‘Sunshine 초기 설정 / PIN’에서 승인한 뒤 Windows의 ‘Mac 화면 열기’를 누르세요.")
                         .foregroundStyle(.secondary)
@@ -120,9 +120,9 @@ struct MacHostPage: View {
     private func openSettings(_ pane: String) { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") { open(url) } }
     private func saveQR(_ invitation: ConnectionInvitation) {
         guard let data = MacHostQR.png(invitation) else { host.errorMessage = "QR 이미지를 만들지 못했습니다."; return }
-        save(data, type: .png, name: "DeskBridge-Mac-연결.png")
+        save(data, type: .png, name: "Knot-Mac-연결.png")
     }
-    private func saveLink(_ invitation: ConnectionInvitation) { save(Data(invitation.url.absoluteString.utf8), type: .plainText, name: "DeskBridge-Mac-연결.txt") }
+    private func saveLink(_ invitation: ConnectionInvitation) { save(Data(invitation.url.absoluteString.utf8), type: .plainText, name: "Knot-Mac-연결.txt") }
     private func save(_ data: Data, type: UTType, name: String) {
         let panel = NSSavePanel(); panel.allowedContentTypes = [type]; panel.nameFieldStringValue = name
         guard panel.runModal() == .OK, let url = panel.url else { return }

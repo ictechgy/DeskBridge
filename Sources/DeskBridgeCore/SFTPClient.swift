@@ -409,7 +409,7 @@ private final class SFTPSession {
         try close(handle: handle); remoteClosed = true
         // Label remote bytes on the open exclusive inode before publishing its name.
         // Do not include private endpoint/path metadata or mark content user-approved.
-        let quarantine = Data("0081;\(String(Int(Date().timeIntervalSince1970), radix: 16));DeskBridge;".utf8)
+        let quarantine = Data("0081;\(String(Int(Date().timeIntervalSince1970), radix: 16));Knot;".utf8)
         let marked = quarantine.withUnsafeBytes {
             fsetxattr(local, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0)
         }

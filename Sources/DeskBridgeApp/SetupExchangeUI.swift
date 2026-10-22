@@ -71,7 +71,7 @@ extension FilesModel {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines)
             }.filter { !$0.isEmpty }
             let request = try SetupExchange.request(clientPublicKey: publicKey, addresses: addresses)
-            let panel = NSSavePanel(); panel.title = "Windows로 전달할 설정 파일"; panel.nameFieldStringValue = "DeskBridge-Mac-Setup.json"
+            let panel = NSSavePanel(); panel.title = "Windows로 전달할 설정 파일"; panel.nameFieldStringValue = "Knot-Mac-Setup.json"
             panel.allowedContentTypes = [.json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try requireSetupExchangeSelection(identityPath: selectedIdentity, setupAddresses: selectedAddresses)

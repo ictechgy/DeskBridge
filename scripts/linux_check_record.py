@@ -13,7 +13,7 @@ LINUX_PAYLOAD_SOURCES = {
        for name in ('policy.py', 'runtime.py', 'lifetime.py', 'ui.py', 'SunshineDependency.json')},
     'usr/bin/deskbridge-linux': ('packaging/linux/deskbridge-linux', 0o755),
     'usr/share/applications/org.deskbridge.LinuxHost.desktop': ('packaging/linux/org.deskbridge.LinuxHost.desktop', 0o644),
-    'usr/share/icons/hicolor/1024x1024/apps/org.deskbridge.LinuxHost.png': ('Assets/Brand/nearby-panes.png', 0o644),
+    'usr/share/icons/hicolor/1024x1024/apps/org.deskbridge.LinuxHost.png': ('Assets/Brand/knot.png', 0o644),
     'usr/share/doc/deskbridge-linux-host/copyright': ('LICENSE', 0o644),
     'usr/share/doc/deskbridge-linux-host/README.ko.md': ('host/linux/README.md', 0o644),
 }

@@ -1,16 +1,17 @@
 ﻿; SPDX-License-Identifier: GPL-3.0-only
 #ifndef AppVersion
-  #define AppVersion "0.2.0-preview.9"
+  #define AppVersion "0.2.0-preview.14"
 #endif
 [Setup]
 AppId={{7BB82A17-E531-4D04-A1FA-E8912E9E8E99}
-AppName=DeskBridge Windows Setup
+AppName=Knot Windows Setup
 AppVersion={#AppVersion}
-AppPublisher=DeskBridge contributors
+AppPublisher=Knot contributors
 DefaultDirName={autopf}\DeskBridge
-DefaultGroupName=DeskBridge
+DefaultGroupName=Knot
+UsePreviousGroup=no
 OutputDir=..\..\dist\release
-OutputBaseFilename=DeskBridge-{#AppVersion}-windows-x64-setup
+OutputBaseFilename=Knot-{#AppVersion}-windows-x64-setup
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.22000
@@ -20,22 +21,27 @@ Compression=lzma2
 SolidCompression=yes
 LicenseFile=..\..\LICENSE
 SetupIconFile=..\..\Assets\Brand\AppIcon.ico
-UninstallDisplayName=DeskBridge Windows Setup
+UninstallDisplayName=Knot Windows Setup
 DisableProgramGroupPage=yes
 CloseApplications=no
 [Files]
-Source: "..\..\build\windows\DeskBridge-Windows.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\build\windows\Knot-Windows.exe"; DestDir: "{app}"; DestName: "DeskBridge-Windows.exe"; Flags: ignoreversion
 Source: "..\..\Vendor\QRCodegen\NOTICE"; DestDir: "{app}"; DestName: "QRCodegen-LICENSE"; Flags: ignoreversion
 Source: "..\..\Vendor\WindowsRuntime\NOTICE"; DestDir: "{app}"; DestName: "WindowsRuntime-NOTICE"; Flags: ignoreversion
 Source: "..\..\host\windows\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\INSTALLATION.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\Assets\Brand\AppIcon.ico"; DestDir: "{app}"; Flags: ignoreversion
+[InstallDelete]
+; Remove only the two default shortcuts owned by the former installer.
+Type: files; Name: "{commonprograms}\DeskBridge\DeskBridge 설정.lnk"
+Type: files; Name: "{commonprograms}\DeskBridge\DeskBridge 제거.lnk"
+Type: dirifempty; Name: "{commonprograms}\DeskBridge"
 [Icons]
-Name: "{group}\DeskBridge 설정"; Filename: "{app}\DeskBridge-Windows.exe"
-Name: "{group}\DeskBridge 제거"; Filename: "{uninstallexe}"
+Name: "{group}\Knot 설정"; Filename: "{app}\DeskBridge-Windows.exe"
+Name: "{group}\Knot 제거"; Filename: "{uninstallexe}"
 [Run]
-Filename: "{app}\DeskBridge-Windows.exe"; Description: "DeskBridge 설정 열기"; Flags: postinstall nowait skipifsilent runasoriginaluser
+Filename: "{app}\DeskBridge-Windows.exe"; Description: "Knot 설정 열기"; Flags: postinstall nowait skipifsilent runasoriginaluser
 [Code]
 function InitializeSetup(): Boolean;
 begin
@@ -55,7 +61,7 @@ begin
   ExitCode := -1;
   Launched := False;
   if (not UninstallSilent) and
-     (MsgBox('파일 접속 상태를 확인하고 설정된 DeskBridge 파일 접속을 즉시 해제합니다. 이후 제거 확인을 취소해도 접속 해제는 유지됩니다. 상태를 확인할 수 없으면 제거를 중단합니다. 공유 파일과 Sunshine은 보존됩니다. 계속할까요?', mbConfirmation, MB_OKCANCEL) <> IDOK) then
+     (MsgBox('파일 접속 상태를 확인하고 설정된 Knot 파일 접속을 즉시 해제합니다. 이후 제거 확인을 취소해도 접속 해제는 유지됩니다. 상태를 확인할 수 없으면 제거를 중단합니다. 공유 파일과 Sunshine은 보존됩니다. 계속할까요?', mbConfirmation, MB_OKCANCEL) <> IDOK) then
     exit;
   BrokerArguments := '--elevated-operation DisableFiles';
   if UninstallSilent then
@@ -64,8 +70,8 @@ begin
     ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ExitCode);
   Result := Launched and (ExitCode = 0);
   if not Result then begin
-    Log('DeskBridge access revocation/inactivity verification failed. Retaining helper and shared data for manual recovery.');
+    Log('Knot access revocation/inactivity verification failed. Retaining helper and shared data for manual recovery.');
     if (not UninstallSilent) and ((not Launched) or (ExitCode <> 2)) then
-      MsgBox('파일 접속 해제나 비활성 상태 확인을 완료하지 못했습니다. 도우미를 유지합니다. 관리자가 기존 SSH 설정과 남아 있는 DeskBridge 파일 접속을 확인한 뒤 제거하세요.', mbError, MB_OK);
+      MsgBox('파일 접속 해제나 비활성 상태 확인을 완료하지 못했습니다. 도우미를 유지합니다. 관리자가 기존 SSH 설정과 남아 있는 Knot 파일 접속을 확인한 뒤 제거하세요.', mbError, MB_OK);
   end;
 end;

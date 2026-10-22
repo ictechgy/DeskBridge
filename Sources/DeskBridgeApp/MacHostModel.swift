@@ -26,7 +26,7 @@ import Foundation
     @Published var errorMessage: String?
     @Published var adminName = "deskbridge"
     @Published var adminPassword = ""
-    let name = "DeskBridge Mac"
+    let name = "Knot Mac"
     private let operations: MacHostOperations
     private var process: (any MacHostOwnedProcess)?
     private var task: Task<Void, Never>?

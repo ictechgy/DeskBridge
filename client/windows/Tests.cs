@@ -85,8 +85,8 @@ namespace DeskBridge.Reverse
             Check(ReverseErrors.ForOperation(new ReverseUserException(ReverseFailure.EngineIntegrity)).Contains("자동으로 삭제하거나 덮어쓰지") &&
                 ReverseErrors.Fixed(ReverseFailure.EngineIntegrity).Contains("profiles"), "damaged engine manual recovery preserves profile guidance");
             Check(ReverseErrors.ForOperation(new InvalidDataException(secretPath)) == ReverseErrors.QrGuidance &&
-                ReverseErrors.QrGuidance.Contains("DeskBridge-QR") && !ReverseErrors.QrGuidance.Contains(secretPath), "QR fixed Korean local copy guidance hides raw errors");
-            Check(ReverseErrors.ForOperation(new FormatException("지원되는 PC 연결 링크가 아닙니다. 공유할 PC의 DeskBridge에서 새 QR/링크를 만드세요.")) != ReverseErrors.Fallback, "exact authored validation message remains helpful");
+                ReverseErrors.QrGuidance.Contains("Knot-QR") && !ReverseErrors.QrGuidance.Contains(secretPath), "QR fixed Korean local copy guidance hides raw errors");
+            Check(ReverseErrors.ForOperation(new FormatException("지원되는 PC 연결 링크가 아닙니다. 공유할 PC의 Knot에서 새 QR/링크를 만드세요.")) != ReverseErrors.Fallback, "exact authored validation message remains helpful");
 
             const string ini = "[General]\r\nrichpresence=true\r\nmdns=true\r\ndetectnetblocking=true\r\nquitAppAfter=true\r\n[hosts]\r\n1\\srvcert=SYNTHETIC_CERT\r\n1\\address=192.168.1.2\r\n[Other]\r\nrichpresence=keep\r\n";
             string updated = EngineProfile.SetPrivacySettings(ini);

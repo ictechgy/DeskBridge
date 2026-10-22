@@ -115,7 +115,7 @@ def validate_completed_build(root, build, require_release=False):
             raise BuildSnapshotError("A completed build with both check suites is required")
         if require_release and completed["configuration"] != "release":
             raise BuildSnapshotError("Signed releases require an optimized release build")
-        if completed.get("appManifest") != tree_snapshot(root / "dist/DeskBridge.app"):
+        if completed.get("appManifest") != tree_snapshot(root / "dist/Knot.app"):
             raise BuildSnapshotError("App bundle changed after the successful build; rebuild")
         return completed, checks
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:

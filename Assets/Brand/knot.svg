@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">Knot</title>
+  <desc id="description">Two interwoven ivory and teal loops on a deep ink rounded tile.</desc>
+  <defs>
+    <clipPath id="overpasses" clipPathUnits="userSpaceOnUse">
+      <rect x="310" y="300" width="200" height="180" transform="rotate(40 512 512)"/>
+      <rect x="514" y="544" width="200" height="180" transform="rotate(40 512 512)"/>
+    </clipPath>
+    <mask id="ivory" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="white"/>
+      <rect x="232" y="390" width="560" height="244" rx="122" transform="rotate(-40 512 512)" fill="none" stroke="black" stroke-width="160"/>
+      <g fill="white"><rect x="310" y="300" width="200" height="180" transform="rotate(40 512 512)"/>
+      <rect x="514" y="544" width="200" height="180" transform="rotate(40 512 512)"/></g>
+    </mask>
+    <mask id="teal" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="white"/>
+      <rect x="232" y="390" width="560" height="244" rx="122" transform="rotate(40 512 512)" fill="none" stroke="black" stroke-width="160" clip-path="url(#overpasses)"/>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="#14202b"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="96">
+    <rect x="232" y="390" width="560" height="244" rx="122" transform="rotate(40 512 512)" stroke="#f3f1e8" mask="url(#ivory)"/>
+    <rect x="232" y="390" width="560" height="244" rx="122" transform="rotate(-40 512 512)" stroke="#2a9d9a" mask="url(#teal)"/>
+  </g>
+</svg>

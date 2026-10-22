@@ -26,7 +26,7 @@ namespace DeskBridge.Reverse
             }
             catch (Exception error)
             {
-                MessageBox.Show(ReverseErrors.ForOperation(error), "DeskBridge · Mac 열기", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(ReverseErrors.ForOperation(error), "Knot · Mac 열기", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 2;
             }
         }

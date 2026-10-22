@@ -21,7 +21,7 @@ struct MainView: View {
                 HStack(spacing: 9) {
                     Image("BrandMark").resizable().interpolation(.high)
                         .frame(width: 30, height: 30).accessibilityHidden(true)
-                    Text("DeskBridge").font(.system(size: 17, weight: .bold))
+                    Text("Knot").font(.system(size: 17, weight: .bold))
                 }.padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 20)
                 List(selection: $page) {
                     Section("작업 공간") {

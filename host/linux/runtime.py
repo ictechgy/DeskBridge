@@ -271,7 +271,7 @@ def download(pin, store, cancel, progress=lambda value: None, opener=None, contr
         except (OSError, Failure): pass
         raise Failure('download_collision')
     fd, temporary = tempfile.mkstemp(prefix='.download-', dir=store.root / 'downloads')
-    request = urllib.request.Request(pin['url'], headers={'User-Agent': 'DeskBridge-Linux/1', 'Accept': 'application/octet-stream'})
+    request = urllib.request.Request(pin['url'], headers={'User-Agent': 'Knot-Linux/1', 'Accept': 'application/octet-stream'})
     control = control or TransferControl(cancel)
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), StrictRedirect(), control.handler())
     received, h = 0, hashlib.sha256()

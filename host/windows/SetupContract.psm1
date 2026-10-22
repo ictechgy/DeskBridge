@@ -315,7 +315,7 @@ function Assert-DesktopSetupToken([scriptblock] $IsElevated = {
     finally { $identity.Dispose() }
 }) {
     # IsInRole checks this process token: an administrator's filtered token is allowed.
-    if (& $IsElevated) { throw 'Close this administrator window and open DeskBridge normally as the Windows user who will use the shared files. Do not choose Run as administrator; DeskBridge asks for UAC when needed.' }
+    if (& $IsElevated) { throw 'Close this administrator window and open Knot normally as the Windows user who will use the shared files. Do not choose Run as administrator; Knot asks for UAC when needed.' }
 }
 function Resolve-ManagedTransferUser([object] $Record,[scriptblock] $LookupBySid = {
     param($Sid) Get-LocalUser -SID $Sid -ErrorAction Stop

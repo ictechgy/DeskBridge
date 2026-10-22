@@ -124,7 +124,7 @@ struct SetupPage: View {
     private var versionNote: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "DeskBridgeVersion") as? String
             ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let name = version.map { "DeskBridge \($0)" } ?? "DeskBridge"
+        let name = version.map { "Knot \($0)" } ?? "Knot"
         return "\(name) · macOS 26+ · GPLv3\nGlimmerEngine / Moonlight 기여자들의 소스를 사용합니다. Windows 연결, 한글 입력과 성능은 실제 기기에서 확인이 필요합니다."
     }
 

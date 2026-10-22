@@ -53,7 +53,7 @@ enum MacHostStorage {
         try checkDirectory(credentials)
         for name in ["sunshine.conf", "apps.json", "state.json", "web-credentials.json"] { try checkFile(root, name) }
         for name in ["cakey.pem", "cacert.pem"] { try checkFile(credentials, name) }
-        try replace(root, name: "sunshine.conf", bytes: Data("# DeskBridge owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
+        try replace(root, name: "sunshine.conf", bytes: Data("# Knot owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
         try replace(root, name: "apps.json", bytes: MacHostPolicy.desktopApplications)
     }
     private static func checkDirectory(_ descriptor: Int32) throws {

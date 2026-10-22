@@ -10,7 +10,7 @@ struct AppModelChecks {
         // Actual Mac host producer -> PNG pixels -> Windows decoder/parser.
         // The caller owns the fresh output path; no user image or preferences.
         if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--synthetic-mac-qr" {
-            let invitation = try ConnectionInvitation(name: "DeskBridge Mac", addresses: ["192.168.50.20"])
+            let invitation = try ConnectionInvitation(name: "Knot Mac", addresses: ["192.168.50.20"])
             guard let png = MacHostQR.png(invitation), let bitmap = NSBitmapImageRep(data: png),
                   bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0,
                   bitmap.pixelsWide <= 2048, bitmap.pixelsHigh <= 2048 else {

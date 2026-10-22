@@ -18,7 +18,7 @@ public struct ConnectionInvitation: Sendable, Equatable, Identifiable {
     public enum Failure: Error, LocalizedError {
         case invalid
         public var errorDescription: String? {
-            "지원되는 PC 연결 QR/링크가 아닙니다. 공유할 PC의 DeskBridge에서 새 연결 QR을 만드세요."
+            "지원되는 PC 연결 QR/링크가 아닙니다. 공유할 PC의 Knot에서 새 연결 QR을 만드세요."
         }
     }
 

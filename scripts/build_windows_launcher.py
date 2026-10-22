@@ -97,7 +97,7 @@ def build(compiler, references, output, dotnet=None, native_compiler=None):
         generate_qr_loader(decoder_record['sha256'], qr_loader)
         generated = Path(temporary) / "Payload.cs"
         generated.write_text(
-            'using System.Reflection;\n[assembly: AssemblyTitle("DeskBridge Windows")]\n' +
+            'using System.Reflection;\n[assembly: AssemblyTitle("Knot Windows")]\n' +
             '[assembly: AssemblyVersion("' + version.split("-")[0] + '.0")]\n' +
             '[assembly: AssemblyInformationalVersion("' + version + '")]\n' +
             'internal static class Payload { internal static readonly PayloadEntry[] Entries = {\n' +
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--references", required=True, help=".NET Framework 4.8 reference assemblies directory")
     parser.add_argument("--dotnet", help="Explicit dotnet runtime to run csc.dll on macOS/Linux")
     parser.add_argument("--native-compiler", required=True, help="Pinned Zig compiler for the native pre-CLR bootstrap")
-    parser.add_argument("--output", help="EXE path; defaults to build/windows/DeskBridge-Windows.exe")
+    parser.add_argument("--output", help="EXE path; defaults to build/windows/Knot-Windows.exe")
     args = parser.parse_args()
-    record = build(args.compiler, args.references, args.output or ROOT / "build/windows/DeskBridge-Windows.exe", args.dotnet, args.native_compiler)
+    record = build(args.compiler, args.references, args.output or ROOT / "build/windows/Knot-Windows.exe", args.dotnet, args.native_compiler)
     print(json.dumps({key: record[key] for key in ("version", "sha256", "windowsRuntimeTested", "authenticodeSigned")}, indent=2))

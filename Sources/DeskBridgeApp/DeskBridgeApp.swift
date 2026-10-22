@@ -24,7 +24,7 @@ struct DeskBridgeApp: App {
         AppLifecycle.desktop = model; AppLifecycle.files = transfers; AppLifecycle.macHost = host
     }
     var body: some Scene {
-        Window("DeskBridge", id: "main") {
+        Window("Knot", id: "main") {
             MainView(linux: linux).environmentObject(desktop).environmentObject(files).environmentObject(macHost)
                 .frame(minWidth: 880, minHeight: 620)
         }.defaultSize(width: 1200, height: 760)

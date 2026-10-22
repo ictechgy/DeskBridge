@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="Assets/Brand/nearby-panes.png" alt="DeskBridge 로고" width="88">
+  <img src="Assets/Brand/knot.png" alt="Knot 로고" width="88">
 </p>
 
-# DeskBridge
+# Knot
 
-**여러 컴퓨터를 하나의 작업 공간처럼.**
+**컴퓨터를 잇다. 작업을 이어가다.**
 
 Mac에서 Windows 화면을 전체 화면 Space로 열고, Windows에서 Mac을 제어하거나 Mac·Windows에서 Linux 데스크톱에 연결하는 무료 오픈소스 원격 업무 앱입니다. 같은 LAN/Wi-Fi 또는 이미 설정한 Tailscale을 사용합니다.
 
 [English](README.md) · 한국어
 
-> **개발 프리뷰 · 0.2.0-preview.13**
+> **개발 프리뷰 · 0.2.0-preview.14**
 >
 > 실제 기기의 설치·화면·입력·오디오·연결 성능은 검증이 남아 있습니다. Mac 패키지는 ad-hoc 서명·미공증, Windows 실행 파일은 미서명 프리뷰입니다. 다른 원격 데스크톱보다 빠르거나 안전하다는 비교 결과는 없습니다.
 
@@ -38,7 +38,7 @@ Mac에서 Windows 화면을 전체 화면 Space로 열고, Windows에서 Mac을 
 - **선택적 파일 전송:** Mac 클라이언트에서 Windows 공유 폴더를 조회하고 개별 파일을 보내고 받습니다. 진행률과 취소를 제공하며 기존 파일은 덮어쓰지 않습니다.
 - **네이티브 앱:** Mac은 SwiftUI/AppKit, Windows는 WinForms, Linux 호스트는 GTK를 사용합니다. Windows 화면 엔진은 별도의 Moonlight 창에서 실행됩니다.
 
-DeskBridge 자체의 클라우드 계정이나 중계 서버는 없습니다. Tailscale은 양쪽 기기에 별도로 준비해야 하며, [Tailscale의 연결 경로](https://tailscale.com/docs/reference/connection-types)에 따라 DERP 중계를 거칠 수 있습니다. Bonjour 검색은 Tailscale 너머의 PC를 자동 열거하지 않으므로 QR·링크 또는 주소를 사용하세요.
+Knot 자체의 클라우드 계정이나 중계 서버는 없습니다. Tailscale은 양쪽 기기에 별도로 준비해야 하며, [Tailscale의 연결 경로](https://tailscale.com/docs/reference/connection-types)에 따라 DERP 중계를 거칠 수 있습니다. Bonjour 검색은 Tailscale 너머의 PC를 자동 열거하지 않으므로 QR·링크 또는 주소를 사용하세요.
 
 ## 설치 파일과 시작하기
 
@@ -52,7 +52,7 @@ DeskBridge 자체의 클라우드 계정이나 중계 서버는 없습니다. Ta
 
 1. Windows quick-setup EXE를 일반 사용자로 열고 **이 Windows 공유**를 선택합니다. 안내에 따라 Sunshine을 설치합니다.
 2. Sunshine 관리자 계정을 만들고, **Configuration → Network**의 LAN/WAN 암호화를 모두 **Mandatory**로 저장합니다. Sunshine 앱 목록에 Desktop이 있는지 확인합니다.
-3. Mac에 DeskBridge를 설치하고 **Windows 화면**에서 PC를 선택합니다. 목록에 없으면 Windows 도우미의 QR·연결 링크를 가져옵니다.
+3. Mac에 Knot를 설치하고 **Windows 화면**에서 PC를 선택합니다. 목록에 없으면 Windows 도우미의 QR·연결 링크를 가져옵니다.
 4. Mac에 표시된 PIN을 Windows의 Sunshine PIN 페이지에서 승인한 뒤 **Windows 열기**를 누릅니다.
 
 [자세한 설치 순서](INSTALLATION.md#mac에서-windows-열기) · [Windows 호스트·파일 설정](host/windows/README.md)
@@ -65,7 +65,7 @@ Mac의 **이 Mac 공유**에서 공식 Sunshine을 준비하고, 최초 웹 관�
 
 ### Linux 화면 열기
 
-Ubuntu에서 Linux용 `.deb`를 설치하고 **DeskBridge Linux Host**를 엽니다. 공식 Sunshine 설치 → 최초 웹 관리자 계정 입력 → 공유 시작 순서로 준비합니다. Mac의 **Linux 화면** 또는 Windows의 **Linux 열기**에서 주소를 선택하고 PIN 연결을 시작하세요. 클라이언트에 표시된 PIN을 Linux의 Sunshine PIN 페이지에서 승인합니다.
+Ubuntu에서 Linux용 `.deb`를 설치하고 **Knot Linux Host**를 엽니다. 공식 Sunshine 설치 → 최초 웹 관리자 계정 입력 → 공유 시작 순서로 준비합니다. Mac의 **Linux 화면** 또는 Windows의 **Linux 열기**에서 주소를 선택하고 PIN 연결을 시작하세요. 클라이언트에 표시된 PIN을 Linux의 Sunshine PIN 페이지에서 승인합니다.
 
 [Ubuntu 설치·권한·방화벽 안내](host/linux/README.md)
 
@@ -95,22 +95,24 @@ Sunshine과 Windows용 Moonlight는 최초 사용자 요청 시 공식 배포처
 python3 scripts/build.py
 ```
 
-최적화 빌드와 오프라인 합성 검사를 수행하고 `dist/DeskBridge.app`을 만듭니다. 실제 원격 화면이나 앱 GUI를 자동으로 열지 않습니다.
+최적화 빌드와 오프라인 합성 검사를 수행하고 `dist/Knot.app`을 만듭니다. 실제 원격 화면이나 앱 GUI를 자동으로 열지 않습니다.
 
 ### Linux 호스트
 
 ```sh
-python3 scripts/build_linux_host.py --output build/linux/DeskBridge-Linux.deb
+python3 scripts/build_linux_host.py --output build/linux/Knot-Linux.deb
 ```
 
 패키지는 Ubuntu 24.04 LTS amd64용입니다. 설치 의존성과 Linux 전용 검사 방법은 [Linux 안내](host/linux/README.md), [워크플로](.github/workflows/packages.yml)를 확인하세요.
 
 Windows 빌드에는 별도 네이티브 컴파일러와 .NET 도구가 필요합니다. [빌드·서명·대응 소스 안내](docs/RELEASING.md)에 로컬 빌드와 CI 경로를 정리합니다.
 
+Knot은 기존 DeskBridge의 새 이름입니다. 저장된 페어링과 설정 식별자는 유지하며, [업데이트·호환성 안내](docs/BRAND_COMPATIBILITY.md)를 확인하세요.
+
 ## 참여와 라이선스
 
 버그 제보에는 OS·앱 버전·연결 방향·재현 순서를 적어 주세요. PIN, 비밀번호, 개인 키, 실제 파일·화면, 원본 서비스 로그는 공개 이슈에 올리지 마세요. 민감한 보안 문제는 [보안 안내](SECURITY.md)를 먼저 확인하세요.
 
-DeskBridge는 **GPL-3.0-only**입니다. 실행 파일을 배포할 때는 GPL 조건과 원본 고지를 유지하고 대응 소스를 제공해야 합니다.
+Knot는 **GPL-3.0-only**입니다. 실행 파일을 배포할 때는 GPL 조건과 원본 고지를 유지하고 대응 소스를 제공해야 합니다.
 
 Mac 엔진은 [Glimmer](https://github.com/Se7enbrc/glimmer)를 기반으로 하며, Sunshine과 Windows용 Moonlight는 별도 공식 패키지를 사용합니다. [라이선스](LICENSE) · [Glimmer 기여자](Vendor/Glimmer/CREDITS.md) · [upstream 변경](docs/UPSTREAM_CHANGES.md) · [QR 디코더·고지](Vendor/ZXingNet/README.md)

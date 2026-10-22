@@ -20,8 +20,8 @@ function Sign-DistributionArtifact([string] $Path) {
 # The helper's signature covers its exact-source embedded scripts. Never modify tracked scripts.
 & (Join-Path $PSScriptRoot 'Build-Launcher.ps1') -NativeCompiler $NativeCompiler
 if ($SigningCertificate) {
- $launcher=Join-Path $root 'build\windows\DeskBridge-Windows.exe'
- $manifest=Join-Path $root 'build\windows\DeskBridge-Windows.build.json'
+ $launcher=Join-Path $root 'build\windows\Knot-Windows.exe'
+ $manifest=Join-Path $root 'build\windows\Knot-Windows.build.json'
  $record=Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
  $unsigned=(Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
  if ($record.sha256 -cne $unsigned -or $record.authenticodeSigned) {throw 'The unsigned helper does not match its build manifest'}
@@ -39,12 +39,12 @@ if ($SigningCertificate) {
 if ($LASTEXITCODE -ne 0) {throw 'Windows helper payload checks failed'}
 & $Compiler ('/DAppVersion='+$version) (Join-Path $PSScriptRoot 'DeskBridge.iss')
 if ($LASTEXITCODE -ne 0) {throw 'Inno Setup compilation failed'}
-$file=Join-Path $root ('dist\release\DeskBridge-'+$version+'-windows-x64-setup.exe')
+$file=Join-Path $root ('dist\release\Knot-'+$version+'-windows-x64-setup.exe')
 if ($SigningCertificate) {
  Sign-DistributionArtifact $file
 }
-$quick=Join-Path (Split-Path $file -Parent) ('DeskBridge-'+$version+'-windows-x64-quick-setup-preview.exe')
-Copy-Item -LiteralPath (Join-Path $root 'build\windows\DeskBridge-Windows.exe') -Destination $quick -Force
+$quick=Join-Path (Split-Path $file -Parent) ('Knot-'+$version+'-windows-x64-quick-setup-preview.exe')
+Copy-Item -LiteralPath (Join-Path $root 'build\windows\Knot-Windows.exe') -Destination $quick -Force
 $notice=Join-Path (Split-Path $file -Parent) 'WindowsRuntime-NOTICE.txt'
 Copy-Item -LiteralPath (Join-Path $root 'Vendor\WindowsRuntime\NOTICE') -Destination $notice -Force
 @($file,$quick,$notice) | ForEach-Object {

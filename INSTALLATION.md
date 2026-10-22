@@ -1,13 +1,13 @@
-# DeskBridge 설치
+# Knot 설치
 
 공개 배포 전 개발 프리뷰입니다. macOS 26 이상 Apple Silicon Mac과 Windows 11 x64를 지원합니다. 실제 두 기기 연결 검증은 아직 남아 있습니다.
 
 ## Mac에서 Windows 열기
 
-1. **Windows:** 동봉된 **DeskBridge-…-windows-x64-quick-setup-preview.exe**를 두 번 클릭하고 **이 Windows 공유**를 고릅니다. ZIP 압축 해제나 PowerShell 명령 입력은 필요 없습니다. **관리자 권한으로 실행**을 선택하지 마세요.
+1. **Windows:** 동봉된 **Knot-…-windows-x64-quick-setup-preview.exe**를 두 번 클릭하고 **이 Windows 공유**를 고릅니다. ZIP 압축 해제나 PowerShell 명령 입력은 필요 없습니다. **관리자 권한으로 실행**을 선택하지 마세요.
 2. 안내창의 **Sunshine 설치**를 누릅니다. 고정된 공식 MSI의 크기·SHA256를 검증한 뒤 설치 화면이 열립니다. 이미 Sunshine이 있다면 설치를 건너뛰세요. 설치 후 Sunshine 설정 창이 열립니다.
-3. Sunshine에서 초기 계정을 만들고 **Configuration → Network**의 LAN/WAN 암호화를 **둘 다 Mandatory**로 저장합니다. Desktop 앱을 확인하세요. 이 초기 설정은 아직 직접 해야 합니다. 계정·암호는 DeskBridge에 전달하지 않습니다. 게임패드 드라이버는 업무용 키보드·마우스 연결에 필요하지 않습니다.
-4. **Mac:** DMG를 열고 **DeskBridge.app → Applications**로 드래그해 실행합니다. 로컬 네트워크 권한을 허용하고 **근처 Windows PC → 이 PC 확인 → PIN으로 연결**을 누릅니다. Mac에 나온 PIN을 Sunshine의 PIN 메뉴에 입력한 뒤 **Windows 열기**를 누릅니다.
+3. Sunshine에서 초기 계정을 만들고 **Configuration → Network**의 LAN/WAN 암호화를 **둘 다 Mandatory**로 저장합니다. Desktop 앱을 확인하세요. 이 초기 설정은 아직 직접 해야 합니다. 계정·암호는 Knot에 전달하지 않습니다. 게임패드 드라이버는 업무용 키보드·마우스 연결에 필요하지 않습니다.
+4. **Mac:** DMG를 열고 **Knot.app → Applications**로 드래그해 실행합니다. 로컬 네트워크 권한을 허용하고 **근처 Windows PC → 이 PC 확인 → PIN으로 연결**을 누릅니다. Mac에 나온 PIN을 Sunshine의 PIN 메뉴에 입력한 뒤 **Windows 열기**를 누릅니다.
 
 화면 연결에는 JSON, SSH 키, 파일 계정 설정이 필요 없습니다. Windows 주소가 여러 개면 양쪽 기기에서 도달 가능한 Wi-Fi/Tailscale 주소를 선택하세요. 주소의 나열 순서는 연결 가능 여부를 보장하지 않습니다. 자동 검색과 Mac 주소 제안은 169.254 링크 로컬 주소를 제외합니다. 의도적으로 구성한 직접 연결에서 필요하면 고급 수동 주소 입력·설정 경로로 지정할 수 있습니다.
 
@@ -23,14 +23,14 @@ quick-setup EXE는 안내창을 바로 여는 단일 실행 파일입니다. 도
 
 ## Windows에서 Mac 열기
 
-1. **Mac:** DeskBridge의 **이 Mac 공유**를 엽니다. **Sunshine DMG 받기**로 고정된 공식 설치 파일을 받고, DMG 안의 Sunshine을 Applications로 옮깁니다. 이 앱은 DMG의 크기·SHA256와 설치된 앱의 공식 서명·버전을 확인합니다. 기존 Sunshine의 설정이나 실행 중인 프로세스는 자동으로 가져오거나 바꾸지 않습니다.
-2. 공유 범위 안내를 확인하고 사용할 LAN/Tailscale 주소를 선택한 뒤 **이 Mac 공유 시작**을 누릅니다. macOS의 화면 및 시스템 오디오 기록·손쉬운 사용 권한은 **실제 권한 요청에 표시된 앱**에 직접 승인하세요. DeskBridge가 공유 프로세스를 시작하므로 DeskBridge가 권한 대상이 될 수 있으며, Sunshine만 승인하면 충분하다고 가정하지 마세요. 시스템 설정에서 요청에 표시된 DeskBridge 또는 Sunshine을 확인한 뒤 공유를 껐다가 다시 켭니다. 이 단계는 자동으로 승인할 수 없습니다.
+1. **Mac:** Knot의 **이 Mac 공유**를 엽니다. **Sunshine DMG 받기**로 고정된 공식 설치 파일을 받고, DMG 안의 Sunshine을 Applications로 옮깁니다. 이 앱은 DMG의 크기·SHA256와 설치된 앱의 공식 서명·버전을 확인합니다. 기존 Sunshine의 설정이나 실행 중인 프로세스는 자동으로 가져오거나 바꾸지 않습니다.
+2. 공유 범위 안내를 확인하고 사용할 LAN/Tailscale 주소를 선택한 뒤 **이 Mac 공유 시작**을 누릅니다. macOS의 화면 및 시스템 오디오 기록·손쉬운 사용 권한은 **실제 권한 요청에 표시된 앱**에 직접 승인하세요. Knot가 공유 프로세스를 시작하므로 Knot가 권한 대상이 될 수 있으며, Sunshine만 승인하면 충분하다고 가정하지 마세요. 시스템 설정에서 요청에 표시된 Knot 또는 Sunshine을 확인한 뒤 공유를 껐다가 다시 켭니다. 이 단계는 자동으로 승인할 수 없습니다.
 3. **Sunshine 초기 설정 / PIN**에서 이 Mac의 `https://localhost:47990`을 열어 공유 시작 전에 앱에서 준비한 관리자 계정으로 로그인합니다. 최초 실행은 앱에 웹 관리자 이름과 16~128바이트 비밀번호를 입력하세요. 기존 계정은 유지하고 평문 비밀번호는 저장하지 않습니다. localhost 자체 서명 인증서 안내가 나타날 수 있습니다. 공유 시작 시 LAN/WAN 암호화 필수, UPnP 끄기, 로컬 전용 관리 UI를 강제합니다. 공유기 포트를 열지 마세요.
 4. **QR 이미지 저장…** 또는 **연결 링크 저장…**으로 주소 안내를 만듭니다. Windows에 전달하거나 Windows에서 **같은 Wi-Fi에서 찾기**를 사용합니다. QR/검색만으로 인증되지는 않습니다. Tailscale 너머의 기기는 자동 열거하지 않습니다.
 5. **Windows:** 같은 EXE에서 **Mac 열기**를 선택합니다. QR 이미지나 링크를 미리 보고 주소를 선택합니다. 최초 **화면 엔진 받기**는 공식 Moonlight Portable을 인터넷에서 받아 크기·SHA256·전체 파일을 확인하며 관리자 권한은 필요 없습니다.
 6. **PIN으로 Mac 연결**을 누르고 Moonlight 창의 PIN을 Mac의 Sunshine PIN 화면에 입력합니다. 승인 후 **Mac 화면 열기**를 누릅니다. 실행 파일을 시작했다는 상태와 실제 영상 연결 성공은 구분하며, 실제 연결 오류·PIN 결과는 엔진 창에서도 확인하세요.
 
-Mac은 사용자가 로그인한 Desktop을 대상으로 합니다. 공유를 끄거나 DeskBridge를 정상 종료하면 이 앱이 시작한 호스트와 그 자식만 종료합니다. Sunshine 웹 UI의 Restart 대신 DeskBridge의 공유 끄기/시작을 사용하세요. 강제 앱 종료·전원 손실 이후의 종료 보장은 하지 않습니다. Mac SSH/원격 로그인·자동 클립보드·파일 접근은 켜지지 않습니다. **역방향 파일 전송은 아직 지원하지 않습니다.** 아래 파일 설정은 기존 Mac→Windows 방향입니다.
+Mac은 사용자가 로그인한 Desktop을 대상으로 합니다. 공유를 끄거나 Knot를 정상 종료하면 이 앱이 시작한 호스트와 그 자식만 종료합니다. Sunshine 웹 UI의 Restart 대신 Knot의 공유 끄기/시작을 사용하세요. 강제 앱 종료·전원 손실 이후의 종료 보장은 하지 않습니다. Mac SSH/원격 로그인·자동 클립보드·파일 접근은 켜지지 않습니다. **역방향 파일 전송은 아직 지원하지 않습니다.** 아래 파일 설정은 기존 Mac→Windows 방향입니다.
 
 기본은 Windows 단축키를 로컬에 남깁니다. 전체 화면에서 **Windows 키를 Mac Command로 보내기**를 선택하면 Windows 키가 Mac Command로 전달되며 Alt+Tab도 Mac으로 갈 수 있습니다. Ctrl은 Mac Control, Alt는 Option입니다. **Ctrl+Alt+Shift+K**로 시스템 키 전달을 켜고 끄고, **Ctrl+Alt+Shift+Q**로 화면 연결을 닫습니다. 전달을 끈 뒤 Windows의 Win+Ctrl+←/→를 사용할 수 있습니다. 다른 실행 중인 앱을 종료하겠다는 Moonlight 안내는 취소하세요. 이 앱은 원격 앱 종료 명령을 만들지 않습니다.
 
@@ -56,9 +56,9 @@ quick-setup EXE는 Mac에서도 교차 컴파일합니다. Windows 실행·UAC·
 
 ## 업데이트와 제거
 
-Mac은 앱을 종료하고 새 버전을 응용 프로그램에 옮깁니다. 설정·키를 자동 삭제하지 않습니다. 제거는 앱을 휴지통으로 옮깁니다. 파일 접속 권한도 폐기하려면 Windows에서 해제하세요.
+Mac은 실행 중인 기존 앱을 종료하고 새 `Knot.app`을 응용 프로그램에 옮깁니다. 이전 이름의 `DeskBridge.app`은 앱 번들만 제거해 같은 번들 ID를 가진 두 앱이 나란히 남지 않게 하세요. Application Support·설정·인증서는 지우지 마세요. ad-hoc 서명에서는 macOS 권한을 다시 요청할 수 있습니다. [이름 변경과 호환성](docs/BRAND_COMPATIBILITY.md)을 확인하세요. 설정·키를 자동 삭제하지 않습니다. 제거는 앱을 휴지통으로 옮깁니다. 파일 접속 권한도 폐기하려면 Windows에서 해제하세요.
 
-Mac 공유를 사용했다면 제거 전에 **공유 끄기**로 중지하고 Sunshine의 페어링 기기를 직접 해제하세요. 화면 기록·시스템 오디오·손쉬운 사용 권한도 실제 승인한 DeskBridge 또는 Sunshine 항목에서 직접 해제할 수 있습니다. Sunshine 앱과 앱 전용 공유 구성은 자동 삭제하지 않습니다. Windows EXE를 삭제해도 전용 Moonlight 엔진·portable 프로필은 LocalAppData의 `DeskBridge-Reverse-v1` 아래에 남습니다. 삭제·재설치만으로 Mac 쪽 페어링 기기 권한이 폐기되었다고 간주하지 마세요.
+Mac 공유를 사용했다면 제거 전에 **공유 끄기**로 중지하고 Sunshine의 페어링 기기를 직접 해제하세요. 화면 기록·시스템 오디오·손쉬운 사용 권한도 실제 승인한 Knot 또는 Sunshine 항목에서 직접 해제할 수 있습니다. Sunshine 앱과 앱 전용 공유 구성은 자동 삭제하지 않습니다. Windows EXE를 삭제해도 전용 Moonlight 엔진·portable 프로필은 LocalAppData의 `DeskBridge-Reverse-v1` 아래에 남습니다. 삭제·재설치만으로 Mac 쪽 페어링 기기 권한이 폐기되었다고 간주하지 마세요.
 
 quick-setup EXE는 새 파일로 교체합니다. EXE를 삭제해도 이미 설정한 Sunshine·파일 접속은 남습니다. 파일 권한을 없애려면 먼저 도우미의 **파일 접속 해제**를 누르세요. 별도 Inno 설치 프로그램으로 설치한 도우미는 새 설치 프로그램으로 교체하며, 제거 시 구성된 전용 SSH 접속 해제에 실패하면 제거를 중단합니다. Sunshine은 별도로 업데이트합니다. 공유 파일·Sunshine·호스트 키를 삭제하지 않습니다. [기존 전용 배포의 잔여 계정·자료 관리](host/windows/README.md)를 확인하세요.
 
@@ -70,10 +70,10 @@ quick-setup EXE는 새 파일로 교체합니다. EXE를 삭제해도 이미 설
 
 Windows 빠른 설정은 OneDrive·동기화·연결 경로 밖의 로컬 폴더(예: Downloads)에서 실행하세요. 실행 파일 경로 보호를 위해 해당 경로는 거부합니다. 고급 소스 ZIP의 스크립트가 다운로드 보호로 차단됐다면 먼저 출처와 소스를 확인하고, 신뢰하는 ZIP에만 속성 → 차단 해제를 적용한 뒤 다시 압축을 푸세요. 조직의 서명·앱 실행 정책은 해제하지 마세요.
 
-Windows에서 엔진 파일 확인이 계속 실패하면 DeskBridge와 Moonlight 창을 모두 닫고, `%LOCALAPPDATA%\DeskBridge-Reverse-v1` 아래의 `engine-6.2.0` 폴더만 다른 이름으로 옮긴 뒤 **화면 엔진 받기**를 다시 누르세요. `profiles`의 페어링 상태는 보존하세요. 백신이 파일을 격리했다면 보안 정책을 먼저 확인하고 보호 기능을 끄지 마세요. 이 프리뷰는 손상된 엔진을 자동 삭제하지 않습니다. OneDrive/클라우드·링크 폴더의 EXE나 QR을 거부하면 일반 로컬 폴더로 옮겨 다시 실행하세요.
+Windows에서 엔진 파일 확인이 계속 실패하면 Knot와 Moonlight 창을 모두 닫고, `%LOCALAPPDATA%\DeskBridge-Reverse-v1` 아래의 `engine-6.2.0` 폴더만 다른 이름으로 옮긴 뒤 **화면 엔진 받기**를 다시 누르세요. `profiles`의 페어링 상태는 보존하세요. 백신이 파일을 격리했다면 보안 정책을 먼저 확인하고 보호 기능을 끄지 마세요. 이 프리뷰는 손상된 엔진을 자동 삭제하지 않습니다. OneDrive/클라우드·링크 폴더의 EXE나 QR을 거부하면 일반 로컬 폴더로 옮겨 다시 실행하세요.
 
 ## Linux에서 공유하기 (프리뷰)
 
-Ubuntu 24.04 LTS amd64의 로그인한 X11 데스크톱을 지원합니다. Linux용 `.deb`를 시스템 설치 프로그램으로 열고 앱 목록의 **DeskBridge Linux Host**를 실행하세요. 앱에서 공식 Sunshine 받기 → 시스템 설치 → 최초 웹 관리자 계정 입력 → 이 Linux 공유 시작 → 웹 로그인 → QR 순서로 진행합니다. Mac은 **Linux 화면**, Windows는 **Linux 열기**를 선택하세요. 자세한 설치·방화벽·입력 권한·삭제 안내는 함께 제공한 `LINUX-INSTALLATION.md` 또는 소스의 `host/linux/README.md`를 확인하세요.
+Ubuntu 24.04 LTS amd64의 로그인한 X11 데스크톱을 지원합니다. Linux용 `.deb`를 시스템 설치 프로그램으로 열고 앱 목록의 **Knot Linux Host**를 실행하세요. 앱에서 공식 Sunshine 받기 → 시스템 설치 → 최초 웹 관리자 계정 입력 → 이 Linux 공유 시작 → 웹 로그인 → QR 순서로 진행합니다. Mac은 **Linux 화면**, Windows는 **Linux 열기**를 선택하세요. 자세한 설치·방화벽·입력 권한·삭제 안내는 함께 제공한 `LINUX-INSTALLATION.md` 또는 소스의 `host/linux/README.md`를 확인하세요.
 
 Wayland·로그인 화면·헤드리스·Linux 파일 전송·Linux 클라이언트는 아직 지원하지 않습니다. Linux 실제 GPU/입력/오디오와 네트워크 성능은 기기에서 검증해야 합니다. 기존 Mac→Windows 파일 기능과 Windows→Mac 화면 연결은 유지합니다.

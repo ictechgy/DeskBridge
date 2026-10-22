@@ -80,12 +80,12 @@ def run(label, argv):
         raise SystemExit(label + " failed: " + result.stderr.decode(errors="replace")[-2000:])
     return result.stdout
 suffix = "-preview" if args.mode == "preview" else ""
-name = "DeskBridge-" + version
+name = "Knot-" + version
 generated = []
 with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
-    stage = Path(temporary) / "DeskBridge"; stage.mkdir()
-    app = stage / "DeskBridge.app"
-    shutil.copytree(ROOT / "dist/DeskBridge.app", app)
+    stage = Path(temporary) / "Knot"; stage.mkdir()
+    app = stage / "Knot.app"
+    shutil.copytree(ROOT / "dist/Knot.app", app)
     # Recheck the copied payload before signing to bind this package to the successful build.
     if tree_snapshot(app) != completed["appManifest"]:
         raise SystemExit("App changed while staging; rebuild before packaging")
@@ -103,7 +103,9 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         raise SystemExit("The packaged app must contain exactly the camera permission entitlement.")
     (stage / "Applications").symlink_to("/Applications", target_is_directory=True)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
-    (stage / "INSTALL.txt").write_text("DeskBridge.app을 Applications 폴더로 드래그하세요.\nApple Silicon / macOS 26+\n" +
+    (stage / "INSTALL.txt").write_text("Knot.app을 Applications 폴더로 드래그하세요.\nApple Silicon / macOS 26+\n" +
+        "업데이트: 기존 앱을 종료하고 이전 DeskBridge.app 번들만 제거하세요. 같은 번들 ID의 두 앱을 함께 두지 마세요.\n" +
+        "Application Support·설정·인증서는 보존하세요. macOS 권한을 다시 요청할 수 있습니다.\n" +
         ("Developer ID 서명 및 Apple 공증 패키지입니다.\n" if args.mode == "release" else "개발 프리뷰: 로컬 ad-hoc 서명이며 Apple 공증이 없습니다.\n") +
         "Windows 설정과 대응 소스는 함께 제공하는 INSTALLATION.md와 source.tar.gz를 확인하세요.\n")
     if args.mac_format in ["zip", "both"]:
@@ -112,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         generated.append(mac_zip)
     if args.mac_format in ["dmg", "both"]:
         image = output / (name + "-macos-arm64" + suffix + ".dmg")
-        run("create-dmg", ["/usr/bin/hdiutil", "create", "-volname", "DeskBridge", "-srcfolder", str(stage), "-format", "UDZO", "-ov", str(image)])
+        run("create-dmg", ["/usr/bin/hdiutil", "create", "-volname", "Knot", "-srcfolder", str(stage), "-format", "UDZO", "-ov", str(image)])
         run("verify-dmg", ["/usr/bin/hdiutil", "verify", str(image)])
         generated.append(image)
         if args.mode == "release":
@@ -123,20 +125,20 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
     portable = output / (name + "-windows-x64-portable-preview.zip")
     with zipfile.ZipFile(portable, "w", zipfile.ZIP_DEFLATED) as archive:
         for file in sorted((ROOT / "host/windows").iterdir()):
-            if file.is_file(): archive.write(file, "DeskBridge-Windows-Setup/" + file.name)
-        archive.write(ROOT / "LICENSE", "DeskBridge-Windows-Setup/LICENSE")
-        archive.write(ROOT / "INSTALLATION.md", "DeskBridge-Windows-Setup/INSTALLATION.md")
-        archive.write(ROOT / "Vendor/QRCodegen/NOTICE", "DeskBridge-Windows-Setup/QRCodegen-LICENSE")
-        archive.write(ROOT / "Vendor/ZXingNet/LICENSE", "DeskBridge-Windows-Setup/QRDecoder-LICENSE.txt")
-        archive.write(ROOT / "Vendor/ZXingNet/NOTICE", "DeskBridge-Windows-Setup/QRDecoder-NOTICE.txt")
+            if file.is_file(): archive.write(file, "Knot-Windows-Setup/" + file.name)
+        archive.write(ROOT / "LICENSE", "Knot-Windows-Setup/LICENSE")
+        archive.write(ROOT / "INSTALLATION.md", "Knot-Windows-Setup/INSTALLATION.md")
+        archive.write(ROOT / "Vendor/QRCodegen/NOTICE", "Knot-Windows-Setup/QRCodegen-LICENSE")
+        archive.write(ROOT / "Vendor/ZXingNet/LICENSE", "Knot-Windows-Setup/QRDecoder-LICENSE.txt")
+        archive.write(ROOT / "Vendor/ZXingNet/NOTICE", "Knot-Windows-Setup/QRDecoder-NOTICE.txt")
         for relative in ("MoonlightDependency.json", "MoonlightFiles.json", "Moonlight-LICENSE.txt", "Moonlight-NOTICE.txt", "README.ko.md"):
-            archive.write(ROOT / "client/windows" / relative, "DeskBridge-Windows-Setup/ReverseClient/" + relative)
-        archive.writestr("DeskBridge-Windows-Setup/ReverseClient/START.txt", "Windows에서 Mac을 열려면 함께 제공한 quick-setup EXE를 실행하고 Mac 열기를 선택하세요. 이 고급 스크립트 ZIP은 기존 Windows 공유 설정용이며 Windows 클라이언트 실행 파일을 대신하지 않습니다.\n")
+            archive.write(ROOT / "client/windows" / relative, "Knot-Windows-Setup/ReverseClient/" + relative)
+        archive.writestr("Knot-Windows-Setup/ReverseClient/START.txt", "Windows에서 Mac을 열려면 함께 제공한 quick-setup EXE를 실행하고 Mac 열기를 선택하세요. 이 고급 스크립트 ZIP은 기존 Windows 공유 설정용이며 Windows 클라이언트 실행 파일을 대신하지 않습니다.\n")
         if args.windows_launcher:
             qr_library = args.windows_launcher.with_name('DeskBridge-QR.dll')
             if hashlib.sha256(qr_library.read_bytes()).hexdigest() != launcher_record.get('qrLibrarySha256'):
                 raise SystemExit('QR helper changed after launcher build')
-            archive.write(qr_library, 'DeskBridge-Windows-Setup/DeskBridge-QR.dll')
+            archive.write(qr_library, 'Knot-Windows-Setup/DeskBridge-QR.dll')
     generated.append(portable)
     if args.windows_launcher:
         launcher = output / (name + '-windows-x64-quick-setup-preview.exe')
@@ -152,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         generated.append(linux_output)
         shutil.copy2(ROOT / 'host/linux/README.md', output / 'LINUX-INSTALLATION.md')
         generated.append(output / 'LINUX-INSTALLATION.md')
-    source = run("corresponding-source", ["git", "archive", "--format=tar", "--prefix=DeskBridge-source/", head])
+    source = run("corresponding-source", ["git", "archive", "--format=tar", "--prefix=Knot-source/", head])
     source_path = output / (name + "-source.tar.gz")
     with gzip.open(source_path, "wb") as handle: handle.write(source)
     generated.append(source_path)

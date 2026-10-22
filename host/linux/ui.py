@@ -17,7 +17,7 @@ from runtime import OwnedHost, Store, addresses, download, open_installer, save_
 
 class Window(Gtk.Window):
     def __init__(self, pin):
-        super().__init__(title='DeskBridge · 이 Linux 공유')
+        super().__init__(title='Knot · 이 Linux 공유')
         self.pin, self.store, self.package = pin, None, None
         self.host, self.cancel = OwnedHost(), threading.Event()
         self.busy, self.running, self.closing = False, False, False
@@ -196,7 +196,7 @@ class Window(Gtk.Window):
         if self.busy or self.closing or self.qr_bytes is None: return
         dialog = Gtk.FileChooserDialog(title='연결 QR PNG 저장', parent=self, action=Gtk.FileChooserAction.SAVE)
         dialog.add_buttons('취소', Gtk.ResponseType.CANCEL, '저장', Gtk.ResponseType.OK)
-        dialog.set_current_name('DeskBridge-Linux-connection.png')
+        dialog.set_current_name('Knot-Linux-connection.png')
         try:
             if dialog.run() == Gtk.ResponseType.OK:
                 try: Store.write_new(dialog.get_filename(), self.qr_bytes); self.status.set_text('연결 QR PNG를 저장했습니다. 파일에 접속 비밀은 포함하지 않습니다.')

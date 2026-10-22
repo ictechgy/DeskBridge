@@ -1,6 +1,6 @@
 # Packaging and public releases
 
-The repository builds a Mac app/DMG/ZIP, a single-file Windows quick-setup EXE, a separate Inno installer, a developer portable ZIP, exact corresponding source and SHA256 checksums. Packaging does not publish anything. The helper is GPL-3.0-only; Sunshine is downloaded separately from its official release after a user action, not redistributed inside DeskBridge.
+The repository builds a Mac app/DMG/ZIP, a single-file Windows quick-setup EXE, a separate Inno installer, a developer portable ZIP, exact corresponding source and SHA256 checksums. Packaging does not publish anything. The helper is GPL-3.0-only; Sunshine is downloaded separately from its official release after a user action, not redistributed inside Knot.
 
 ## Local preview
 
@@ -28,7 +28,7 @@ The quick-setup helper has a native x64 Win32 outer executable and an embedded F
 ```sh
 python3 scripts/build_windows_launcher.py --dotnet /path/to/dotnet --compiler /path/to/sdk/Roslyn/bincore/csc.dll --references /path/to/references/build/.NETFramework/v4.8 --native-compiler /path/to/zig
 python3 scripts/test_windows_launcher.py --dotnet /path/to/dotnet
-python3 scripts/package_release.py --mode preview --windows-launcher build/windows/DeskBridge-Windows.exe
+python3 scripts/package_release.py --mode preview --windows-launcher build/windows/Knot-Windows.exe
 ```
 
 Run the ordinary completed Mac build first and keep both build manifests on the same committed source snapshot. Packaging refuses a helper whose exact source manifest or executable hash changed and requires successful Windows-check evidence bound to those same inputs. The Inno builder runs the helper checks after optional helper signing and before invoking its compiler; a failed check stops packaging. Offline checks inspect the outer PE and inner managed payload, embedded hashes and argument validators; they never invoke Windows Main, extract a production runtime payload, open the UI or configure services. Native import/metadata inspection and fresh argument/QR fixtures do not prove actual Windows loader behavior. Cross-compilation and these checks are not Windows execution acceptance.

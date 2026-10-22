@@ -97,9 +97,9 @@ jobs:
       - name: Install native GTK build/check dependencies
         run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-3.0 python3-qrcode python3-pil
       - name: Build Debian package without privilege or Sunshine
-        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/build_linux_host.py --output build/linux/DeskBridge-Linux.deb
+        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/build_linux_host.py --output build/linux/Knot-Linux.deb
       - name: Check package and inert synthetic fixtures (no real desktop or network)
-        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/test_linux_host.py --package build/linux/DeskBridge-Linux.deb
+        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/test_linux_host.py --package build/linux/Knot-Linux.deb
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: linux-host-preview

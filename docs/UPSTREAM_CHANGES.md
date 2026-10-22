@@ -3,7 +3,7 @@
 Base: Se7enbrc/glimmer dc74ced497fc84defd706b4270e50478b430e562 (2026.10.8-rc.12).
 All original GPL/copyright notices retained. The original 266 package blobs plus license, credits and security notes are recorded in Vendor/Glimmer/UPSTREAM.json.
 
-DeskBridge changes, 2026-10-18:
+Knot changes, 2026-10-18:
 
 - NEW Protocol/StreamSecurityPolicy.swift: require encrypted rtspenc signalling and all three media/control capability bits.
 - Network/RtspClient.swift: apply pure mandatory policy in the real pre-network/RTSP negotiation path.
@@ -16,7 +16,7 @@ DeskBridge changes, 2026-10-18:
 - Input/StreamInput+Desktop.swift (preview.8): once committed-text ordering allows a key event to replay, a new owned key release is recorded before older rejected releases are retried. Revoking focus/ownership still discards delayed text and queued key-down work. The reliable retry/reconciliation path remains authoritative for a rejected key release.
 - Network/InputBatcher.swift and Session/NativeBackend+Input.swift: merge absolute pointer motion under backpressure while preserving the shared reliable channel and text/key/button barriers.
 - Network/Network.swift, Pairing.swift, NetworkClient+Endpoints.swift, NetworkClient+Request.swift and ControlTransport.swift: provisional pairing trust, strict present session-key fields and HTTP framing, mandatory TLS pin, bounded exchange lifecycle and launch/resume reply ownership.
-- Session/StreamSession+Public.swift: a public native lifecycle adapter connects the existing balanced activity and wake edges to DeskBridge's platform implementation.
+- Session/StreamSession+Public.swift: a public native lifecycle adapter connects the existing balanced activity and wake edges to Knot's platform implementation.
 
 Host compatibility source: Sunshine's pinned stream.cpp dispatch ignores ENet channel ID and input.cpp queues/drains input FIFO. Exact links are retained in DesktopInputWire.swift. Real host acceptance is still required.
 

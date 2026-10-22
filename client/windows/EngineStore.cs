@@ -215,7 +215,7 @@ namespace DeskBridge.Reverse
                 if (!SafeDownloadUri(uri)) throw new ReverseUserException(ReverseFailure.EngineDownload);
                 var request = (HttpWebRequest)WebRequest.Create(uri);
                 request.AllowAutoRedirect = false; request.Proxy = null; request.Timeout = 60000; request.ReadWriteTimeout = 60000;
-                request.UserAgent = "DeskBridge-Reverse/1";
+                request.UserAgent = "Knot-Reverse/1";
                 using (cancel.Register(request.Abort))
                 {
                     HttpWebResponse response;

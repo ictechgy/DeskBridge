@@ -1,4 +1,4 @@
-# DeskBridge 벤치마크
+# Knot 벤치마크
 
 현재 앱을 바꾸기 전에 기준선을 측정하는 도구입니다. `contract.json`이 측정 범위와 판정 조건입니다. 합성 결과를 Moonlight/Cyberduck/Chrome 원격 데스크톱보다 빠르다는 근거로 사용하지 않습니다.
 
@@ -37,7 +37,7 @@ python3 scripts/benchmarks/run.py --output /tmp/deskbridge-benchmark-result --re
 
 생성 경로는 작업 시작 때 출력하고, 파일/HTML의 크기와 SHA-256을 manifest 배열에 넣습니다. 생성 중 실패하면 새로 만든 해당 폴더만 정리를 시도하고 원래 오류를 다시 던집니다. 정리가 실패하면 출력된 경로로 남은 폴더를 확인할 수 있습니다.
 
-실기 비교는 같은 Windows Sunshine에 DeskBridge/Moonlight를 순차 연결하고 같은 OpenSSH 계정/새 격리 합성 폴더에 DeskBridge/Cyberduck을 비교합니다. 실제 버전·GPU/드라이버·해상도/배율·주사율·실제 코덱/크로마/비트레이트·관측된 경로를 기록합니다. Tailscale 100.x 주소만으로 direct라 판정하지 않으며 확인 불가능한 값은 UNKNOWN입니다. SSH 접속을 위해 기존 개인키/비밀번호를 보고서에 넣지 않습니다.
+실기 비교는 같은 Windows Sunshine에 Knot/Moonlight를 순차 연결하고 같은 OpenSSH 계정/새 격리 합성 폴더에 Knot/Cyberduck을 비교합니다. 실제 버전·GPU/드라이버·해상도/배율·주사율·실제 코덱/크로마/비트레이트·관측된 경로를 기록합니다. Tailscale 100.x 주소만으로 direct라 판정하지 않으며 확인 불가능한 값은 UNKNOWN입니다. SSH 접속을 위해 기존 개인키/비밀번호를 보고서에 넣지 않습니다.
 
 특히 같은 물리 모니터의 입력을 Mac으로 바꿨을 때 Windows 캡처 유지, 한글 조합/삭제, modifier 고착, Control+방향키 Space 전환, 재접속, 파일+화면 동시 사용을 확인합니다. 이 도구는 시스템 키를 자동 입력하지 않습니다. 화면 비교 수치는 외부 계측/검증된 별도 하네스가 필요합니다. 네트워크/서비스 장애 주입은 격리된 테스트 호스트에서만 수행합니다.
 

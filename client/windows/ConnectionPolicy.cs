@@ -130,6 +130,6 @@ namespace DeskBridge.Reverse
             catch (DecoderFallbackException) { throw BadInvitation(); }
         }
         private static FormatException BadAddress() { return new FormatException("LAN 또는 Tailscale의 IPv4 주소만 지원합니다. 예: 192.168.1.20"); }
-        private static FormatException BadInvitation() { return new FormatException("지원되는 PC 연결 링크가 아닙니다. 공유할 PC의 DeskBridge에서 새 QR/링크를 만드세요."); }
+        private static FormatException BadInvitation() { return new FormatException("지원되는 PC 연결 링크가 아닙니다. 공유할 PC의 Knot에서 새 QR/링크를 만드세요."); }
     }
 }

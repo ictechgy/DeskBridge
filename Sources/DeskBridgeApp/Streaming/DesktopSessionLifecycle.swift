@@ -16,7 +16,7 @@ final class DesktopSessionLifecycle: Sendable {
         activity = DesktopStreamActivity(acquire: { displaySuppressed in
             var options: ProcessInfo.ActivityOptions = [.userInitiated]
             if !displaySuppressed { options.insert(.idleDisplaySleepDisabled) }
-            return ProcessInfo.processInfo.beginActivity(options: options, reason: "DeskBridge remote desktop session")
+            return ProcessInfo.processInfo.beginActivity(options: options, reason: "Knot remote desktop session")
         }, release: { ProcessInfo.processInfo.endActivity($0) })
     }
 

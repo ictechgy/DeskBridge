@@ -232,7 +232,7 @@ internal static class Checks
             Expect(decoded == expectedLink, "Production Windows decoder changed the actual Mac PNG-chain QR payload");
             var policy = assembly.GetType("DeskBridge.Reverse.ConnectionPolicy", true)!;
             object invitation = policy.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, new object[] { decoded })!;
-            Expect((string)invitation.GetType().GetProperty("Name")!.GetValue(invitation)! == "DeskBridge Mac", "Actual Mac QR name did not survive Windows policy parsing");
+            Expect((string)invitation.GetType().GetProperty("Name")!.GetValue(invitation)! == "Knot Mac", "Actual Mac QR name did not survive Windows policy parsing");
             var addresses = (System.Collections.IEnumerable)invitation.GetType().GetProperty("Addresses")!.GetValue(invitation)!;
             Expect(addresses.Cast<string>().SequenceEqual(new[] { "192.168.50.20" }), "Actual Mac QR selected address did not survive Windows policy parsing");
             macToWindowsQRFixtureSha256 = Convert.ToHexString(SHA256.HashData(fixtureBytes)).ToLowerInvariant();

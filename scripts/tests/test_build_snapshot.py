@@ -172,7 +172,7 @@ class BuildSnapshotTests(unittest.TestCase):
         for name in ["LICENSE", "INSTALLATION.md", "VERSION"]:
             (self.root / name).write_text("Synthetic fixture " + name + "\n")
         self.commit()
-        self.app = self.root / "dist/DeskBridge.app/Contents/MacOS/DeskBridge"
+        self.app = self.root / "dist/Knot.app/Contents/MacOS/DeskBridge"
         self.app.parent.mkdir(parents=True); self.app.write_bytes(b"synthetic executable")
         self.app.chmod(0o755)
         self.build = self.root / "evidence/synthetic-build"
@@ -185,7 +185,7 @@ class BuildSnapshotTests(unittest.TestCase):
         (self.build / "synthetic-checks.stdout").write_text('{"status":"passed"}')
         (self.build / "synthetic-model-checks.stdout").write_text('{"status":"passed"}')
         self.record = {"schema": 1, "configuration": "release", "checksPassed": True,
-                       "appManifest": tree_snapshot(self.root / "dist/DeskBridge.app")}
+                       "appManifest": tree_snapshot(self.root / "dist/Knot.app")}
         self.write_record()
 
     def write_record(self):

@@ -58,7 +58,7 @@ struct StreamConfiguration: Sendable {
         let picture = DesktopInputView(frame: NSRect(x: 0, y: 0, width: 1280, height: 720))
         let win = NSWindow(contentRect: picture.frame, styleMask: [.titled,.closable,.miniaturizable,.resizable],
                            backing: .buffered, defer: false)
-        win.title = "DeskBridge — \(server.serverName)"
+        win.title = "Knot — \(server.serverName)"
         win.contentView = picture
         win.collectionBehavior = [.fullScreenPrimary]
         win.acceptsMouseMovedEvents = true

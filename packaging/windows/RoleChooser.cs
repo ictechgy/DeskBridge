@@ -12,7 +12,7 @@ namespace DeskBridge.Reverse
         {
             using (var form = new Form())
             {
-                form.Text = "DeskBridge"; form.StartPosition = FormStartPosition.CenterScreen;
+                form.Text = "Knot"; form.StartPosition = FormStartPosition.CenterScreen;
                 form.AutoScaleDimensions = new SizeF(96, 96); form.AutoScaleMode = AutoScaleMode.Dpi;
                 form.ClientSize = new Size(660, 530); form.MinimumSize = new Size(400, 300);
                 var layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(24), ColumnCount = 1, RowCount = 6 };

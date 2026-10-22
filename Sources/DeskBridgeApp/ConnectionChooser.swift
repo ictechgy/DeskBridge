@@ -52,7 +52,7 @@ struct ConnectionChooser: View {
                 Button("카메라로 QR 스캔…") { cameraPresented = true }
                 Button("연결 링크 입력…") { importLink() }
             }.disabled(!canChoosePC)
-            QuietHelp(text: "\(model.platformName)의 DeskBridge에서 연결 QR / 링크를 가져오세요. 검색 결과의 OS는 확인되지 않았습니다. 사용하려는 PC를 직접 선택하고 PIN으로 확인하세요.")
+            QuietHelp(text: "\(model.platformName)의 Knot에서 연결 QR / 링크를 가져오세요. 검색 결과의 OS는 확인되지 않았습니다. 사용하려는 PC를 직접 선택하고 PIN으로 확인하세요.")
         }
         .sheet(isPresented: $cameraPresented, onDismiss: {
             guard let invitation = captured else { return }

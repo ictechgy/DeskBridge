@@ -399,7 +399,7 @@ done: db_free(command); db_free(env); return exit_code;
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command_line,int show) {
     wchar_t *image=NULL,*stage=NULL,*helper=NULL; wchar_t **argv=NULL; HANDLE token=NULL,extracted=INVALID_HANDLE_VALUE;
     int argc=0,exit_code=1,elevated=0,created_stage=0,locked_stage=0,silent=0,hardened=0; db_operation operation;
-    const wchar_t *failure=L"설정 도우미를 시작하지 못했습니다. Windows 11 x64용 새 DeskBridge 배포 파일을 OneDrive·동기화 폴더 밖의 로컬 폴더(예: Downloads)로 옮겨 실행하세요."; const BYTE *bytes=NULL; DWORD size=0,used=0;
+    const wchar_t *failure=L"설정 도우미를 시작하지 못했습니다. Windows 11 x64용 새 Knot 배포 파일을 OneDrive·동기화 폴더 밖의 로컬 폴더(예: Downloads)로 옮겨 실행하세요."; const BYTE *bytes=NULL; DWORD size=0,used=0;
     TOKEN_ELEVATION elevation; USHORT process_machine=0,native_machine=0; OSVERSIONINFOW version; db_locks locks={{0},0};
     (void)instance; (void)previous; (void)command_line; (void)show; db_heap=GetProcessHeap();
     // Static dependencies are system KnownDLLs/UCRT API sets; later loads search only System32.
@@ -415,7 +415,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command_line,int
         !GetTokenInformation(token,TokenElevation,&elevation,sizeof(elevation),&used)) goto done;
     elevated=elevation.TokenIsElevated!=0;
     if ((operation==DB_NORMAL && elevated) || (operation!=DB_NORMAL && !elevated)) {
-        failure=L"일반 설정 창은 관리자 권한 없이 여세요. 관리자 작업은 DeskBridge 설정 창의 버튼에서 시작하세요.";
+        failure=L"일반 설정 창은 관리자 권한 없이 여세요. 관리자 작업은 Knot 설정 창의 버튼에서 시작하세요.";
         goto done;
     }
     image=(wchar_t *)db_alloc(DB_PATH_CAP*sizeof(wchar_t)); stage=(wchar_t *)db_alloc(DB_PATH_CAP*sizeof(wchar_t)); helper=(wchar_t *)db_alloc(DB_PATH_CAP*sizeof(wchar_t));
@@ -436,6 +436,6 @@ done:
     if (token) CloseHandle(token);
     if (argv) LocalFree(argv);
     db_free(image); db_free(stage); db_free(helper);
-    if (db_show_failure(exit_code,silent) && MessageBoxW(NULL,failure,L"DeskBridge",MB_OK|MB_ICONERROR)!=0) exit_code=2;
+    if (db_show_failure(exit_code,silent) && MessageBoxW(NULL,failure,L"Knot",MB_OK|MB_ICONERROR)!=0) exit_code=2;
     return exit_code;
 }

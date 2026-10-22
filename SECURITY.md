@@ -4,7 +4,7 @@ This is a development preview with source/build/synthetic checks, not a complete
 
 ## Reporting a vulnerability
 
-Use [GitHub private vulnerability reporting](https://github.com/ictechgy/DeskBridge/security/advisories/new) for security-sensitive reports. Public bug reports should contain only source paths and a minimal synthetic reproduction. Do not include passwords, PINs, private keys, real files/desktops or raw service logs.
+Use [GitHub private vulnerability reporting](https://github.com/ictechgy/Knot/security/advisories/new) for security-sensitive reports. Public bug reports should contain only source paths and a minimal synthetic reproduction. Do not include passwords, PINs, private keys, real files/desktops or raw service logs.
 
 ## Trust boundaries
 
@@ -16,7 +16,7 @@ Use [GitHub private vulnerability reporting](https://github.com/ictechgy/DeskBri
 - Control/video/audio encryption and encrypted RTSP signalling are mandatory. Unsupported hosts fail closed; there is no plaintext toggle.
 - Encrypted RTSP replies must authenticate with AES-GCM, carry a strictly increasing independent host sequence within the RTSP instance, and have exactly one CSeq matching the actual request. Gaps are allowed; duplicates, older/wrapped counters and malformed/mismatched CSeq fail without committing receive state. This does not replace host pinning or authenticate the AES-CBC audio format.
 - Sunshine's audio wire format uses AES-CBC without a message authentication tag. Mandatory encryption does not give audio the integrity protection of authenticated control/video packets. Malformed payloads are bounded and rejected where detectable; LAN access control or Tailscale remains relevant against packet injection. Changing this format requires host protocol support.
-- Client identity is separate from Glimmer's installed identity, under DeskBridge's Application Support directory, owner-only files. No keychain or previous-app migration.
+- Client identity is separate from Glimmer's installed identity, under Knot's Application Support directory, owner-only files. No keychain or previous-app migration.
 - Configuration read failure blocks reconnection/storage, preserving existing trust state instead of treating it as a new host.
 - Streaming disconnect uses disconnectOnly and never sends Sunshine /cancel.
 - SFTP uses a separate host pin and explicitly selected SSH key. Global SSH config, password auth, forwarding, proxy configuration and unrelated identity attempts are disabled.
@@ -39,7 +39,7 @@ Use [GitHub private vulnerability reporting](https://github.com/ictechgy/DeskBri
 - Streaming state is in a separate app-owned portable directory, per address, with exclusive profile use. Global Moonlight settings/credentials are not imported. QR and mDNS only produce private-address candidates; pairing and certificate persistence belong to the dedicated engine profile. Changing address may require pairing again.
 - Our supported Mac host enforces encrypted media; incompatible client negotiation must fail there. The unmodified Windows client does not inherit the Glimmer-specific encrypted-RTSP/replay/input hardening. No claim of identical client security, protocol audit or superiority to another product is made. The documented upstream AES-CBC audio integrity limit also remains.
 - Native client code generates only pair/stream Desktop commands, with no quit-after. The upstream engine can still offer an explicit confirmation to quit a different running application; users are told to cancel it. Local disconnect/cancel uses only the owned child Job, not a host quit request. System-key capture is off by default; users may explicitly enable it for fullscreen Mac Command input, with a local release/exit shortcut.
-- Optional rich presence, mDNS and connection-testing preferences are disabled in the dedicated portable INI. The unchanged engine still makes compatibility/controller/update-availability requests; there is no zero-external-traffic claim. DeskBridge adds no broker or automatic installer/updater.
+- Optional rich presence, mDNS and connection-testing preferences are disabled in the dedicated portable INI. The unchanged engine still makes compatibility/controller/update-availability requests; there is no zero-external-traffic claim. Knot adds no broker or automatic installer/updater.
 - This feature grants full control of the logged-in Mac account, not access limited to an SFTP folder. Reverse file transfer is unsupported, Remote Login/SSH and Full Disk Access are not automatically enabled, and clipboard synchronization is not added. User-initiated upstream clipboard paste is distinct from automatic sync.
 - Agent validation uses only source and fresh inert process/packet/image fixtures. No production capture process, real desktop, existing user preferences/keys/logs, clipboard or live remote endpoint is accessed. Real Windows ACL/Job/native engine and Mac TCC/input/video/audio/lock/sleep/display behavior remain device acceptance items.
 
@@ -60,4 +60,4 @@ Please avoid public reports containing private keys, PINs, host certificates pai
 
 The extracted Windows managed EXE, QR DLL and PowerShell scripts are individually unsigned in this preview. An outer Authenticode signature authenticates embedded bytes; it does not establish their acceptance under Smart App Control, WDAC or ConstrainedLanguage. Do not disable these policies. Public signed releases need inner-artifact signing before hashing/embedding and acceptance on an application-control-enabled Windows device.
 
-Mac 공유는 DeskBridge가 직접 시작한 자식 프로세스를 사용하므로 macOS TCC의 책임 앱이 DeskBridge일 수 있습니다. 화면·시스템 오디오·선택한 오디오 입력의 목적 문자열을 부모 앱에도 포함하며, 권한은 실제 macOS 요청에 표시된 DeskBridge 또는 Sunshine에 사용자가 직접 승인합니다. 개인 SPI로 책임을 숨기거나 자동 승인하지 않습니다. 실제 권한 귀속·입력·오디오 승인과 앱 교체 후 유지 여부는 대상 기기 검증 항목입니다.
+Mac 공유는 Knot가 직접 시작한 자식 프로세스를 사용하므로 macOS TCC의 책임 앱이 Knot일 수 있습니다. 화면·시스템 오디오·선택한 오디오 입력의 목적 문자열을 부모 앱에도 포함하며, 권한은 실제 macOS 요청에 표시된 Knot 또는 Sunshine에 사용자가 직접 승인합니다. 개인 SPI로 책임을 숨기거나 자동 승인하지 않습니다. 실제 권한 귀속·입력·오디오 승인과 앱 교체 후 유지 여부는 대상 기기 검증 항목입니다.

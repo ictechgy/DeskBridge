@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Convert the approved master PNG into native app icon containers with macOS tools."""
+"""Render Knot's source geometry and build native icon containers with macOS tools."""
 from pathlib import Path
 import struct, subprocess, tempfile
 
@@ -8,8 +8,12 @@ ROOT = Path(__file__).resolve().parent.parent
 BRAND = ROOT / 'Assets/Brand'
 
 if __name__ == '__main__':
-    master = BRAND / 'nearby-panes.png'
-    with tempfile.TemporaryDirectory(prefix='deskbridge-icons-') as directory:
+    master = BRAND / 'knot.png'
+    with tempfile.TemporaryDirectory(prefix='knot-icons-') as directory:
+        renderer = Path(directory) / 'render-brand'
+        subprocess.run(['/usr/bin/swiftc', '-module-cache-path', str(Path(directory) / 'module-cache'),
+                        str(ROOT / 'scripts/render_brand_mark.swift'), '-o', str(renderer)], check=True)
+        subprocess.run([str(renderer), str(BRAND)], check=True)
         iconset = Path(directory) / 'AppIcon.iconset'
         iconset.mkdir()
         for points in (16, 32, 128, 256, 512):

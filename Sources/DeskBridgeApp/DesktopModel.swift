@@ -237,7 +237,7 @@ final class DesktopModel: ObservableObject {
                 initial.serverCertPEM = saved.certificatePEM
                 initial.httpPort = saved.httpPort; initial.httpsPort = saved.httpsPort
             }
-            let client = NetworkClient(server: initial, identity: identity, deviceName: "DeskBridge")
+            let client = NetworkClient(server: initial, identity: identity, deviceName: "Knot")
             status = saved == nil ? "PC를 확인하는 중…" : "저장된 인증서로 PC를 확인하는 중…"
             let verified = try await operations.fetchServerInfo(client, saved?.uniqueID)
             try Task.checkCancellation()

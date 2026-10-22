@@ -1,6 +1,6 @@
 # File transfer implementation and boundary
 
-DeskBridge speaks structured SFTP v3 over a child `/usr/bin/ssh -s ... sftp` process. SSH supplies maintained authentication, host verification and encrypted transport on LAN as well as Tailscale. There is no custom cryptography, HTTP file service or dependency on Sunshine's privileged process. SFTP is a separate credential and permission boundary from full remote desktop control; someone authorized to control the desktop can still use the desktop's own applications to reach that Windows account's files.
+Knot speaks structured SFTP v3 over a child `/usr/bin/ssh -s ... sftp` process. SSH supplies maintained authentication, host verification and encrypted transport on LAN as well as Tailscale. There is no custom cryptography, HTTP file service or dependency on Sunshine's privileged process. SFTP is a separate credential and permission boundary from full remote desktop control; someone authorized to control the desktop can still use the desktop's own applications to reach that Windows account's files.
 
 `SFTPConnectionConfiguration` requires a Windows address, dedicated local username, explicit private-key URL and independently verified Ed25519 **server** public key. It computes a SHA256 fingerprint and writes that exact pin to a new app-owned `known_hosts` file with private permissions. A stable host-key alias supports changing between LAN and Tailscale addresses without trusting a new endpoint. Unknown/changed keys fail closed. No network key scan is silently trusted.
 

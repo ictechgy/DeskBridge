@@ -59,16 +59,16 @@ def main():
     control = f'''Package: deskbridge-linux-host
 Version: {deb_version}
 Architecture: amd64
-Maintainer: DeskBridge contributors
+Maintainer: Knot contributors
 Section: net
 Priority: optional
 Depends: python3 (>= 3.12), python3-gi, gir1.2-gtk-3.0, python3-qrcode, python3-pil, iproute2, util-linux, libglib2.0-bin, xdg-utils
-Description: Native setup for an Ubuntu X11 desktop shared with Mac or Windows
+Description: Knot native setup for an Ubuntu X11 desktop shared with Mac or Windows
  Logged-in Ubuntu 24.04 amd64 X11 host only. Downloads pinned Sunshine on
  explicit action. No automatic root broker, group grants or autostart.
 '''.encode()
     payload = deb(entries, control)
-    path = args.output or ROOT / 'build/linux' / ('deskbridge-linux-host_' + deb_version + '_amd64.deb')
+    path = args.output or ROOT / 'build/linux' / ('Knot-' + version + '-linux-amd64.deb')
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     if source_snapshot(ROOT) != before: raise SystemExit('Source changed during build')

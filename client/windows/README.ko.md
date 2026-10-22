@@ -2,9 +2,9 @@
 
 기본은 Windows 시스템 단축키를 유지하므로 Windows 키가 Mac Command로 전달되지 않습니다. 전체 화면에서 **Windows 키를 Mac Command로 보내기**를 명시적으로 선택하면 Windows 키가 Command가 되며 Alt+Tab 등도 Mac으로 전달될 수 있습니다. **Ctrl+Alt+Shift+K**로 전달을 전환하고, **Ctrl+Alt+Shift+Q**로 로컬 화면 연결을 종료합니다. 전달을 끈 뒤 Windows 작업 공간을 전환하세요. Ctrl↔Command 자동 교환은 하지 않습니다.
 
-Windows 11 x64의 DeskBridge 시작 창에서 **Mac 열기**를 선택한다. 네이티브 Windows 창이 공식 Moonlight Portable 6.2.0을 사용자가 요청할 때 내려받고, 별도 자식 프로세스로 페어링·화면 연결을 시작한다. 브라우저 원격 제어가 아니다. 새로운 전송 프로토콜·암호화·디코더를 구현하지 않는다.
+Windows 11 x64의 Knot 시작 창에서 **Mac 열기**를 선택한다. 네이티브 Windows 창이 공식 Moonlight Portable 6.2.0을 사용자가 요청할 때 내려받고, 별도 자식 프로세스로 페어링·화면 연결을 시작한다. 브라우저 원격 제어가 아니다. 새로운 전송 프로토콜·암호화·디코더를 구현하지 않는다.
 
-1. Mac에서 DeskBridge의 **이 Mac 공유**를 시작한다. Sunshine의 화면 녹화·손쉬운 사용 권한과 PIN 승인은 Mac 사용자가 직접 처리한다.
+1. Mac에서 Knot의 **이 Mac 공유**를 시작한다. Sunshine의 화면 녹화·손쉬운 사용 권한과 PIN 승인은 Mac 사용자가 직접 처리한다.
 2. Mac이 표시한 연결 링크·QR 이미지를 가져오거나 같은 Wi-Fi에서 찾기를 누른다. 이름과 주소를 보고 **선택한 주소 사용**을 누른다. 직접 IPv4 입력은 고급 항목에 있다.
 3. **화면 엔진 받기**를 누른다. 공식 GitHub의 고정 버전을 내려받아 크기·SHA-256·모든 284개 런타임 파일을 검증한다. 초기 다운로드에는 인터넷이 필요하다.
 4. **PIN으로 Mac 연결**을 누르고 Moonlight 네이티브 창의 PIN을 선택한 Mac의 Sunshine 화면에 직접 입력한다. 기기 승인은 주소나 QR과 별개다.
@@ -24,16 +24,16 @@ Windows 11 x64의 DeskBridge 시작 창에서 **Mac 열기**를 선택한다. �
 
 기본 화면은 1080p/60FPS/20Mbps, 절대 마우스·스테레오다. 720p/1440p, 30FPS와 10/40Mbps, 창/전체 화면을 선택할 수 있다. Alt+Tab 등 Windows 시스템 단축키는 로컬에 남긴다. Mac의 Command/Control/Option 매핑, 한/영 전환, 다중 모니터·고배율, 실제 오디오, 네트워크 끊김 복구는 실기기로 확인해야 한다. 로그인 전 화면·FileVault·잠금 해제·절전 복귀·헤드리스 캡처와 역방향 파일 전송은 이 프리뷰가 지원을 보장하지 않는다.
 
-라이선스는 DeskBridge 소스의 GPL-3.0-only를 따른다. Moonlight Portable은 수정 없이 공식 서버에서 별도로 내려받으며 엔진 바이너리를 DeskBridge EXE에 포함하지 않는다. 원본의 라이선스·제3자 고지는 검증된 런타임 안에 보존한다. 공식 소스: <https://github.com/moonlight-stream/moonlight-qt/tree/v6.2.0>. Moonlight 빌드에 필요한 하위 모듈·의존성까지 해당 프로젝트의 라이선스·빌드 지침에 따라 확보해야 한다. 단일 GitHub 소스 ZIP만으로 모든 의존성의 대응 소스를 갖췄다고 주장하지 않는다.
+라이선스는 Knot 소스의 GPL-3.0-only를 따른다. Moonlight Portable은 수정 없이 공식 서버에서 별도로 내려받으며 엔진 바이너리를 Knot EXE에 포함하지 않는다. 원본의 라이선스·제3자 고지는 검증된 런타임 안에 보존한다. 공식 소스: <https://github.com/moonlight-stream/moonlight-qt/tree/v6.2.0>. Moonlight 빌드에 필요한 하위 모듈·의존성까지 해당 프로젝트의 라이선스·빌드 지침에 따라 확보해야 한다. 단일 GitHub 소스 ZIP만으로 모든 의존성의 대응 소스를 갖췄다고 주장하지 않는다.
 
 `Tests.cs`는 `DeskBridge.Reverse.ReverseClientTests` 진입점의 합성 검사다. 링크·주소 정책, CRT 인수 인코딩, 원격 종료 없는 CLI, 인증 상태를 보존하는 privacy 설정, 엔진 경로/리디렉션/고정 목록을 오프라인에서 확인한다. GUI·네트워크·실제 자식·기존 사용자 설정을 열지 않는다. Windows ACL/잡 개체/DPI와 실제 Mac 접속 검증은 별도로 필요하다.
 
 ## 엔진 파일 확인에 계속 실패한다면
 
-이 프리뷰에는 자동 복구가 없다. DeskBridge와 그 Moonlight 창을 모두 닫고 `%LOCALAPPDATA%\DeskBridge-Reverse-v1`의 `engine-6.2.0` 폴더만 다른 이름으로 옮긴 뒤, 다시 실행해 **화면 엔진 받기**를 누른다. `profiles`에는 페어링 상태가 있으므로 보존한다. 백신이 파일을 격리했다면 보안 정책을 먼저 확인하고 보호 기능을 끄지 않는다. 클라우드/링크 폴더의 EXE 또는 QR은 일반 로컬 폴더로 옮겨 사용한다.
+이 프리뷰에는 자동 복구가 없다. Knot와 그 Moonlight 창을 모두 닫고 `%LOCALAPPDATA%\DeskBridge-Reverse-v1`의 `engine-6.2.0` 폴더만 다른 이름으로 옮긴 뒤, 다시 실행해 **화면 엔진 받기**를 누른다. `profiles`에는 페어링 상태가 있으므로 보존한다. 백신이 파일을 격리했다면 보안 정책을 먼저 확인하고 보호 기능을 끄지 않는다. 클라우드/링크 폴더의 EXE 또는 QR은 일반 로컬 폴더로 옮겨 사용한다.
 
 화면 엔진 설치는 고정된 공식 HTTPS 주소에 직접 연결하며 TLS 1.2를 사용한다. 시스템 프록시를 사용하지 않으므로 회사 프록시를 반드시 거쳐야 하는 환경에서는 다운로드가 실패할 수 있다. 네트워크 정책을 변경하기 전에 관리자에게 허용 여부를 확인한다.
 
 ## Linux 열기
 
-시작 역할 선택에서 **Linux 열기**를 고르면 Ubuntu 24.04 LTS amd64 X11 호스트에 같은 화면 엔진으로 접속합니다. Linux에서 DeskBridge 공유를 먼저 시작하고 Linux v2 QR/링크를 가져오세요. 근처 검색과 직접 주소 선택도 가능합니다. 검색 정보는 OS나 신원을 검증하지 않으므로 올바른 PC를 직접 확인하세요. Linux에는 Mac Command 옵션을 적용하지 않습니다. 주소별 기존 Moonlight 인증서 저장 위치는 그대로 유지하므로 역할 표시를 바꿔도 인증서가 자동 초기화되지 않습니다. Linux 파일 전송·Wayland·로그인 화면은 아직 지원하지 않습니다.
+시작 역할 선택에서 **Linux 열기**를 고르면 Ubuntu 24.04 LTS amd64 X11 호스트에 같은 화면 엔진으로 접속합니다. Linux에서 Knot 공유를 먼저 시작하고 Linux v2 QR/링크를 가져오세요. 근처 검색과 직접 주소 선택도 가능합니다. 검색 정보는 OS나 신원을 검증하지 않으므로 올바른 PC를 직접 확인하세요. Linux에는 Mac Command 옵션을 적용하지 않습니다. 주소별 기존 Moonlight 인증서 저장 위치는 그대로 유지하므로 역할 표시를 바꿔도 인증서가 자동 초기화되지 않습니다. Linux 파일 전송·Wayland·로그인 화면은 아직 지원하지 않습니다.

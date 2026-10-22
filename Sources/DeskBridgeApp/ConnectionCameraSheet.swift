@@ -50,7 +50,7 @@ final class ConnectionCamera: NSObject, ObservableObject, @preconcurrency AVCapt
             }
             metadata = output
             capture = box
-            status = "공유할 PC의 DeskBridge의 연결 QR을 카메라에 보여주세요."
+            status = "공유할 PC의 Knot의 연결 QR을 카메라에 보여주세요."
             box.start()
         } catch let error as AppFailure {
             status = error.localizedDescription
@@ -70,7 +70,7 @@ final class ConnectionCamera: NSObject, ObservableObject, @preconcurrency AVCapt
         let texts = objects.prefix(8).compactMap { ($0 as? AVMetadataMachineReadableCodeObject)?.stringValue }
         guard texts.count == 1, let text = texts.first else { return }
         guard let invitation = try? ConnectionInvitation(text: text) else {
-            let message = "공유할 PC의 DeskBridge에서 만든 연결 QR을 보여주세요."
+            let message = "공유할 PC의 Knot에서 만든 연결 QR을 보여주세요."
             if status != message { status = message }
             return
         }

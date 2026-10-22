@@ -80,7 +80,7 @@ final class NearbyPCBrowser: NSObject, ObservableObject, @preconcurrency NetServ
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         guard browsers.contains(where: { $0 === browser }) else { return }
         stop()
-        status = "검색을 시작하지 못했어요. 시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크에서 DeskBridge를 허용하거나 QR을 사용하세요."
+        status = "검색을 시작하지 못했어요. 시스템 설정 → 개인정보 보호 및 보안 → 로컬 네트워크에서 Knot를 허용하거나 QR을 사용하세요."
     }
 
     func netServiceDidResolveAddress(_ sender: NetService) {

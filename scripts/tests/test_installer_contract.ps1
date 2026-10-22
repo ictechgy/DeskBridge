@@ -19,6 +19,11 @@ function Expect([bool] $Condition,[string] $Message) {
 function Hash([string] $Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 # Read the actual Pascal uninstall function as data. No Inno/native process is run.
 $innoSource=[IO.File]::ReadAllText((Join-Path $sourceRoot 'packaging/windows/DeskBridge.iss'))
+# Rebranding must overwrite the existing broker, not strand a privileged old copy.
+Expect ($innoSource.Contains('AppId={{7BB82A17-E531-4D04-A1FA-E8912E9E8E99}') -and
+        $innoSource.Contains('DefaultDirName={autopf}\DeskBridge')) 'Installer upgrade identity must remain stable.'
+Expect ($innoSource.Contains('Source: "..\..\build\windows\Knot-Windows.exe"; DestDir: "{app}"; DestName: "DeskBridge-Windows.exe";')) 'Publicly renamed helper must replace the existing installed broker.'
+Expect ($innoSource.Contains('Filename: "{app}\DeskBridge-Windows.exe"; Description: "Knot 설정 열기";')) 'Installed launch path must use the replaced broker.'
 $uninstallStart=$innoSource.IndexOf('function InitializeUninstall(): Boolean;',[StringComparison]::Ordinal)
 Expect ($uninstallStart -ge 0) 'Actual uninstall callback must be present.'
 $uninstall=$innoSource.Substring($uninstallStart)
@@ -83,7 +88,7 @@ $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $global:DeskBridgeInstallerFixture.NativeCompiler=$NativeCompiler
 $folder=Join-Path $root 'build/windows'
 [IO.Directory]::CreateDirectory($folder) | Out-Null
-$file=Join-Path $folder 'DeskBridge-Windows.exe'
+$file=Join-Path $folder 'Knot-Windows.exe'
 [IO.File]::WriteAllBytes($file,[Text.Encoding]::ASCII.GetBytes('MZ-synthetic-native-outer-with-exact-managed-resource'))
 $digest=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
 $global:DeskBridgeInstallerFixture.UnsignedHash=$digest
@@ -94,7 +99,7 @@ $record=[ordered]@{
  managedSha256=('b'*64);nativeResourceSha256=('b'*64);nativeCompiler='synthetic-native-toolchain'
 }
 if ($global:DeskBridgeInstallerFixture.BadUnsignedManifest) {$record.sha256='0'*64}
-[IO.File]::WriteAllText((Join-Path $folder 'DeskBridge-Windows.build.json'),($record | ConvertTo-Json -Depth 20),(New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $folder 'Knot-Windows.build.json'),($record | ConvertTo-Json -Depth 20),(New-Object Text.UTF8Encoding($false)))
 $global:DeskBridgeInstallerFixture.OriginalManifest=$record | ConvertTo-Json -Depth 20 -Compress
 '@
 $fakeCompiler=@'
@@ -107,7 +112,7 @@ if ($CompilerArguments.Count -ne 2 -or $CompilerArguments[0] -cne '/DAppVersion=
 $root=Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $folder=Join-Path $root 'dist/release'
 [IO.Directory]::CreateDirectory($folder) | Out-Null
-[IO.File]::WriteAllBytes((Join-Path $folder 'DeskBridge-9.8.7-preview.synthetic-windows-x64-setup.exe'),[Text.Encoding]::ASCII.GetBytes('MZ-synthetic-inno-installer'))
+[IO.File]::WriteAllBytes((Join-Path $folder 'Knot-9.8.7-preview.synthetic-windows-x64-setup.exe'),[Text.Encoding]::ASCII.GetBytes('MZ-synthetic-inno-installer'))
 $global:LASTEXITCODE=0
 '@
 try {
@@ -150,7 +155,7 @@ try {
   if ($global:DeskBridgeInstallerFixture.NativeCompiler -cne 'synthetic-zig-compiler' -and $failed) { throw ('Fixture failed before launcher handoff in '+$scenario+': '+$failed.Exception.Message) }
   Expect ($global:DeskBridgeInstallerFixture.NativeCompiler -ceq 'synthetic-zig-compiler') 'Native compiler selection was not passed to Build-Launcher.'
   $output=Join-Path $root 'dist/release'
-  $quick=Join-Path $output 'DeskBridge-9.8.7-preview.synthetic-windows-x64-quick-setup-preview.exe'
+  $quick=Join-Path $output 'Knot-9.8.7-preview.synthetic-windows-x64-quick-setup-preview.exe'
   if ($scenario -notin @('Signed','Unsigned')) {
    Expect ($null -ne $failed) ('Invalid signing/provenance case was accepted: '+$scenario)
    $expected=if ($scenario -eq 'MismatchedUnsignedManifest') {'unsigned helper does not match'} elseif ($scenario -eq 'WrongPayloadChecks') {'helper payload checks failed'} else {'signature did not verify'}
@@ -161,8 +166,8 @@ try {
   if ($failed) {throw $failed}
   Expect ($global:DeskBridgeInstallerFixture.PayloadCheckCalls -eq 1) 'Payload checks must pass once before Inno compilation.'
   Expect ($global:DeskBridgeInstallerFixture.CompilerCalls -eq 1) 'Inno compiler should run once.'
-  $launcher=Join-Path $root 'build/windows/DeskBridge-Windows.exe'
-  $manifest=Get-Content -LiteralPath (Join-Path $root 'build/windows/DeskBridge-Windows.build.json') -Raw | ConvertFrom-Json
+  $launcher=Join-Path $root 'build/windows/Knot-Windows.exe'
+  $manifest=Get-Content -LiteralPath (Join-Path $root 'build/windows/Knot-Windows.build.json') -Raw | ConvertFrom-Json
   $original=$global:DeskBridgeInstallerFixture.OriginalManifest | ConvertFrom-Json
   foreach ($name in @('sourceManifest','payloadSha256','managedSha256','nativeResourceSha256','nativeCompiler')) {
    Expect (($manifest.$name | ConvertTo-Json -Depth 20 -Compress) -ceq ($original.$name | ConvertTo-Json -Depth 20 -Compress)) ('Signing changed provenance field '+$name)
@@ -176,7 +181,7 @@ try {
    Expect ($global:DeskBridgeInstallerFixture.CertificateCalls -eq 0 -and $global:DeskBridgeInstallerFixture.SignedPaths.Count -eq 0 -and $global:DeskBridgeInstallerFixture.VerifiedPaths.Count -eq 0) 'Unsigned builds must not consult certificates/signing APIs.'
    Expect (-not $manifest.authenticodeSigned -and $manifest.sha256 -ceq $global:DeskBridgeInstallerFixture.UnsignedHash) 'Unsigned build manifest changed.'
   }
-  $installer=Join-Path $output 'DeskBridge-9.8.7-preview.synthetic-windows-x64-setup.exe'
+  $installer=Join-Path $output 'Knot-9.8.7-preview.synthetic-windows-x64-setup.exe'
   Expect ([IO.File]::ReadAllText((Join-Path $output 'WindowsRuntime-NOTICE.txt')) -ceq 'synthetic pinned runtime notice') 'Runtime notice must accompany the distributed quick EXE.'
   Expect ((Hash $quick) -ceq (Hash $launcher)) 'Shipped quick EXE must match the final signed/unsigned helper.'
   $sums=@(Get-Content -LiteralPath (Join-Path $output 'WINDOWS-SHA256SUMS'))

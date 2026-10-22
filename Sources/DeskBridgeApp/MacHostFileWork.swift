@@ -94,7 +94,7 @@ enum MacHostFileWork {
               hasher.finalize().map({ String(format: "%02x", $0) }).joined() == sha256 else {
             throw MacHostPolicy.Failure.download
         }
-        let quarantine = Data("0081;\(String(Int(Date().timeIntervalSince1970), radix: 16));DeskBridge;".utf8)
+        let quarantine = Data("0081;\(String(Int(Date().timeIntervalSince1970), radix: 16));Knot;".utf8)
         guard quarantine.withUnsafeBytes({ fsetxattr(file, "com.apple.quarantine", $0.baseAddress, $0.count, 0, 0) }) == 0 else {
             throw MacHostPolicy.Failure.download
         }

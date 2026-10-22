@@ -21,7 +21,7 @@ def fixture_module(name):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dotnet', required=True)
-    parser.add_argument('--executable', type=Path, default=ROOT / 'build/windows/DeskBridge-Windows.exe')
+    parser.add_argument('--executable', type=Path, default=ROOT / 'build/windows/Knot-Windows.exe')
     parser.add_argument('--mac-checker', type=Path, help='Run actual Mac QR reader against a new C#-generated bitmap fixture')
     parser.add_argument('--native-compiler', help='Pinned Zig compiler to build pure C checks on Windows')
     parser.add_argument('--compiler', help='C# compiler; defaults to the executable build record')

@@ -38,7 +38,7 @@ namespace DeskBridge.Reverse
         internal ClientForm(HostPlatform platform = HostPlatform.Mac)
         {
             this.platform = platform;
-            Text = HostText("DeskBridge · Mac 열기");
+            Text = HostText("Knot · Mac 열기");
             Font = new Font("Malgun Gothic", 9.5f);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
             StartPosition = FormStartPosition.CenterScreen;
@@ -63,7 +63,7 @@ namespace DeskBridge.Reverse
         {
             if (platform == HostPlatform.Mac) return text;
             if (text.Contains("화면 녹화") || text.StartsWith("Mac에서 ‘이 Mac 공유’"))
-                return "Ubuntu 24.04 LTS amd64의 X11 데스크톱에서 DeskBridge 공유를 시작한 뒤 QR/링크 또는 같은 Wi-Fi 검색으로 주소를 선택하세요. Linux 파일 전송·Wayland·로그인 화면은 아직 지원하지 않습니다. PIN으로 PC를 확인하세요.";
+                return "Ubuntu 24.04 LTS amd64의 X11 데스크톱에서 Knot 공유를 시작한 뒤 QR/링크 또는 같은 Wi-Fi 검색으로 주소를 선택하세요. Linux 파일 전송·Wayland·로그인 화면은 아직 지원하지 않습니다. PIN으로 PC를 확인하세요.";
             if (text.Contains("Ctrl↔Command")) return "Linux 연결은 시스템 키 전달을 끈 상태로 시작합니다. Windows 키·Alt+Tab 등은 로컬 Windows에서 처리될 수 있습니다. Ctrl은 Control, Alt는 Alt로 사용하며 입력 결과는 실제 연결에서 확인하세요.";
             if (text.Contains("FileVault")) return "로그인 전 화면·잠금 해제·절전 복귀·모니터 없는 사용은 보장하지 않습니다. 실제 연결 상태와 페어링 오류는 Moonlight 창에서 확인하세요.";
             return text.Replace("Mac Command", "Super").Replace("Mac", "Linux").Replace("Option", "Alt");
@@ -78,7 +78,7 @@ namespace DeskBridge.Reverse
             status.BorderStyle = BorderStyle.None; status.BackColor = Color.White; status.AccessibleName = "현재 작업 상태";
             footer.Controls.Add(status); footer.Controls.Add(cancel); Controls.Add(footer);
             var sidebar = new Panel { Dock = DockStyle.Left, Width = 168, BackColor = Color.FromArgb(234, 237, 241), Padding = new Padding(20, 26, 12, 0) };
-            sidebar.Controls.Add(new Label { Dock = DockStyle.Top, AutoSize = true, Text = HostText("DeskBridge\r\n\r\nMac 열기\r\n\r\n① 주소 선택\r\n② PIN 연결\r\n③ 화면 열기"), Font = new Font(Font, FontStyle.Bold) });
+            sidebar.Controls.Add(new Label { Dock = DockStyle.Top, AutoSize = true, Text = HostText("Knot\r\n\r\nMac 열기\r\n\r\n① 주소 선택\r\n② PIN 연결\r\n③ 화면 열기"), Font = new Font(Font, FontStyle.Bold) });
             Controls.Add(sidebar);
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(24) };
             content.ColumnCount = 1; content.RowCount = 0; content.AutoSize = true; content.AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -86,7 +86,7 @@ namespace DeskBridge.Reverse
             scroll.Controls.Add(content); Controls.Add(scroll); scroll.BringToFront();
             scroll.ClientSizeChanged += delegate { UpdateWrapping(); };
             Add(Heading(HostText("Windows에서 Mac 열기")));
-            Add(Description(HostText("같은 Wi-Fi 또는 이미 연결된 Tailscale을 사용합니다. Mac에서 DeskBridge의 ‘이 Mac 공유’를 켜고 화면 녹화·손쉬운 사용 권한을 허용하세요. 로그인한 Mac의 Desktop을 엽니다.")));
+            Add(Description(HostText("같은 Wi-Fi 또는 이미 연결된 Tailscale을 사용합니다. Mac에서 Knot의 ‘이 Mac 공유’를 켜고 화면 녹화·손쉬운 사용 권한을 허용하세요. 로그인한 Mac의 Desktop을 엽니다.")));
 
             Add(Heading(HostText("1. Mac 주소 선택")));
             Add(Description("QR·검색 결과는 미확인 주소 안내입니다. 선택만으로 페어링하거나 접속하지 않습니다."));
