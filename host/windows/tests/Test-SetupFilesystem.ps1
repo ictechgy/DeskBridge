@@ -43,11 +43,17 @@ try {
     Set-Acl -LiteralPath $writable -AclObject $openAcl
     Reject {Assert-ProtectedDirectory $writable} 'Administrator-owned directory with untrusted write access rejected'
     $child=Join-Path $state 'child'; [void][IO.Directory]::CreateDirectory($child)
+    $ordinary=Join-Path $child 'ordinary.txt'; [IO.File]::WriteAllText($ordinary,'synthetic ordinary file')
+    Assert-NoReparsePath $child
+    Assert-NoReparsePath $ordinary
+    Expect $true 'Raw .NET parent traversal accepts nested ordinary directories and files'
     $junction=Join-Path $fixture 'state-alias'
     try {
         New-Item -ItemType Junction -Path $junction -Target $state | Out-Null
         Reject {Assert-ProtectedDirectory (Join-Path $junction 'child')} 'Reparse ancestor rejected on a new synthetic path'
+        Reject {Assert-NoReparsePath (Join-Path $junction 'child\ordinary.txt')} 'File traversal also rejects a junction ancestor'
     } finally { if (Test-Path -LiteralPath $junction) { [IO.Directory]::Delete($junction,$false) } }
+    [IO.File]::Delete($ordinary)
     [IO.Directory]::Delete($child,$false)
     $configFixture=Join-Path $state 'config-fixture'
     [IO.File]::WriteAllText($configFixture,"# DeskBridge dedicated SFTP deployment. Synthetic fixture.`nPort 22`n")

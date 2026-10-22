@@ -329,7 +329,10 @@ function Assert-NoReparsePath([string] $Path) {
     $item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
     while ($item) {
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Managed paths and their ancestors must not be reparse points.' }
-        if ($item.PSIsContainer) { $item=$item.Parent } else { $item=$item.Directory }
+        # Parent/Directory return raw .NET objects without provider-added PSIsContainer.
+        if ($item -is [IO.DirectoryInfo]) { $item=$item.Parent }
+        elseif ($item -is [IO.FileInfo]) { $item=$item.Directory }
+        else { throw 'Managed paths must be filesystem files or directories.' }
     }
 }
 function Assert-ManagedConfig([string] $Path,[string] $Sha256) {
