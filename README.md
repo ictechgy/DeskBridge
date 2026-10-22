@@ -46,7 +46,7 @@ Knot operates no cloud account or relay service. Set up Tailscale separately on 
 
 This development preview is currently published as source only; installers have not been published to GitHub Releases. Build from source, or fork the repository, enable Actions in your fork and use **Actions → Build install packages → Run workflow** to request a preview build. Manual workflow runs require [write access to that repository](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
-See the [workflow](.github/workflows/packages.yml) and [packaging guide](docs/RELEASING.md). Artifacts are created after a successful build, and [downloading them requires a GitHub login](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts). GitHub-hosted builds in the new public repository have not yet been validated.
+See the [workflow](.github/workflows/packages.yml) and [packaging guide](docs/RELEASING.md). Artifacts are created after a successful build, and [downloading them requires a GitHub login](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts). Preview build results are available in [Actions](https://github.com/ictechgy/Knot/actions/workflows/packages.yml). CI checks do not establish real-device installation or remote-session acceptance.
 
 Once you have packages, follow the steps below. **Screen access does not require SSH setup.**
 

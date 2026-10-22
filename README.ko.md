@@ -44,7 +44,7 @@ Knot 자체의 클라우드 계정이나 중계 서버는 없습니다. Tailscal
 
 현재는 소스를 공개한 개발 프리뷰이며, GitHub Releases에 설치 파일을 게시하지 않았습니다. 소스에서 빌드하거나 저장소를 포크하고 Actions를 활성화한 뒤 **Actions → Build install packages → Run workflow**로 프리뷰 패키지 빌드를 요청할 수 있습니다. 수동 실행에는 해당 저장소의 [쓰기 권한](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)이 필요합니다.
 
-[워크플로 소스](.github/workflows/packages.yml)와 [패키징 안내](docs/RELEASING.md)를 확인하세요. 아티팩트는 성공한 빌드 실행 후 생성되며 [다운로드에는 GitHub 로그인](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)이 필요합니다. 새 공개 저장소의 GitHub-hosted 빌드 성공은 아직 검증하지 않았습니다.
+[워크플로 소스](.github/workflows/packages.yml)와 [패키징 안내](docs/RELEASING.md)를 확인하세요. 아티팩트는 성공한 빌드 실행 후 생성되며 [다운로드에는 GitHub 로그인](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)이 필요합니다. 프리뷰 빌드 결과는 [Actions](https://github.com/ictechgy/Knot/actions/workflows/packages.yml)에서 확인할 수 있습니다. CI 검사만으로 실제 기기의 설치·원격 세션 동작을 검증한 것은 아닙니다.
 
 패키지를 준비했다면 다음 순서로 연결합니다. **화면 연결에는 SSH 설정이 필요 없습니다.**
 

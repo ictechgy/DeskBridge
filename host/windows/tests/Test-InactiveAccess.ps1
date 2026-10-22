@@ -56,21 +56,32 @@ Expect (-not (Test-SystemOpenSSHWorkerPath $null 'C:\Windows')) 'Missing worker 
 foreach ($windows in @('C:\Windows\..\Windows','C:\Windows.','C:\Windows\','\server\Windows','C:/Windows')) {
  Expect (-not (Test-SystemOpenSSHWorkerPath ([pscustomobject]@{Name='sshd.exe';ExecutablePath='C:\Windows\System32\OpenSSH\sshd.exe'}) $windows)) 'Noncanonical OS directory must fail closed'
 }
-# Extract the actual firewall cleanup function into an isolated synthetic scope with fake cmdlets.
+# Extract both actual named-query and cleanup functions into the same synthetic scope.
+# Module-scoped helpers must never escape the fake cmdlets to inspect machine policy.
 $tokens=$null;$errors=$null
 $modulePath=Join-Path (Split-Path $PSScriptRoot -Parent) 'SetupContract.psm1'
 $ast=[Management.Automation.Language.Parser]::ParseFile($modulePath,[ref]$tokens,[ref]$errors)
-$functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-ManagedFirewallAccess'},$true))
-Expect ($errors.Count -eq 0 -and $functions.Count -eq 1) 'Actual firewall cleanup function must be uniquely parsed'
+$functions=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Get-NamedManagedFirewallRules','Remove-ManagedFirewallAccess')},$true))
+Expect ($errors.Count -eq 0 -and $functions.Count -eq 2 -and @($functions.Name | Sort-Object -Unique).Count -eq 2) 'Both actual firewall functions must be uniquely parsed'
 & {
  param($ActualFunction)
  function Get-NetFirewallRule {
-  [CmdletBinding()] param([string] $PolicyStore)
-  if ($ErrorActionPreference -ne 'Stop' -or $PolicyStore -notin @('PersistentStore','ActiveStore')) {throw 'Query contract changed'}
+  [CmdletBinding()] param([string] $Name,[string] $PolicyStore)
+  if ($ErrorActionPreference -ne 'Stop' -or $Name -cne 'DeskBridge-SFTP-In-TCP' -or $PolicyStore -notin @('PersistentStore','ActiveStore')) {throw 'Query contract changed'}
   $script:queried+=$PolicyStore
   if ($script:queryFailure) {throw 'synthetic policy read failure'}
-  if (($PolicyStore -eq 'PersistentStore' -and $script:configured) -or ($PolicyStore -eq 'ActiveStore' -and $script:active)) { [pscustomobject]@{Name='DeskBridge-SFTP-In-TCP'} }
-  [pscustomobject]@{Name='Foreign-Rule'}
+  if ($script:unrelatedNotFound -or $script:accessDenied) {
+   $id=if ($script:accessDenied) {'CmdletizationQuery_NotFound_Name'} else {'SyntheticProviderMissing'}
+   $category=if ($script:accessDenied) {[Management.Automation.ErrorCategory]::PermissionDenied} else {[Management.Automation.ErrorCategory]::ObjectNotFound}
+   $record=[Management.Automation.ErrorRecord]::new([Exception]::new('synthetic query failure'),$id,$category,$Name)
+   $PSCmdlet.ThrowTerminatingError($record)
+  }
+  if (($PolicyStore -eq 'PersistentStore' -and $script:configured) -or ($PolicyStore -eq 'ActiveStore' -and $script:active)) {
+   [pscustomobject]@{Name='DeskBridge-SFTP-In-TCP'}
+  } else {
+   $record=[Management.Automation.ErrorRecord]::new([Exception]::new('synthetic named rule absent'),'CmdletizationQuery_NotFound_Name',[Management.Automation.ErrorCategory]::ObjectNotFound,$Name)
+   $PSCmdlet.ThrowTerminatingError($record)
+  }
  }
  function Remove-NetFirewallRule {
   [CmdletBinding()] param([string] $Name,[string] $PolicyStore)
@@ -81,9 +92,10 @@ Expect ($errors.Count -eq 0 -and $functions.Count -eq 1) 'Actual firewall cleanu
   if (-not $script:retainActive) {$script:active=$false}
  }
  . ([scriptblock]::Create($ActualFunction))
- foreach ($case in @('Absent','Present','QueryFailure','RemoveFailure','ResidualPersistent','ResidualActive')) {
+ foreach ($case in @('Absent','Present','QueryFailure','UnrelatedNotFound','AccessDenied','RemoveFailure','ResidualPersistent','ResidualActive')) {
   $script:configured=$case -ne 'Absent';$script:active=$case -ne 'Absent'
   $script:queryFailure=$case -eq 'QueryFailure';$script:removeFailure=$case -eq 'RemoveFailure'
+  $script:unrelatedNotFound=$case -eq 'UnrelatedNotFound';$script:accessDenied=$case -eq 'AccessDenied'
   $script:retainConfigured=$case -eq 'ResidualPersistent';$script:retainActive=$case -eq 'ResidualActive'
   $script:queried=@();$script:removed=0;$failed=$false
   try {Remove-ManagedFirewallAccess} catch {$failed=$true}
@@ -93,5 +105,5 @@ Expect ($errors.Count -eq 0 -and $functions.Count -eq 1) 'Actual firewall cleanu
    Expect ($script:removed -eq [int]($case -eq 'Present')) 'Absent owned rule is a no-op; foreign rules never removed'
   }
  }
-} $functions[0].Extent.Text
+} (($functions | ForEach-Object {$_.Extent.Text}) -join [Environment]::NewLine)
 @{status='passed';checks=$count;scope='pure typed inactivity/path projections and actual cleanup with synthetic firewall cmdlets; no machine inventory or mutation'} | ConvertTo-Json
