@@ -1,116 +1,118 @@
 <p align="center">
-  <img src="Assets/Brand/nearby-panes.png" alt="DeskBridge 로고" width="88">
+  <img src="Assets/Brand/nearby-panes.png" alt="DeskBridge logo" width="88">
 </p>
 
 # DeskBridge
 
-**여러 컴퓨터를 하나의 작업 공간처럼.**
+**Bring your computers into one workspace.**
 
-Mac에서 Windows 화면을 전체 화면 Space로 열고, Windows에서 Mac을 제어하거나 Mac·Windows에서 Linux 데스크톱에 연결하는 무료 오픈소스 원격 업무 앱입니다. 같은 LAN/Wi-Fi 또는 이미 설정한 Tailscale을 사용합니다.
+A free, open-source remote desktop app for work: open Windows in a full-screen Space on your Mac, control a Mac from Windows, or connect to a Linux desktop from Mac or Windows. Use your LAN/Wi-Fi or an existing Tailscale connection.
 
-한국어 · [English](README.en.md)
+English · [한국어](README.ko.md)
 
-> **개발 프리뷰 · 0.2.0-preview.13**
+> **Development preview · 0.2.0-preview.13**
 >
-> 실제 기기의 설치·화면·입력·오디오·연결 성능은 검증이 남아 있습니다. Mac 패키지는 ad-hoc 서명·미공증, Windows 실행 파일은 미서명 프리뷰입니다. 다른 원격 데스크톱보다 빠르거나 안전하다는 비교 결과는 없습니다.
+> Real-device installation, video, input, audio and connection performance still need validation. Mac packages are ad-hoc signed and not notarized; Windows executables are unsigned previews. No performance or security advantage over other remote desktop products has been established.
 
-[설치 안내](INSTALLATION.md) · [보안 범위](SECURITY.md) · [빌드·패키징](docs/RELEASING.md) · [검증 항목](docs/VALIDATION.md)
+[Installation](INSTALLATION.md) · [Security scope](SECURITY.md) · [Build and packaging](docs/RELEASING.md) · [Validation checklist](docs/VALIDATION.md)
 
-## 지원하는 연결
+The app UI and most setup guides are currently in Korean.
 
-화살표 왼쪽은 조작하는 컴퓨터, 오른쪽은 화면을 공유하는 컴퓨터입니다.
+## Supported connections
 
-| 연결 방향 | 화면·키보드·마우스·오디오 | 파일 보내기·받기 |
+In each row, the computer on the left controls the computer on the right.
+
+| Connection | Video, keyboard, mouse and audio | File upload and download |
 | --- | --- | --- |
-| Mac → Windows 11 x64 (Home 포함) | 프리뷰 | 프리뷰 · 별도 SFTP 설정 |
-| Windows 11 x64 → Mac | 프리뷰 · Mac 호스트는 실험 지원 | 미지원 |
-| Mac 또는 Windows 11 x64 → Ubuntu 24.04 LTS amd64 | 프리뷰 · 로그인한 X11 세션 | 미지원 |
+| Mac → Windows 11 x64, including Home edition | Preview | Preview; separate SFTP setup |
+| Windows 11 x64 → Mac | Preview; experimental Mac host support | Not supported |
+| Mac or Windows 11 x64 → Ubuntu 24.04 LTS amd64 | Preview; logged-in X11 session | Not supported |
 
-- **Mac 앱:** Apple Silicon, macOS 26 이상.
-- **Linux:** 호스트 기능만 제공합니다. Linux 클라이언트, Wayland, 헤드리스, 로그인 전 화면은 지원하지 않습니다.
-- 로그인·잠금 해제·절전 복귀·가상 모니터는 보장하지 않습니다. 공유할 컴퓨터에 사용자가 로그인해 있어야 합니다.
+- **Mac app:** Apple Silicon, macOS 26 or later.
+- **Linux:** host only. No Linux client, Wayland, headless or pre-login desktop support.
+- Signing in, unlocking, waking from sleep and using virtual monitors are not guaranteed. The user must be logged in on the shared computer.
 
-## 주요 기능
+## Features
 
-- **Mac 전체 화면 Space:** 원격 화면을 열고 macOS 작업 공간을 오갑니다. 기본 설정은 Control+↑/←/→를 Mac에서 처리합니다.
-- **검색·QR·연결 링크:** 같은 LAN의 Bonjour 검색이나 주소 QR·링크로 PC를 선택합니다. Mac은 QR 이미지·카메라 스캔·링크 입력, Windows 클라이언트는 QR 이미지와 링크를 지원합니다.
-- **명시적 페어링:** QR과 검색 결과는 주소 안내입니다. PIN 승인과 저장된 인증서 확인을 통해 연결합니다.
-- **선택적 파일 전송:** Mac 클라이언트에서 Windows 공유 폴더를 조회하고 개별 파일을 보내고 받습니다. 진행률과 취소를 제공하며 기존 파일은 덮어쓰지 않습니다.
-- **네이티브 앱:** Mac은 SwiftUI/AppKit, Windows는 WinForms, Linux 호스트는 GTK를 사용합니다. Windows 화면 엔진은 별도의 Moonlight 창에서 실행됩니다.
+- **Full-screen Mac Spaces:** open a remote desktop and switch between macOS workspaces. Control+↑/←/→ stays local by default.
+- **Discovery, QR and links:** choose a PC through Bonjour on your LAN or import an address QR/link. The Mac app supports QR images, camera scanning and links; the Windows client supports QR images and links.
+- **Explicit pairing:** discovery results and QR codes are only address hints. PIN approval and saved certificate checks establish the connection.
+- **Optional file transfer:** from the Mac client, browse the Windows share and upload or download individual files with progress and cancellation. Existing files are never overwritten.
+- **Native apps:** SwiftUI/AppKit on Mac, WinForms on Windows and GTK for the Linux host. The Windows screen engine runs in a separate Moonlight window.
 
-DeskBridge 자체의 클라우드 계정이나 중계 서버는 없습니다. Tailscale은 양쪽 기기에 별도로 준비해야 하며, [Tailscale의 연결 경로](https://tailscale.com/docs/reference/connection-types)에 따라 DERP 중계를 거칠 수 있습니다. Bonjour 검색은 Tailscale 너머의 PC를 자동 열거하지 않으므로 QR·링크 또는 주소를 사용하세요.
+DeskBridge operates no cloud account or relay service. Set up Tailscale separately on both devices; traffic may pass through [Tailscale DERP relays](https://tailscale.com/docs/reference/connection-types), depending on the connection path. Bonjour does not enumerate peers across Tailscale, so use a QR code, link or address there.
 
-## 설치 파일과 시작하기
+## Packages and getting started
 
-현재는 소스를 공개한 개발 프리뷰이며, GitHub Releases에 설치 파일을 게시하지 않았습니다. 소스에서 빌드하거나 저장소를 포크하고 Actions를 활성화한 뒤 **Actions → Build install packages → Run workflow**로 프리뷰 패키지 빌드를 요청할 수 있습니다. 수동 실행에는 해당 저장소의 [쓰기 권한](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)이 필요합니다.
+This development preview is currently published as source only; installers have not been published to GitHub Releases. Build from source, or fork the repository, enable Actions in your fork and use **Actions → Build install packages → Run workflow** to request a preview build. Manual workflow runs require [write access to that repository](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
 
-[워크플로 소스](.github/workflows/packages.yml)와 [패키징 안내](docs/RELEASING.md)를 확인하세요. 아티팩트는 성공한 빌드 실행 후 생성되며 [다운로드에는 GitHub 로그인](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)이 필요합니다. 새 공개 저장소의 GitHub-hosted 빌드 성공은 아직 검증하지 않았습니다.
+See the [workflow](.github/workflows/packages.yml) and [packaging guide](docs/RELEASING.md). Artifacts are created after a successful build, and [downloading them requires a GitHub login](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts). GitHub-hosted builds in the new public repository have not yet been validated.
 
-패키지를 준비했다면 다음 순서로 연결합니다. **화면 연결에는 SSH 설정이 필요 없습니다.**
+Once you have packages, follow the steps below. **Screen access does not require SSH setup.**
 
-### Mac에서 Windows 열기
+### Open Windows from Mac
 
-1. Windows quick-setup EXE를 일반 사용자로 열고 **이 Windows 공유**를 선택합니다. 안내에 따라 Sunshine을 설치합니다.
-2. Sunshine 관리자 계정을 만들고, **Configuration → Network**의 LAN/WAN 암호화를 모두 **Mandatory**로 저장합니다. Sunshine 앱 목록에 Desktop이 있는지 확인합니다.
-3. Mac에 DeskBridge를 설치하고 **Windows 화면**에서 PC를 선택합니다. 목록에 없으면 Windows 도우미의 QR·연결 링크를 가져옵니다.
-4. Mac에 표시된 PIN을 Windows의 Sunshine PIN 페이지에서 승인한 뒤 **Windows 열기**를 누릅니다.
+1. Run the Windows quick-setup EXE as a regular user and choose **이 Windows 공유** (share this Windows PC). Follow the Sunshine installation steps.
+2. Create the Sunshine administrator account. Set both LAN and WAN encryption to **Mandatory** under **Configuration → Network**, and check that a Desktop app is available.
+3. Install DeskBridge on your Mac. Choose the PC under **Windows 화면** (Windows desktop), or import the Windows helper's QR/link if discovery finds nothing.
+4. Approve the PIN shown on the Mac in Sunshine's PIN page on Windows, then choose **Windows 열기** (open Windows).
 
-[자세한 설치 순서](INSTALLATION.md#mac에서-windows-열기) · [Windows 호스트·파일 설정](host/windows/README.md)
+[Detailed installation](INSTALLATION.md#mac에서-windows-열기) · [Windows host and file setup](host/windows/README.md)
 
-### Windows에서 Mac 열기
+### Open Mac from Windows
 
-Mac의 **이 Mac 공유**에서 공식 Sunshine을 준비하고, 최초 웹 관리자 계정을 입력한 뒤 공유를 시작합니다. 실제 macOS 권한 요청에 표시된 앱의 화면 및 시스템 오디오 기록·손쉬운 사용 권한을 승인합니다. Windows EXE에서는 **Mac 열기**를 선택해 QR·링크·검색으로 주소를 고릅니다. Windows Moonlight 창에 표시된 PIN을 Mac의 Sunshine PIN 페이지에서 승인합니다.
+Use **이 Mac 공유** (share this Mac) to prepare the official Sunshine app, enter the initial web administrator credentials, and start sharing. Grant Screen & System Audio Recording and Accessibility to the application named in the actual macOS permission request. On Windows, choose **Mac 열기** (open Mac) and select an address through QR/link/discovery. Approve the PIN shown in the Windows Moonlight window on the Mac Sunshine PIN page.
 
-[Mac 공유 안내](host/macos/README.md) · [Windows 클라이언트 안내](client/windows/README.ko.md)
+[Mac sharing guide](host/macos/README.md) · [Windows client guide](client/windows/README.ko.md)
 
-### Linux 화면 열기
+### Open Linux from Mac or Windows
 
-Ubuntu에서 Linux용 `.deb`를 설치하고 **DeskBridge Linux Host**를 엽니다. 공식 Sunshine 설치 → 최초 웹 관리자 계정 입력 → 공유 시작 순서로 준비합니다. Mac의 **Linux 화면** 또는 Windows의 **Linux 열기**에서 주소를 선택하고 PIN 연결을 시작하세요. 클라이언트에 표시된 PIN을 Linux의 Sunshine PIN 페이지에서 승인합니다.
+Install the Linux `.deb` on Ubuntu and open **DeskBridge Linux Host**. Install official Sunshine, enter the initial web administrator credentials and start sharing. Select an address and start PIN pairing through **Linux 화면** (Linux desktop) on Mac or **Linux 열기** (open Linux) on Windows. Approve the client's PIN on the Linux Sunshine PIN page.
 
-[Ubuntu 설치·권한·방화벽 안내](host/linux/README.md)
+[Ubuntu installation, permissions and firewall](host/linux/README.md)
 
-## 파일 전송은 별도로 설정합니다
+## File transfer uses a separate connection
 
-파일 클라이언트는 Mac에만 있습니다. Mac에서 Windows 공유 폴더에 접근하는 OpenSSH/SFTP 연결은 Sunshine 화면 연결과 별개입니다. Windows의 전용 일반 사용자·공유 폴더와 Mac의 SSH 키를 준비하고, Windows에서 확인한 SSH 호스트 키를 Mac에 등록합니다. 화면 페어링만으로 파일 접근 권한이 생기지 않습니다.
+The file client is available only on Mac. It accesses the Windows share over OpenSSH/SFTP independently of Sunshine. Set up the dedicated standard Windows user and shared folder, select an SSH key on the Mac, and register the Windows SSH host key. Screen pairing grants no file-transfer access.
 
-폴더 재귀 전송, 이어받기, 자동 동기화, 원격 삭제는 지원하지 않습니다. 새로 생성하는 Mac 전용 개인 키는 암호 없는 사용자 전용 파일이므로 해당 Mac 계정과 디스크를 보호해야 합니다. [상세 설정과 제한](host/windows/README.md)을 먼저 확인하세요.
+Recursive folders, resume, automatic synchronization and remote deletion are not supported. Newly generated dedicated Mac keys are unencrypted owner-only files; protect the Mac account and disk. Read the [file setup and limitations](host/windows/README.md) first.
 
-## 보안과 네트워크
+## Security and networking
 
-- 선택한 사설 IPv4 주소를 사용합니다. 공개 IP·DNS 호스트 이름·IPv6 연결은 지원하지 않습니다.
-- 화면 전송 암호화는 필수입니다. Mac 클라이언트는 호스트 인증서를 고정하며, Windows 클라이언트는 별도 Moonlight 프로필에서 페어링과 인증서를 관리합니다. 두 클라이언트의 보안 강화 범위는 같지 않습니다.
-- Mac·Linux 공유는 포트를 열기 전에 전용 웹 관리자 계정을 준비합니다. 기존 유효한 계정·인증서를 자동으로 초기화하지 않습니다.
-- 화면 공유는 로그인한 계정의 원격 제어 권한을 줍니다. SFTP 공유 폴더의 제한은 화면 공유에 적용되지 않습니다.
-- 방화벽·라우터를 자동 설정하지 않습니다. 신뢰하는 LAN/Tailscale에서 사용하고 인터넷 포트 포워딩을 설정하지 마세요.
+- Connections use selected private IPv4 addresses. Public IPs, DNS hostnames and IPv6 are not supported.
+- Screen encryption is mandatory. The Mac client pins the host certificate; the Windows client manages pairing and certificates in a dedicated Moonlight profile. The two clients are hardened differently.
+- Mac and Linux set up the Sunshine web administrator credentials you enter before opening the host service. Valid existing accounts and certificates are not automatically reset.
+- Screen sharing grants remote control of the logged-in account. SFTP folder restrictions do not constrain desktop access.
+- DeskBridge does not automatically configure your firewall or router. Use a trusted LAN/Tailscale network and do not forward these ports to the internet.
 
-Sunshine과 Windows용 Moonlight는 최초 사용자 요청 시 공식 배포처에서 별도로 받으며, 고정 크기·해시를 확인합니다. 최초 다운로드에는 인터넷 연결이 필요합니다. 수정하지 않은 Moonlight가 호환성·게임패드 목록·업데이트 정보를 조회할 수도 있습니다. 자동 클립보드 동기화는 추가하지 않습니다. 프로토콜의 한계와 기기별 검증 범위는 [SECURITY.md](SECURITY.md)에 정리합니다.
+Official Sunshine and Windows Moonlight packages are downloaded separately on explicit user action, with pinned size/hash checks. The initial download requires internet access. Unmodified Moonlight may also request compatibility, controller and update information. DeskBridge adds no automatic clipboard synchronization. See [SECURITY.md](SECURITY.md) for protocol limits and validation scope.
 
-## 소스에서 빌드하기
+## Build from source
 
 ### Mac
 
-검증한 빌드 환경은 Apple Silicon Mac, macOS 26 이상, Xcode 27 / Swift 6.4와 Python 3입니다. 엔진 소스는 저장소의 `Vendor`에 포함됩니다.
+The validated toolchain is an Apple Silicon Mac with macOS 26 or later, Xcode 27 / Swift 6.4 and Python 3. Engine sources are vendored in this repository.
 
 ```sh
 python3 scripts/build.py
 ```
 
-최적화 빌드와 오프라인 합성 검사를 수행하고 `dist/DeskBridge.app`을 만듭니다. 실제 원격 화면이나 앱 GUI를 자동으로 열지 않습니다.
+This performs an optimized build and offline synthetic checks, producing `dist/DeskBridge.app`. It does not automatically open the app GUI or a real remote desktop.
 
-### Linux 호스트
+### Linux host
 
 ```sh
 python3 scripts/build_linux_host.py --output build/linux/DeskBridge-Linux.deb
 ```
 
-패키지는 Ubuntu 24.04 LTS amd64용입니다. 설치 의존성과 Linux 전용 검사 방법은 [Linux 안내](host/linux/README.md), [워크플로](.github/workflows/packages.yml)를 확인하세요.
+The package targets Ubuntu 24.04 LTS amd64. See the [Linux guide](host/linux/README.md) and [workflow](.github/workflows/packages.yml) for dependencies and Linux-only checks.
 
-Windows 빌드에는 별도 네이티브 컴파일러와 .NET 도구가 필요합니다. [빌드·서명·대응 소스 안내](docs/RELEASING.md)에 로컬 빌드와 CI 경로를 정리합니다.
+Windows builds require a separate native compiler and .NET tools. The [packaging guide](docs/RELEASING.md) covers local builds, CI, signing and corresponding source.
 
-## 참여와 라이선스
+## Contribute and license
 
-버그 제보에는 OS·앱 버전·연결 방향·재현 순서를 적어 주세요. PIN, 비밀번호, 개인 키, 실제 파일·화면, 원본 서비스 로그는 공개 이슈에 올리지 마세요. 민감한 보안 문제는 [보안 안내](SECURITY.md)를 먼저 확인하세요.
+For bugs, include your OS, app version, connection direction and reproduction steps. Do not post PINs, passwords, private keys, real files/desktops or raw service logs in public issues. Read the [security guidance](SECURITY.md) before reporting sensitive issues.
 
-DeskBridge는 **GPL-3.0-only**입니다. 실행 파일을 배포할 때는 GPL 조건과 원본 고지를 유지하고 대응 소스를 제공해야 합니다.
+DeskBridge is **GPL-3.0-only**. Modifications and redistribution must preserve the applicable GPL terms and upstream notices and provide corresponding source for distributed executables.
 
-Mac 엔진은 [Glimmer](https://github.com/Se7enbrc/glimmer)를 기반으로 하며, Sunshine과 Windows용 Moonlight는 별도 공식 패키지를 사용합니다. [라이선스](LICENSE) · [Glimmer 기여자](Vendor/Glimmer/CREDITS.md) · [upstream 변경](docs/UPSTREAM_CHANGES.md) · [QR 디코더·고지](Vendor/ZXingNet/README.md)
+The Mac engine builds on [Glimmer](https://github.com/Se7enbrc/glimmer); Sunshine and Windows Moonlight are separate official packages. [License](LICENSE) · [Glimmer credits](Vendor/Glimmer/CREDITS.md) · [Upstream changes](docs/UPSTREAM_CHANGES.md) · [QR decoder and notices](Vendor/ZXingNet/README.md)
