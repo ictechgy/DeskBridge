@@ -426,14 +426,17 @@ namespace Knot.Headless
         private static string[] Ancestors(uint child)
         {
             List<string> result = new List<string>();
-            HashSet<uint> visited = new HashSet<uint>();
+            // The protected PowerShell compiler references System.dll/mscorlib only.
+            // This walk is bounded to 64 ancestors, so a small list avoids a System.Core dependency.
+            List<uint> visited = new List<uint>();
             for (int depth = 0; depth < 64; depth++)
             {
                 uint parent;
                 uint status = Api.CM_Get_Parent(out parent, child, 0);
                 if (status == 13) return result.ToArray(); // CR_NO_SUCH_DEVNODE: reached root/non-present boundary.
                 if (status != 0) throw new InvalidOperationException("Reading PnP ancestry failed: " + status.ToString());
-                if (!visited.Add(parent)) throw new InvalidDataException("Cyclic PnP ancestry.");
+                if (visited.Contains(parent)) throw new InvalidDataException("Cyclic PnP ancestry.");
+                visited.Add(parent);
                 StringBuilder id = new StringBuilder(Policy.MaxChars + 1);
                 status = Api.CM_Get_Device_IDW(parent, id, (uint)id.Capacity, 0);
                 if (status != 0) throw new InvalidOperationException("Reading a PnP ancestor ID failed: " + status.ToString());

@@ -15,8 +15,13 @@ if ($compiler -and (Test-Path -LiteralPath $compiler -PathType Leaf)) {
     [IO.Directory]::CreateDirectory($directory) | Out-Null
     try {
         $executable=Join-Path $directory 'SyntheticNativeChecks.exe'
-        & $compiler /nologo /target:exe /platform:x64 /langversion:5 /warnaserror+ "/out:$executable" $source $checks
+        # Match the protected CodeDOM helper's explicit System.dll + implicit mscorlib.
+        # /noconfig prevents csc.rsp from masking missing production references.
+        & $compiler /nologo /noconfig /reference:System.dll /target:exe /platform:x64 /langversion:5 /warnaserror+ "/out:$executable" $source $checks
         if ($LASTEXITCODE -ne 0) { throw 'Actual headless native adapter failed Framework C# 5 compilation.' }
+        # Compile through the actual non-elevated UI module too, without invoking any native API.
+        Import-Module (Join-Path $repository 'host/windows/HeadlessSetup.psm1') -Force
+        Initialize-KnotHeadlessNative
         $output=@(& $executable)
         if ($LASTEXITCODE -ne 0) { throw 'Headless native synthetic checks failed.' }
         if ($output.Count -eq 0) { throw 'Headless native fixture returned no result.' }

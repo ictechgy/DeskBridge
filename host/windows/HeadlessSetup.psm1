@@ -155,13 +155,18 @@ function New-KnotJournal([object] $Pins) {
     $settings=[IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'Knot-vdd_settings.xml'))
     if ((Get-KnotHash $settings) -cne $Pins.Dependency.settingsSha256) { throw 'The fixed virtual display settings failed verification.' }
     $files += [pscustomobject]@{name='vdd_settings.xml';bytes=$settings.Length;sha256=$Pins.Dependency.settingsSha256}
-    return [pscustomobject]@{schema=1;owner='Knot';deploymentId=$id;instanceId=('ROOT\KNOTVDD\'+$id);status='Prepared';rebootRequired=$false;removalPending=$false;directory=(Get-KnotDirectory);registryPath=$script:RegistryPath;archiveSha256=$Pins.Dependency.sha256;driverVersion=$Pins.Dependency.driverVersion;catalogSignerCertificateSha256=$Pins.Dependency.catalogSignerCertificateSha256;files=$files}
+    return [pscustomobject]@{schema=2;owner='Knot';deploymentId=$id;instanceId=('ROOT\KNOTVDD\'+$id);status='Prepared';rebootRequired=$false;removalPending=$false;removalPhase='None';removalBootId='';generation=1;previousRecordSha256='';directory=(Get-KnotDirectory);registryPath=$script:RegistryPath;archiveSha256=$Pins.Dependency.sha256;driverVersion=$Pins.Dependency.driverVersion;catalogSignerCertificateSha256=$Pins.Dependency.catalogSignerCertificateSha256;files=$files}
 }
 function Assert-KnotJournal([object] $Journal,[object] $Pins) {
-    $properties=@('schema','owner','deploymentId','instanceId','status','rebootRequired','removalPending','directory','registryPath','archiveSha256','driverVersion','catalogSignerCertificateSha256','files')
+    $properties=@('schema','owner','deploymentId','instanceId','status','rebootRequired','removalPending','removalPhase','removalBootId','generation','previousRecordSha256','directory','registryPath','archiveSha256','driverVersion','catalogSignerCertificateSha256','files')
     if (@($Journal.PSObject.Properties).Count -ne $properties.Count) { throw 'The virtual display recovery record has unknown fields.' }
     foreach ($property in $properties) { if ($null -eq $Journal.PSObject.Properties[$property]) { throw 'The virtual display recovery record is incomplete.' } }
-    if ($Journal.schema -ne 1 -or $Journal.owner -cne 'Knot' -or $Journal.deploymentId -cnotmatch '^[0-9A-F]{32}$' -or $Journal.instanceId -cne ('ROOT\KNOTVDD\'+$Journal.deploymentId) -or $Journal.status -cnotin @('Prepared','Installed') -or $Journal.rebootRequired -isnot [bool] -or $Journal.removalPending -isnot [bool] -or $Journal.directory -cne (Get-KnotDirectory) -or $Journal.registryPath -cne $script:RegistryPath -or $Journal.archiveSha256 -cne $Pins.Dependency.sha256 -or $Journal.driverVersion -cne $Pins.Dependency.driverVersion -or $Journal.catalogSignerCertificateSha256 -cne $Pins.Dependency.catalogSignerCertificateSha256) { throw 'The virtual display recovery record is not owned by this package.' }
+    if ($Journal.schema -ne 2 -or $Journal.owner -cne 'Knot' -or $Journal.deploymentId -cnotmatch '^[0-9A-F]{32}$' -or $Journal.instanceId -cne ('ROOT\KNOTVDD\'+$Journal.deploymentId) -or $Journal.status -cnotin @('Prepared','Installed') -or $Journal.rebootRequired -isnot [bool] -or $Journal.removalPending -isnot [bool] -or $Journal.directory -cne (Get-KnotDirectory) -or $Journal.registryPath -cne $script:RegistryPath -or $Journal.archiveSha256 -cne $Pins.Dependency.sha256 -or $Journal.driverVersion -cne $Pins.Dependency.driverVersion -or $Journal.catalogSignerCertificateSha256 -cne $Pins.Dependency.catalogSignerCertificateSha256) { throw 'The virtual display recovery record is not owned by this package.' }
+    if (($Journal.generation -isnot [int] -and $Journal.generation -isnot [long]) -or $Journal.generation -lt 1 -or $Journal.generation -gt 1000000 -or $Journal.previousRecordSha256 -isnot [string] -or ($Journal.generation -eq 1 -and $Journal.previousRecordSha256 -cne '') -or ($Journal.generation -gt 1 -and $Journal.previousRecordSha256 -cnotmatch '^[a-f0-9]{64}$')) { throw 'The recovery record sequence is invalid.' }
+    if ($Journal.removalPhase -cnotin @('None','Started','PendingReboot','Ready') -or $Journal.removalBootId -isnot [string]) { throw 'The recovery removal phase is invalid.' }
+    if ($Journal.removalPhase -ceq 'None') {
+        if ($Journal.removalPending -or $Journal.removalBootId -cne '') { throw 'The recovery removal phase is inconsistent.' }
+    } elseif (-not $Journal.removalPending -or -not (Test-KnotBootIdentity $Journal.removalBootId) -or ($Journal.removalPhase -ceq 'Ready' -and $Journal.rebootRequired) -or ($Journal.removalPhase -cne 'Ready' -and -not $Journal.rebootRequired)) { throw 'The recovery removal outcome or boot identity is invalid.' }
     $expected=New-KnotJournal $Pins
     if (@($Journal.files).Count -ne 4) { throw 'The recovery file inventory is invalid.' }
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
@@ -170,37 +175,123 @@ function Assert-KnotJournal([object] $Journal,[object] $Pins) {
         if ($match.Count -ne 1 -or -not $seen.Add([string]$file.name)) { throw 'The recovery file inventory changed.' }
     }
 }
-function Write-KnotJournal([object] $Journal) {
+function Test-KnotBootIdentity([object] $Value) {
+    # Prefix prevents newer ConvertFrom-Json versions coercing an ISO timestamp
+    # into DateTime while Windows PowerShell 5.1 keeps it as a string.
+    if ($Value -isnot [string] -or $Value -cnotmatch '^boot:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$') { return $false }
+    $parsed=[DateTime]::MinValue
+    return [DateTime]::TryParseExact($Value.Substring(5),'O',[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$parsed)
+}
+function Get-KnotBootIdentity {
+    # Elevated operations only. UI state parsing never calls CIM or this function.
+    try {
+        $os=@(Get-CimInstance -ClassName Win32_OperatingSystem -Property LastBootUpTime -OperationTimeoutSec 5 -ErrorAction Stop)
+        if ($os.Count -ne 1 -or $os[0].LastBootUpTime -isnot [DateTime]) { return $null }
+        $value='boot:'+$os[0].LastBootUpTime.ToUniversalTime().ToString('O',[Globalization.CultureInfo]::InvariantCulture)
+        if (Test-KnotBootIdentity $value) { return $value }
+    } catch { return $null }
+    return $null
+}
+function New-KnotJournalFileSystem([switch] $WithoutNative) {
+    $assertFile={ param($path) Assert-KnotFile $path }
+    if ($WithoutNative) { $assertFile={ param($path) Assert-ProtectedFile $path } }
+    return @{
+        AssertDirectory={ param($path) Assert-KnotAncestors $path; Assert-ProtectedDirectory $path }
+        AssertFile=$assertFile
+        Flush={ param($stream) $stream.Flush($true) }
+        Replace={ param($source,$destination) [IO.File]::Replace($source,$destination,[NullString]::Value) }
+        Move={ param($source,$destination) [IO.File]::Move($source,$destination) }
+    }
+}
+function Read-KnotJournalFile([string] $Path,[object] $Pins,[hashtable] $FileSystem) {
+    & $FileSystem.AssertFile $Path
+    if ((Get-Item -LiteralPath $Path).Length -gt 16384) { throw 'The virtual display recovery record is too large.' }
+    $bytes=[IO.File]::ReadAllBytes($Path)
+    $journal=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+    Assert-KnotJournal $journal $Pins
+    return [pscustomobject]@{Journal=$journal;Hash=(Get-KnotHash $bytes)}
+}
+function Assert-KnotJournalSuccessor([object] $Previous,[object] $Next,[string] $PreviousHash) {
+    foreach ($name in @('schema','owner','deploymentId','instanceId','directory','registryPath','archiveSha256','driverVersion','catalogSignerCertificateSha256')) {
+        if ($Previous.$name -cne $Next.$name) { throw 'The interrupted recovery update belongs to a different deployment.' }
+    }
+    if ($Next.generation -ne ($Previous.generation+1) -or $Next.previousRecordSha256 -cne $PreviousHash -or ($Previous.files | ConvertTo-Json -Depth 4 -Compress) -cne ($Next.files | ConvertTo-Json -Depth 4 -Compress)) { throw 'The interrupted recovery update is not the exact successor of the protected record.' }
+    $from=$Previous.removalPhase; $to=$Next.removalPhase
+    $sameBoot=$Previous.removalBootId -ceq $Next.removalBootId
+    $allowed=($from -ceq 'None' -and $to -cin @('None','Started','Ready')) -or
+        ($from -ceq 'Started' -and $sameBoot -and $to -cin @('PendingReboot','Ready')) -or
+        ($from -cin @('Started','PendingReboot') -and -not $sameBoot -and $to -cin @('Started','Ready')) -or
+        ($from -ceq 'Ready' -and $to -ceq 'Started') -or ($from -ceq 'Ready' -and $to -ceq 'Ready' -and $sameBoot)
+    if (-not $allowed) { throw 'The interrupted recovery update has an invalid state transition.' }
+    if ($Previous.status -cne $Next.status -and -not ($Previous.status -ceq 'Prepared' -and $Next.status -ceq 'Installed' -and $from -ceq 'None' -and $to -ceq 'None') -and -not ($Previous.status -ceq 'Installed' -and $Next.status -ceq 'Prepared' -and $from -ceq 'Ready' -and $to -ceq 'Ready')) { throw 'The interrupted recovery update has an invalid installation transition.' }
+}
+function Assert-KnotInitialJournal([object] $Journal) {
+    if ($Journal.generation -ne 1 -or $Journal.previousRecordSha256 -cne '' -or $Journal.status -cne 'Prepared' -or $Journal.removalPhase -cne 'None' -or $Journal.rebootRequired -or $Journal.removalPending) { throw 'An orphan recovery update is not an initial prepared record.' }
+}
+function Write-KnotJournal([object] $Journal,[object] $Pins=$null,[hashtable] $FileSystem=$null) {
+    if (-not $Pins) { $Pins=Read-KnotDependency }
+    if (-not $FileSystem) { $FileSystem=New-KnotJournalFileSystem }
     $path=Join-Path $Journal.directory 'recovery.json'
     $temporary=Join-Path $Journal.directory 'recovery.new'
-    Assert-ProtectedDirectory $Journal.directory
-    if (Test-Path -LiteralPath $temporary) { throw 'An interrupted recovery update requires manual review.' }
-    $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes(($Journal | ConvertTo-Json -Depth 6))
+    & $FileSystem.AssertDirectory $Journal.directory
+    if (Test-Path -LiteralPath $temporary) { throw 'Verify and recover the interrupted journal update before making another change.' }
+    $candidate=$Journal | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    if (Test-Path -LiteralPath $path) {
+        $previous=Read-KnotJournalFile $path $Pins $FileSystem
+        if ($candidate.generation -ne $previous.Journal.generation -or $candidate.previousRecordSha256 -cne $previous.Journal.previousRecordSha256) { throw 'The recovery record changed before this update.' }
+        $candidate.generation=$previous.Journal.generation+1; $candidate.previousRecordSha256=$previous.Hash
+        Assert-KnotJournal $candidate $Pins
+        Assert-KnotJournalSuccessor $previous.Journal $candidate $previous.Hash
+    } else {
+        Assert-KnotJournal $candidate $Pins
+        Assert-KnotInitialJournal $candidate
+        if (@([IO.Directory]::EnumerateFileSystemEntries($Journal.directory)).Count -ne 0) { throw 'An initial recovery record requires the new empty owned directory.' }
+    }
+    $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes(($candidate | ConvertTo-Json -Depth 6))
     $stream=[IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
-    try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-    Assert-KnotFile $temporary
-    if (Test-Path -LiteralPath $path) { Assert-KnotFile $path; [IO.File]::Replace($temporary,$path,[NullString]::Value) }
-    else { [IO.File]::Move($temporary,$path) }
+    try { $stream.Write($bytes,0,$bytes.Length); & $FileSystem.Flush $stream } finally { $stream.Dispose() }
+    $written=Read-KnotJournalFile $temporary $Pins $FileSystem
+    if ($written.Hash -cne (Get-KnotHash $bytes)) { throw 'The interrupted recovery update changed while being written.' }
+    if (Test-Path -LiteralPath $path) { & $FileSystem.AssertFile $path; & $FileSystem.Replace $temporary $path }
+    else { & $FileSystem.Move $temporary $path }
+    $Journal.generation=$candidate.generation; $Journal.previousRecordSha256=$candidate.previousRecordSha256
 }
-function Read-KnotJournal([object] $Pins,[switch] $WithoutNative) {
+function Read-KnotJournal([object] $Pins,[switch] $WithoutNative,[switch] $Recover,[hashtable] $FileSystem=$null) {
+    if ($WithoutNative -and $Recover) { throw 'Read-only journal inspection cannot promote recovery records.' }
+    if (-not $FileSystem) { $FileSystem=New-KnotJournalFileSystem -WithoutNative:$WithoutNative }
     $directory=Get-KnotDirectory
-    Assert-KnotAncestors $directory
-    Assert-ProtectedDirectory $directory
+    & $FileSystem.AssertDirectory $directory
     $path=Join-Path $directory 'recovery.json'
-    if ($WithoutNative) { Assert-ProtectedFile $path } else { Assert-KnotFile $path }
-    if ((Get-Item -LiteralPath $path).Length -gt 16384) { throw 'The virtual display recovery record is too large.' }
-    $journal=[IO.File]::ReadAllText($path) | ConvertFrom-Json
-    Assert-KnotJournal $journal $Pins
-    Assert-KnotOwnedFiles $journal -WithoutNative:$WithoutNative
-    return $journal
+    $temporary=Join-Path $directory 'recovery.new'
+    $previous=$null
+    if (Test-Path -LiteralPath $path) { $previous=Read-KnotJournalFile $path $Pins $FileSystem }
+    if (Test-Path -LiteralPath $temporary) {
+        $pending=Read-KnotJournalFile $temporary $Pins $FileSystem
+        if ($previous) { Assert-KnotJournalSuccessor $previous.Journal $pending.Journal $previous.Hash }
+        else {
+            Assert-KnotInitialJournal $pending.Journal
+            if (@([IO.Directory]::EnumerateFileSystemEntries($directory)).Count -ne 1) { throw 'An orphan initial recovery record has unexpected accompanying resources.' }
+        }
+        Assert-KnotOwnedFiles $pending.Journal -ValidatedPendingJournal -FileSystem $FileSystem
+        if ($Recover) {
+            if ($previous) { & $FileSystem.Replace $temporary $path }
+            else { & $FileSystem.Move $temporary $path }
+        }
+        return $pending.Journal
+    }
+    if (-not $previous) { throw 'No protected virtual display recovery record exists.' }
+    Assert-KnotOwnedFiles $previous.Journal -FileSystem $FileSystem
+    return $previous.Journal
 }
-function Assert-KnotOwnedFiles([object] $Journal,[switch] $WithoutNative) {
+function Assert-KnotOwnedFiles([object] $Journal,[switch] $WithoutNative,[switch] $ValidatedPendingJournal,[hashtable] $FileSystem=$null) {
+    if (-not $FileSystem) { $FileSystem=New-KnotJournalFileSystem -WithoutNative:$WithoutNative }
     foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($Journal.directory)) {
         $name=[IO.Path]::GetFileName($entry)
         if ($name -ceq 'recovery.json') { continue }
+        if ($ValidatedPendingJournal -and $name -ceq 'recovery.new') { continue }
         $expected=@($Journal.files | Where-Object { $_.name -ceq $name })
         if ($expected.Count -ne 1) { throw 'The managed virtual display folder contains unknown files; all content was preserved.' }
-        if ($WithoutNative) { Assert-ProtectedFile $entry } else { Assert-KnotFile $entry }
+        & $FileSystem.AssertFile $entry
         $item=Get-Item -LiteralPath $entry
         if ($item.Length -ne $expected[0].bytes -or (Get-KnotHash ([IO.File]::ReadAllBytes($entry))) -cne $expected[0].sha256) { throw 'The virtual display settings or package changed; all content was preserved.' }
     }
@@ -278,15 +369,31 @@ function Invoke-KnotHeadlessRemoval([object] $Journal,[hashtable] $Operations) {
     # Every deletion below is preceded by complete ownership validation. Failure
     # stops immediately; Finish is the only operation permitted to delete a journal.
     $hasDevice=[bool](& $Operations.Validate $Journal)
-    & $Operations.Begin $Journal
+    $boot=& $Operations.BootIdentity
+    $knownBoot=Test-KnotBootIdentity $boot
+    if ($Journal.removalPhase -cin @('Started','PendingReboot')) {
+        if (-not $knownBoot) { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='BootIdentityUnavailable';InstanceId=$Journal.instanceId} }
+        if ($boot -ceq $Journal.removalBootId) { return [pscustomobject]@{Completed=$false;RebootRequired=$true;Status='RemovalPending';InstanceId=$Journal.instanceId} }
+    }
     if ($hasDevice) {
+        if (-not $knownBoot) { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='BootIdentityUnavailable';InstanceId=$Journal.instanceId} }
+        # This durable unknown-outcome phase precedes the native call. A crash
+        # after removal cannot be mistaken for a completed, non-reboot removal.
+        $Journal.removalPending=$true; $Journal.removalPhase='Started'; $Journal.removalBootId=$boot; $Journal.rebootRequired=$true
+        & $Operations.Save $Journal 'begin'
         $reboot=[bool](& $Operations.RemoveDevice $Journal)
+        $Journal.removalPhase='Ready'; $Journal.rebootRequired=$false
+        if ($reboot) { $Journal.removalPhase='PendingReboot'; $Journal.rebootRequired=$true }
+        & $Operations.Save $Journal 'outcome'
         $remaining=[bool](& $Operations.Remaining $Journal)
         if ($reboot) {
-            & $Operations.Pending $Journal
             return [pscustomobject]@{Completed=$false;RebootRequired=$true;Status='RemovalPending';InstanceId=$Journal.instanceId}
         }
         if ($remaining) { throw 'Windows did not confirm removal of the journaled device; recovery data was retained.' }
+    } elseif ($Journal.removalPhase -cne 'Ready') {
+        if (-not $knownBoot) { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='BootIdentityUnavailable';InstanceId=$Journal.instanceId} }
+        $Journal.removalPending=$true; $Journal.removalPhase='Ready'; $Journal.removalBootId=$boot; $Journal.rebootRequired=$false
+        & $Operations.Save $Journal 'ready'
     }
     & $Operations.RemoveRegistry $Journal
     & $Operations.RemoveFiles $Journal
@@ -295,7 +402,7 @@ function Invoke-KnotHeadlessRemoval([object] $Journal,[hashtable] $Operations) {
 }
 function Remove-KnotOwnedDeployment([object] $Journal,[object] $Pins) {
     # Validate every resource before the first removal. Never sweep devices or the driver store.
-    $current=Read-KnotJournal $Pins
+    $current=Read-KnotJournal $Pins -Recover
     if ($current.deploymentId -cne $Journal.deploymentId) { throw 'The virtual display deployment changed during recovery.' }
     $devices=@([Knot.Headless.Native]::ReadDriverDevices())
     Assert-KnotDevices $devices $current -Installed:($current.status -ceq 'Installed' -and -not $current.removalPending -and $devices.Count -gt 0)
@@ -304,18 +411,18 @@ function Remove-KnotOwnedDeployment([object] $Journal,[object] $Pins) {
         Assert-KnotRegistryParents $base
         $key=$base.OpenSubKey($script:RegistryPath,$false)
         if ($key) { Assert-KnotOwnedRegistry $key $current }
-        elseif ($current.status -ceq 'Installed' -and -not $current.removalPending) { throw 'The installed virtual display registry key is missing.' }
+        elseif ($current.status -ceq 'Installed' -and $current.removalPhase -cne 'Ready') { throw 'The installed virtual display registry key is missing.' }
     } finally { if ($key) { $key.Dispose() }; $base.Dispose() }
     $operations=@{
         Validate={ param($j) return ($devices.Count -gt 0) }
-        Begin={ param($j) $j.removalPending=$true; Write-KnotJournal $j }
+        BootIdentity={ Get-KnotBootIdentity }
+        Save={ param($j,$step) Write-KnotJournal $j }
         RemoveDevice={ param($j) [Knot.Headless.Native]::RemoveDevice($j.instanceId) }
         Remaining={ param($j)
             $remaining=@([Knot.Headless.Native]::ReadDriverDevices())
             Assert-KnotDevices $remaining $j
             return ($remaining.Count -gt 0)
         }
-        Pending={ param($j) $j.rebootRequired=$true; Write-KnotJournal $j }
         RemoveRegistry={ param($j)
             # A foreign device created after initial validation also blocks teardown.
             Assert-KnotDevices @([Knot.Headless.Native]::ReadDriverDevices()) $j
@@ -444,7 +551,7 @@ function Install-KnotVirtualDisplayCore {
         Install={ param($j) [Knot.Headless.Native]::InstallDevice($j.instanceId,(Join-Path $j.directory 'MttVDD.inf')) }
         Verify={ param($j) Assert-KnotDevices @([Knot.Headless.Native]::ReadDriverDevices()) $j -Installed }
         Commit={ param($j,$restart) $j.status='Installed'; $j.rebootRequired=$restart; Write-KnotJournal $j }
-        HasJournal={ param($j) [IO.File]::Exists((Join-Path $j.directory 'recovery.json')) }
+        HasJournal={ param($j) [IO.File]::Exists((Join-Path $j.directory 'recovery.json')) -or [IO.File]::Exists((Join-Path $j.directory 'recovery.new')) }
         Cleanup={ param($j) Remove-KnotOwnedDeployment $j $pins }
     }
     return Invoke-KnotHeadlessTransaction $journal $operations
@@ -456,7 +563,7 @@ function Remove-KnotVirtualDisplayCore {
         return [pscustomobject]@{Completed=$true;RebootRequired=$false;Status='Absent';InstanceId=$null}
     }
     $pins=Read-KnotDependency
-    $journal=Read-KnotJournal $pins
+    $journal=Read-KnotJournal $pins -Recover
     return Remove-KnotOwnedDeployment $journal $pins
 }
 function Install-KnotVirtualDisplay {
@@ -471,7 +578,7 @@ function Get-KnotHeadlessState {
         if (-not (Test-Path -LiteralPath $directory)) { return [pscustomobject]@{Status='Absent';Managed=$false;RebootRequired=$false;InstanceId=$null;Displays=@();Message='No managed virtual display is installed.'} }
         $journal=Read-KnotJournal (Read-KnotDependency) -WithoutNative
         $status=$journal.status
-        if ($journal.removalPending -or $journal.status -ceq 'Prepared') { $status='RecoveryRequired' }
+        if ($journal.removalPending -or $journal.status -ceq 'Prepared' -or [IO.File]::Exists((Join-Path $directory 'recovery.new'))) { $status='RecoveryRequired' }
         return [pscustomobject]@{Status=$status;Managed=$true;RebootRequired=$journal.rebootRequired;InstanceId=$journal.instanceId;Displays=@();Message='Managed state read. A fresh device and display probe is required.'}
     } catch {
         return [pscustomobject]@{Status='Conflict';Managed=$false;RebootRequired=$false;InstanceId=$null;Displays=@();Message='Existing virtual display state requires manual review and was preserved.'}
