@@ -229,6 +229,10 @@ final class EnetControlChannel: @unchecked Sendable {
     /// Confined to `queue`, the receive chain, so no lock.
     var inboundOrder: [UInt8: EnetInboundOrder] = [:]
 
+    /// Authenticated host counters are global across ENet channels. Confined to the
+    /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
+    var inboundReplayWindow = ControlReplayWindow()
+
     /// Duplicate and gap-skip breadcrumbs fire once per session to avoid floods.
     /// Confined to `queue`, so no lock.
     var loggedFirstDuplicateReliable = false
@@ -430,7 +434,7 @@ final class EnetControlChannel: @unchecked Sendable {
     /// ~90s of coverage; any future undispatched type could flood identically.
     /// The totals are surfaced once at teardown by logIgnoredControlTotals().
     var ignoredControlCounts: [UInt16: UInt64] = [:]
-    /// Inbound control payloads that failed authentication (lock-guarded): the
+    /// Inbound control payloads rejected by authentication or replay checks (lock-guarded): the
     /// first is logged, the total once at teardown, so a spoofed flood can't fill the log.
     var rejectedInboundControl: UInt64 = 0
 
@@ -503,7 +507,7 @@ final class EnetControlChannel: @unchecked Sendable {
             return taken
         }
         if rejected > 0 {
-            Diag.notice("ENet rejected \(rejected) unauthenticated inbound control payload(s) this session",
+            Diag.notice("ENet rejected \(rejected) unauthenticated or replayed inbound control payload(s) this session",
                         Self.logCategory)
         }
         guard !counts.isEmpty else { return }

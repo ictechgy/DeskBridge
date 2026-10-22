@@ -14,7 +14,7 @@ from reverse_qr import compile_decoder
 
 ROOT = Path(__file__).resolve().parent.parent
 PAYLOAD_NAMES = (
-    "Setup-DeskBridge.ps1", "Invoke-DeskBridgeSetup.ps1", "SetupContract.psm1",
+    "Setup-DeskBridge.ps1", "Invoke-DeskBridgeSetup.ps1", "SetupContract.psm1", "SetupDownload.psm1",
     "Enable-DeskBridgeSFTP.ps1", "Resume-DeskBridgeSFTP.ps1", "Disable-DeskBridgeSFTP.ps1",
     "SunshineDependency.json", "README.md",
     "ConnectionInvitation.psm1", "Show-ConnectionQR.ps1",

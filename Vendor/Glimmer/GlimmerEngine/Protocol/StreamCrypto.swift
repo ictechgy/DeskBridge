@@ -15,6 +15,8 @@ package enum StreamCryptoError: Error, CustomStringConvertible {
     case runtPacket(Int)
     case lengthMismatch(expected: Int, got: Int)
     case authFailed
+    case replayedCounter
+    case counterExhausted
     case sealFailed(String)
 
     package var description: String {
@@ -24,8 +26,48 @@ package enum StreamCryptoError: Error, CustomStringConvertible {
         case .lengthMismatch(let expected, let got):
             return "encrypted length mismatch (expected \(expected), got \(got))"
         case .authFailed: return "AES-GCM authentication failed"
+        case .replayedCounter: return "control counter repeated or outside the replay window"
+        case .counterExhausted: return "control counter exhausted; a new session key is required"
         case .sealFailed(let reason): return "AES-GCM seal failed: \(reason)"
         }
+    }
+}
+
+/// One host counter space across all ENet channels, owned by the session's receive queue.
+/// The fixed 8 KiB bitmap tolerates 65,535 messages of reordering. Older counters expire
+/// permanently; UInt32 comparison never wraps, because wrapping would reuse a GCM nonce.
+package struct ControlReplayWindow {
+    package static let capacity = 65_536
+    private var highest: UInt32?
+    private var received = [UInt64](repeating: 0, count: capacity / UInt64.bitWidth)
+
+    package init() {}
+
+    fileprivate func mayAccept(_ sequence: UInt32) -> Bool {
+        guard let highest, sequence <= highest else { return true }
+        guard highest - sequence < UInt32(Self.capacity) else { return false }
+        let slot = Int(sequence % UInt32(Self.capacity))
+        return received[slot / UInt64.bitWidth] & (UInt64(1) << (slot % UInt64.bitWidth)) == 0
+    }
+
+    /// Only ControlCrypto.open calls this, after successful authentication.
+    fileprivate mutating func recordAuthenticated(_ sequence: UInt32) {
+        if let highest, sequence > highest {
+            let advance = sequence - highest
+            if advance >= UInt32(Self.capacity) {
+                received = [UInt64](repeating: 0, count: Self.capacity / UInt64.bitWidth)
+            } else {
+                // Clear newly occupied ring slots, including unseen counters between packets.
+                // Work is bounded by capacity, independent of the absolute counter jump.
+                for offset in 1...advance {
+                    let slot = Int((highest + offset) % UInt32(Self.capacity))
+                    received[slot / UInt64.bitWidth] &= ~(UInt64(1) << (slot % UInt64.bitWidth))
+                }
+            }
+        }
+        highest = max(highest ?? sequence, sequence)
+        let slot = Int(sequence % UInt32(Self.capacity))
+        received[slot / UInt64.bitWidth] |= UInt64(1) << (slot % UInt64.bitWidth)
     }
 }
 
@@ -100,8 +142,10 @@ package struct ControlCrypto {
 
     /// Open one inbound control packet (host->client). Returns the decrypted
     /// inner V2 plaintext (type LE + payloadLength LE + payload), or throws.
+    /// The caller retains one replay window across every inbound ENet channel for this
+    /// session. Failed authentication leaves it unchanged; accepted counters never repeat.
     /// Caller validates the leading LE16 == 0x0001 before calling.
-    package func open(_ bytes: [UInt8]) throws -> [UInt8] {
+    package func open(_ bytes: [UInt8], replayWindow: inout ControlReplayWindow) throws -> [UInt8] {
         // Minimum: 8-byte cleartext header + 16-byte tag.
         guard bytes.count >= 24 else { throw StreamCryptoError.runtPacket(bytes.count) }
         let length = Int(bytes[2]) | (Int(bytes[3]) << 8)
@@ -113,6 +157,7 @@ package struct ControlCrypto {
         }
         let seq = UInt32(bytes[4]) | (UInt32(bytes[5]) << 8)
             | (UInt32(bytes[6]) << 16) | (UInt32(bytes[7]) << 24)
+        guard replayWindow.mayAccept(seq) else { throw StreamCryptoError.replayedCounter }
         let tag = Array(bytes[8..<24])
         let ciphertext = Array(bytes[24...])
 
@@ -123,10 +168,13 @@ package struct ControlCrypto {
         } catch {
             throw StreamCryptoError.authFailed
         }
+        let plaintext: [UInt8]
         do {
-            return [UInt8](try AES.GCM.open(box, using: key))
+            plaintext = [UInt8](try AES.GCM.open(box, using: key))
         } catch {
             throw StreamCryptoError.authFailed
         }
+        replayWindow.recordAuthenticated(seq)
+        return plaintext
     }
 }

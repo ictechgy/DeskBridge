@@ -21,3 +21,13 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-control-synthetic-") as fixt
                     str(ENGINE / "Network/Pairing+Crypto.swift"), str(ENGINE / "Network/PairingFailure.swift"),
                     str(ROOT / "Sources/DeskBridgeChecks/ControlHardeningSyntheticChecks.swift"), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
+    replay = temporary / "replay-checks"
+    replay_sources = ["Protocol/StreamCrypto.swift", "Protocol/EnetWire.swift", "Diagnostics/AtomicCounter.swift",
+                      "Network/EnetControlChannel.swift", "Network/EnetControlChannel+Inbound.swift",
+                      "Network/EnetControlChannel+Send.swift", "Network/EnetControlChannel+ControlMessages.swift"]
+    subprocess.run(["/usr/bin/swiftc", "-swift-version", "6", "-package-name", "Glimmer", "-parse-as-library",
+                    "-target", "arm64-apple-macosx26.0", "-D", "DESKBRIDGE_CONTROL_REPLAY_SYNTHETIC_CHECKS",
+                    "-module-cache-path", str(temporary / "module-cache"),
+                    *[str(ENGINE / name) for name in replay_sources],
+                    str(ROOT / "Sources/DeskBridgeChecks/ControlReplaySyntheticChecks.swift"), "-o", str(replay)], check=True)
+    subprocess.run([str(replay)], check=True)

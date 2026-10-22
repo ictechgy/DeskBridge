@@ -55,15 +55,15 @@ namespace DeskBridge.Reverse
                     catch (OperationCanceledException)
                     { cancel.ThrowIfCancellationRequested(); throw new ReverseUserException(ReverseFailure.DownloadDeadline); }
                 }
-                using (var input = new FileStream(archive, FileMode.Open, FileAccess.Read, FileShare.Read))
-                    if (input.Length != EnginePin.Bytes || Hash(input, cancel) != EnginePin.SHA256.ToLowerInvariant())
-                        throw new ReverseUserException(ReverseFailure.EngineArchive);
+                await VerifyArchiveAsync(() => new FileStream(archive, FileMode.Open, FileAccess.Read, FileShare.Read),
+                    EnginePin.Bytes, EnginePin.SHA256, cancel);
                 string extracted = Path.Combine(stage, "runtime");
                 PrivateFiles.CreatePrivate(extracted); directories.Add(extracted);
                 try { await Task.Run(() => Extract(archive, extracted, files, directories, cancel), cancel); }
                 catch (InvalidDataException) { throw new ReverseUserException(ReverseFailure.EngineArchive); }
                 cancel.ThrowIfCancellationRequested();
-                using (EngineLease ignored = VerifyDirectory(extracted, cancel)) { }
+                using (EngineLease ignored = await Task.Run(() => VerifyDirectory(extracted, cancel), cancel)) { }
+                cancel.ThrowIfCancellationRequested();
                 PrivateFiles.AssertPrivate(Root);
                 Directory.Move(extracted, Runtime); // Same-volume, non-overwrite commit. Never replace a running or unknown install.
                 moved = true;
@@ -82,6 +82,19 @@ namespace DeskBridge.Reverse
 
         internal EngineLease Verify(CancellationToken cancel)
         { PrivateFiles.AssertPrivate(Root); return VerifyDirectory(Runtime, cancel); }
+
+        // The opener runs on the worker too. Synthetic streams can verify scheduling and cancellation
+        // without touching an existing install or requiring the production archive.
+        internal static Task VerifyArchiveAsync(Func<Stream> open, long expectedBytes, string expectedHash, CancellationToken cancel)
+        {
+            return Task.Run(() =>
+            {
+                cancel.ThrowIfCancellationRequested();
+                using (Stream input = open())
+                    if (input.Length != expectedBytes || Hash(input, cancel) != expectedHash.ToLowerInvariant())
+                        throw new ReverseUserException(ReverseFailure.EngineArchive);
+            }, cancel);
+        }
 
         private static EngineLease VerifyDirectory(string directory, CancellationToken cancel)
         {
@@ -286,6 +299,7 @@ namespace DeskBridge.Reverse
 
         internal static string Hash(Stream input, CancellationToken cancel)
         {
+            cancel.ThrowIfCancellationRequested();
             using (SHA256 sha = SHA256.Create())
             {
                 var buffer = new byte[65536]; int count;

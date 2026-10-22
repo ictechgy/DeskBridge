@@ -160,43 +160,111 @@ namespace DeskBridge.Reverse
 
     internal sealed class EngineProcess : IDisposable
     {
-        private Process process;
-        private IntPtr job;
-        private bool disposed;
-        internal async Task<int> RunAsync(EngineLease engine, string profile, string[] arguments, CancellationToken cancel)
+        private readonly object gate = new object();
+        private readonly Func<IntPtr, IntPtr, bool> assign;
+        private readonly Func<IntPtr, uint> resume;
+        private IntPtr process, job;
+        private bool disposed, started;
+
+        internal EngineProcess() : this(AssignProcessToJobObject, ResumeThread) { }
+        // Narrow native-operation seams let offline Windows fixtures force assignment/resume failures.
+        internal EngineProcess(Func<IntPtr, IntPtr, bool> assignProcess, Func<IntPtr, uint> resumePrimary)
+        { assign = assignProcess; resume = resumePrimary; }
+
+        internal Task<int> RunAsync(EngineLease engine, string profile, string[] arguments, CancellationToken cancel)
         {
-            if (process != null || disposed) throw new ReverseUserException(ReverseFailure.EngineBusy);
             PrivateFiles.OrdinaryAncestors(profile);
-            var start = new ProcessStartInfo(engine.Executable, EngineCommands.Join(arguments));
-            start.UseShellExecute = false; start.WorkingDirectory = profile;
-            // Read no stdout, logs, pairing secrets or desktop contents. Keep all upstream UI native.
-            start.CreateNoWindow = false;
-            CleanEnvironment(start, engine.Directory, profile);
-            job = CreateJobObject(IntPtr.Zero, null);
-            if (job == IntPtr.Zero) throw new ReverseUserException(ReverseFailure.EngineStart);
-            var information = new JobInformation(); information.BasicLimitInformation.LimitFlags = 0x2000; // KILL_ON_JOB_CLOSE
-            int size = Marshal.SizeOf(information); IntPtr memory = Marshal.AllocHGlobal(size);
+            return RunExecutableAsync(engine.Executable, engine.Directory, profile, arguments, cancel);
+        }
+
+        // Shared with the inert lifecycle fixture; production callers always supply a verified EngineLease.
+        internal async Task<int> RunExecutableAsync(string executable, string engineDirectory, string profile, string[] arguments, CancellationToken cancel)
+        {
+            var start = new ProcessStartInfo(executable, EngineCommands.Join(arguments));
+            start.WorkingDirectory = profile;
+            CleanEnvironment(start, engineDirectory, profile);
+            IntPtr waitHandle;
+            lock (gate)
+            {
+                if (started || disposed) throw new ReverseUserException(ReverseFailure.EngineBusy);
+                started = true;
+                cancel.ThrowIfCancellationRequested();
+                IntPtr environment = IntPtr.Zero, thread = IntPtr.Zero;
+                try
+                {
+                    job = CreateJobObject(IntPtr.Zero, null);
+                    if (job == IntPtr.Zero) throw new ReverseUserException(ReverseFailure.EngineStart);
+                    var information = new JobInformation();
+                    information.BasicLimitInformation.LimitFlags = 0x2000; // KILL_ON_JOB_CLOSE
+                    if (!SetInformationJobObject(job, 9, ref information, (uint)Marshal.SizeOf(information)))
+                        throw new ReverseUserException(ReverseFailure.EngineStart);
+                    environment = Marshal.StringToHGlobalUni(EnvironmentBlock(start));
+                    var startup = new StartupInformation(); startup.Size = (uint)Marshal.SizeOf(startup);
+                    ProcessInformation child;
+                    // No user-mode engine code runs until containment is established. Never inherit handles.
+                    var command = new StringBuilder(EngineCommands.Quote(executable) + " " + start.Arguments);
+                    if (!CreateProcessW(executable, command, IntPtr.Zero, IntPtr.Zero, false, 0x00000004 | 0x00000400,
+                        environment, profile, ref startup, out child))
+                        throw new ReverseUserException(ReverseFailure.EngineStart);
+                    process = child.Process; thread = child.Thread;
+                    if (!assign(job, process)) throw new ReverseUserException(ReverseFailure.EngineStart);
+                    cancel.ThrowIfCancellationRequested();
+                    if (resume(thread) != 1) throw new ReverseUserException(ReverseFailure.EngineStart);
+                    waitHandle = process;
+                }
+                catch
+                {
+                    StopLocked();
+                    // Reap even an unassigned suspended child before releasing the process handle.
+                    if (process != IntPtr.Zero) { WaitForSingleObject(process, 0xffffffff); CloseHandle(process); process = IntPtr.Zero; }
+                    throw;
+                }
+                finally
+                {
+                    if (thread != IntPtr.Zero) CloseHandle(thread);
+                    if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
+                }
+            }
             try
             {
-                Marshal.StructureToPtr(information, memory, false);
-                if (!SetInformationJobObject(job, 9, memory, (uint)size)) throw new ReverseUserException(ReverseFailure.EngineStart);
+                using (cancel.Register(Stop))
+                {
+                    int exit = await Task.Run(() =>
+                    {
+                        if (WaitForSingleObject(waitHandle, 0xffffffff) != 0) throw new ReverseUserException(ReverseFailure.EngineStart);
+                        uint code;
+                        if (!GetExitCodeProcess(waitHandle, out code)) throw new ReverseUserException(ReverseFailure.EngineStart);
+                        return unchecked((int)code);
+                    });
+                    cancel.ThrowIfCancellationRequested();
+                    return exit;
+                }
             }
-            finally { Marshal.FreeHGlobal(memory); }
-            var completion = new TaskCompletionSource<int>();
-            var child = new Process { StartInfo = start, EnableRaisingEvents = true };
-            process = child;
-            // Dispose can clear the owner's field after a failed job assignment while Exited is queued.
-            child.Exited += delegate { try { completion.TrySetResult(child.ExitCode); } catch (InvalidOperationException) { completion.TrySetResult(-1); } };
-            cancel.ThrowIfCancellationRequested();
-            if (!child.Start()) throw new ReverseUserException(ReverseFailure.EngineStart);
-            if (!AssignProcessToJobObject(job, child.Handle)) { Stop(); throw new ReverseUserException(ReverseFailure.EngineStart); }
-            using (cancel.Register(Stop))
+            finally
             {
-                if (child.HasExited) completion.TrySetResult(child.ExitCode);
-                int exit = await completion.Task;
-                cancel.ThrowIfCancellationRequested();
-                return exit;
+                lock (gate)
+                {
+                    // Process exit also ends remaining descendants; the waiter exclusively owns handle closure.
+                    StopLocked();
+                    if (process != IntPtr.Zero) { CloseHandle(process); process = IntPtr.Zero; }
+                }
             }
+        }
+
+        internal static string EnvironmentBlock(ProcessStartInfo start)
+        {
+            var names = new List<string>();
+            foreach (string name in start.EnvironmentVariables.Keys) names.Add(name);
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            var block = new StringBuilder();
+            foreach (string name in names)
+            {
+                string value = start.EnvironmentVariables[name];
+                if (name.Length == 0 || name.IndexOf('=') >= 0 || name.IndexOf('\0') >= 0 || value == null || value.IndexOf('\0') >= 0)
+                    throw new ArgumentException("Invalid child environment.");
+                block.Append(name).Append('=').Append(value).Append('\0');
+            }
+            return block.Append('\0').ToString();
         }
 
         internal static void CleanEnvironment(ProcessStartInfo start, string engine, string profile)
@@ -224,15 +292,30 @@ namespace DeskBridge.Reverse
 
         internal void Stop()
         {
-            // Terminate only the local child/job created above. No remote quit/cancel request exists here.
-            IntPtr ownedJob = Interlocked.Exchange(ref job, IntPtr.Zero);
-            if (ownedJob != IntPtr.Zero) CloseHandle(ownedJob);
-            Process child = process;
-            try { if (child != null && !child.HasExited) child.Kill(); }
-            catch (InvalidOperationException) { } catch (System.ComponentModel.Win32Exception) { }
+            lock (gate) { StopLocked(); }
         }
-        public void Dispose() { if (disposed) return; disposed = true; Stop(); Process child = Interlocked.Exchange(ref process, null); if (child != null) child.Dispose(); }
+        private void StopLocked()
+        {
+            // Only exact owned handles are used, never a PID or name that could identify another process.
+            if (job != IntPtr.Zero) { CloseHandle(job); job = IntPtr.Zero; }
+            if (process != IntPtr.Zero) TerminateProcess(process, 1);
+        }
+        public void Dispose()
+        {
+            lock (gate) { if (disposed) return; disposed = true; StopLocked(); }
+            // RunExecutableAsync retains its process handle until its native wait finishes.
+        }
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] private struct StartupInformation
+        {
+            internal uint Size;
+            internal string Reserved, Desktop, Title;
+            internal uint X, Y, XSize, YSize, XCountChars, YCountChars, FillAttribute, Flags;
+            internal ushort ShowWindow, ReservedSize;
+            internal IntPtr ReservedData, StandardInput, StandardOutput, StandardError;
+        }
+        [StructLayout(LayoutKind.Sequential)] private struct ProcessInformation
+        { internal IntPtr Process, Thread; internal uint ProcessId, ThreadId; }
         [StructLayout(LayoutKind.Sequential)] private struct BasicLimits
         { internal long PerProcessUserTimeLimit, PerJobUserTimeLimit; internal uint LimitFlags; internal UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; internal uint ActiveProcessLimit; internal UIntPtr Affinity; internal uint PriorityClass, SchedulingClass; }
         [StructLayout(LayoutKind.Sequential)] private struct IoCounters
@@ -240,8 +323,15 @@ namespace DeskBridge.Reverse
         [StructLayout(LayoutKind.Sequential)] private struct JobInformation
         { internal BasicLimits BasicLimitInformation; internal IoCounters IoInfo; internal UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
-        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetInformationJobObject(IntPtr job, int kind, IntPtr information, uint size);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool SetInformationJobObject(IntPtr job, int kind, ref JobInformation information, uint size);
         [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes,
+            [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment, string directory, ref StartupInformation startup, out ProcessInformation information);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern uint ResumeThread(IntPtr thread);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool TerminateProcess(IntPtr process, uint code);
         [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CloseHandle(IntPtr handle);
     }
 }

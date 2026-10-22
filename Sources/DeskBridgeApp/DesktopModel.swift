@@ -77,6 +77,21 @@ final class DesktopModel: ObservableObject {
         return fileActivity?.isConnected(toValidatedAddress: checked) == true
     }
 
+    /// A host name is display metadata, never the identity or certificate pin.
+    /// Bound both work and UTF-8 storage before publishing untrusted server text.
+    static func displayName(_ input: String, fallback: String) -> String {
+        var result = "", bytes = 0
+        for scalar in input.unicodeScalars.prefix(256) {
+            guard scalar.properties.generalCategory != .control,
+                  scalar.properties.generalCategory != .format else { continue }
+            let value = String(scalar)
+            guard bytes + value.utf8.count <= 256 else { break }
+            result.append(value); bytes += value.utf8.count
+        }
+        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
+    }
+
     init(storageDirectory: URL? = nil, identitySuite: String? = nil, platform: HostPlatform = .windows,
          operations: DesktopOperations = .live, streamController: DesktopStreamController? = nil) {
         self.operations = operations
@@ -178,6 +193,7 @@ final class DesktopModel: ObservableObject {
             return "화면 보안 연결을 확인하지 못해 중단했습니다. Sunshine의 암호화 설정을 확인하고 다시 연결하세요."
         default:
             if let local = error as? AppFailure { return local.message }
+            if let storage = error as? SettingsStore.Failure { return storage.localizedDescription }
             if error is EndpointPolicy.Failure { return "Windows의 LAN 또는 Tailscale IPv4 주소를 확인하세요." }
             if error is TargetBinding.Failure { return "대상 PC가 바뀌었습니다. 주소를 확인한 뒤 PC 확인을 다시 선택하세요." }
             return "작업을 완료하지 못했습니다. PC 주소와 Sunshine 실행 상태를 확인한 뒤 다시 시도하세요."
@@ -232,18 +248,19 @@ final class DesktopModel: ObservableObject {
             let host = attempt.address
             // A new LAN/Tailscale address does not authorize replacing this single PC's identity.
             let saved = settings.host
-            var initial = ServerInfo(address: host, uniqueId: saved?.uniqueID ?? "", serverName: saved?.name ?? host)
+            var initial = ServerInfo(address: host, uniqueId: saved?.uniqueID ?? "", serverName: Self.displayName(saved?.name ?? host, fallback: host))
             if let saved {
                 initial.serverCertPEM = saved.certificatePEM
                 initial.httpPort = saved.httpPort; initial.httpsPort = saved.httpsPort
             }
             let client = NetworkClient(server: initial, identity: identity, deviceName: "Knot")
             status = saved == nil ? "PC를 확인하는 중…" : "저장된 인증서로 PC를 확인하는 중…"
-            let verified = try await operations.fetchServerInfo(client, saved?.uniqueID)
+            var verified = try await operations.fetchServerInfo(client, saved?.uniqueID)
             try Task.checkCancellation()
             guard !verified.uniqueId.isEmpty, verified.uniqueId.utf8.count <= 128, !verified.isRealGFE
             else { throw AppFailure("지원되는 Sunshine 호스트를 확인하지 못했습니다.") }
             guard verified.address == host else { throw TargetBinding.Failure.changed }
+            verified.serverName = Self.displayName(verified.serverName, fallback: host)
             try targetBinding.accept(attempt, currentInput: address)
             if settings.address != host || (settings.host != nil && settings.host?.address != host) {
                 settings = try store.updating(settings) {
@@ -274,12 +291,13 @@ final class DesktopModel: ObservableObject {
             let pin = String(format: "%04d", Int.random(in: 0...9999))
             pairingPIN = pin
             status = "\(platformName)의 Sunshine 웹 설정에서 PIN 페이지를 열고 아래 번호를 입력하세요."
-            let result = try await PairingClient(network: network, server: server).pair(pin: pin, expectedUniqueId: server.uniqueId)
+            var result = try await PairingClient(network: network, server: server).pair(pin: pin, expectedUniqueId: server.uniqueId)
             try Task.checkCancellation()
             try targetBinding.require(input: address, expectedAddress: server.address)
             guard let cert = result.serverCertPEM, let fp = CertFingerprint.sha256(forPEM: cert),
                   result.uniqueId == server.uniqueId, result.pairStatus == .paired
             else { throw AppFailure("인증된 페어링 결과를 확인하지 못했습니다.") }
+            result.serverName = Self.displayName(result.serverName, fallback: server.address)
             settings = try store.updating(settings) {
                 $0.host = SavedHost(address: result.address, uniqueID: result.uniqueId, name: result.serverName,
                                    certificatePEM: cert, httpPort: result.httpPort, httpsPort: result.httpsPort)
@@ -305,7 +323,7 @@ final class DesktopModel: ObservableObject {
             // Disconnect leaves the Windows application running. Refresh occupancy
             // through the existing certificate pin before choosing launch vs resume.
             status = "저장된 인증서로 \(platformName) 실행 상태를 확인하는 중…"
-            let refreshed = try await operations.fetchServerInfo(network, server.uniqueId)
+            var refreshed = try await operations.fetchServerInfo(network, server.uniqueId)
             try Task.checkCancellation()
             try targetBinding.require(input: address, expectedAddress: server.address)
             guard refreshed.address == server.address, refreshed.uniqueId == server.uniqueId,
@@ -313,6 +331,7 @@ final class DesktopModel: ObservableObject {
                   refreshed.pairStatus == .paired, !refreshed.isRealGFE else {
                 throw AppFailure("저장된 PC의 연결 권한을 확인하지 못했습니다. PC 확인을 다시 선택하세요.")
             }
+            refreshed.serverName = Self.displayName(refreshed.serverName, fallback: server.address)
             self.server = refreshed
             let width = resolution == 1440 ? 2560 : 1920
             let config = StreamConfiguration(width: width, height: resolution, fps: frameRate,

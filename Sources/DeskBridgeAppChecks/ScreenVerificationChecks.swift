@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
+import GlimmerEngine
 
 @MainActor
 func runScreenVerificationChecks(temporary: URL) async throws -> Int {
@@ -7,6 +8,12 @@ func runScreenVerificationChecks(temporary: URL) async throws -> Int {
     func expect(_ condition: Bool, _ message: String) throws {
         guard condition else { throw ModelCheckFailure(message: message) }; count += 1
     }
+    try expect(DesktopModel.displayName(" 개발 PC ", fallback: "192.168.1.20") == "개발 PC", "ordinary host label changed")
+    try expect(DesktopModel.displayName("\n\u{202e}\u{0000}", fallback: "192.168.1.20") == "192.168.1.20",
+               "empty or control-only host label did not use the selected address")
+    let excessiveName = String(repeating: "합성🖥️", count: 40_000)
+    let boundedName = DesktopModel.displayName(excessiveName, fallback: "192.168.1.20")
+    try expect(!boundedName.isEmpty && boundedName.utf8.count <= 256, "UTF-8 host label limit failed")
     for (connected, bound, candidate, expected): (Bool, String?, String, Bool) in [
         (true, "192.168.1.20", "192.168.1.20", true),
         (true, "192.168.1.20", "192.168.1.21", false),
@@ -21,6 +28,19 @@ func runScreenVerificationChecks(temporary: URL) async throws -> Int {
     }
     let suite = "org.deskbridge.synthetic." + UUID().uuidString
     defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+    let metadataModel = DesktopModel(storageDirectory: temporary.appendingPathComponent("bounded-host-metadata"), identitySuite: suite,
+        operations: DesktopOperations(fetchServerInfo: { _, _ in
+            ServerInfo(address: "192.168.1.20", uniqueId: "synthetic-unchanged-identity", serverName: excessiveName)
+        }, appList: { _ in throw ModelCheckFailure(message: "unpaired metadata fixture requested applications") },
+        openStream: { _, _, _, _, _ in throw ModelCheckFailure(message: "metadata fixture opened a stream") }))
+    metadataModel.address = "192.168.1.20"
+    metadataModel.connect()
+    for _ in 0..<1000 {
+        if !metadataModel.busy { break }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+    try expect(!metadataModel.busy && metadataModel.errorMessage == nil && metadataModel.serverName == boundedName,
+               "actual verification path published unbounded host metadata")
     let desktop = DesktopModel(storageDirectory: temporary.appendingPathComponent("screen-verification"), identitySuite: suite)
     let files = FilesModel(desktop: desktop)
     try expect(desktop.canVerifyCurrentPC, "idle file model blocked screen verification")

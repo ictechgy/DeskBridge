@@ -2,6 +2,7 @@
 """Explicit host actions; tests inject fresh paths and inert children, never run Sunshine."""
 import contextlib
 import ctypes
+import errno
 import fcntl
 import hashlib
 import http.client
@@ -9,8 +10,10 @@ import json
 import os
 from pathlib import Path
 import platform
+import select
 import signal
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -209,7 +212,19 @@ def publish_new(source, destination):
 
 
 class TransferControl:
-    """Interrupt active TLS I/O on cancel/deadline, including slow-drip headers/body."""
+    """Bound DNS/TCP/TLS setup and interrupt active I/O on cancel/deadline."""
+    # getaddrinfo can block in libc/NSS beyond a socket timeout. Isolate it in a
+    # single child which is always reaped before the transfer returns; never
+    # abandon a resolver thread on cancellation. Only numeric addresses cross
+    # this pipe, with fixed output/address bounds and an isolated interpreter.
+    RESOLVER = '''import json,socket,sys
+rows=socket.getaddrinfo(sys.argv[1],int(sys.argv[2]),type=socket.SOCK_STREAM)
+if not 0 < len(rows) <= 64: raise SystemExit(1)
+data=json.dumps([[family,kind,protocol,address] for family,kind,protocol,_,address in rows]).encode('ascii')
+if len(data) > 16384: raise SystemExit(1)
+sys.stdout.buffer.write(data)
+'''
+
     def __init__(self, cancel, seconds=600):
         self.cancel, self.deadline = cancel, time.monotonic() + seconds
         self.done, self.lock, self.sockets = threading.Event(), threading.Lock(), []
@@ -246,13 +261,115 @@ class TransferControl:
     def close(self):
         self.done.set(); self.worker.join(timeout=1)
 
+    def _remaining(self, expires):
+        self.check()
+        remaining = min(expires, self.deadline) - time.monotonic()
+        if remaining <= 0: raise Failure('download')
+        return remaining
+
+    def _resolve(self, host, port, expires):
+        self._remaining(expires)
+        child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', '-B', '-c', self.RESOLVER, host, str(port)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, close_fds=True)
+        try:
+            while True:
+                try:
+                    output, _ = child.communicate(timeout=min(0.05, self._remaining(expires)))
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+            self._remaining(expires)
+            if child.returncode != 0 or len(output) > 16384: raise Failure('download')
+            rows = json.loads(output)
+            if not isinstance(rows, list) or not 0 < len(rows) <= 64: raise Failure('download')
+            for family, kind, protocol, address in rows:
+                if (family not in (socket.AF_INET, socket.AF_INET6) or kind != socket.SOCK_STREAM
+                        or protocol not in (0, socket.IPPROTO_TCP) or len(address) != (2 if family == socket.AF_INET else 4)
+                        or address[1] != port):
+                    raise Failure('download')
+                socket.inet_pton(family, address[0])  # Numeric only; connect must not trigger DNS again.
+            return rows
+        finally:
+            if child.poll() is None:
+                child.kill()
+            try:
+                child.wait(timeout=1)
+            finally:
+                child.stdout.close()
+
+    def _ready(self, sock, expires, writing):
+        while True:
+            wait = min(0.05, self._remaining(expires))
+            try:
+                readable, writable, _ = select.select([] if writing else [sock], [sock] if writing else [], [], wait)
+            except InterruptedError:
+                continue
+            self._remaining(expires)
+            if readable or writable: return
+
+    def _connect_tcp(self, host, port, expires, source_address):
+        for family, kind, protocol, address in self._resolve(host, port, expires):
+            self._remaining(expires)
+            sock = None
+            try:
+                sock = socket.socket(family, kind, protocol)
+                self.attach(sock)
+                sock.setblocking(False)
+                if source_address: sock.bind(source_address)
+                try:
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                except OSError as error:
+                    if error.errno != errno.ENOPROTOOPT: raise
+                status = sock.connect_ex(tuple(address))
+                if status not in (0, errno.EISCONN):
+                    if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
+                        raise OSError(status, os.strerror(status))
+                    self._ready(sock, expires, writing=True)
+                    status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                    if status: raise OSError(status, os.strerror(status))
+                self._remaining(expires)
+                return sock
+            except OSError:
+                if sock is not None: sock.close()
+                self._remaining(expires)
+            except BaseException:
+                if sock is not None: sock.close()
+                raise
+        raise Failure('download')
+
+    def connect(self, host, port, context, timeout, source_address=None):
+        if timeout is socket._GLOBAL_DEFAULT_TIMEOUT: timeout = socket.getdefaulttimeout()
+        expires = self.deadline if timeout is None else min(self.deadline, time.monotonic() + timeout)
+        raw = self._connect_tcp(host, port, expires, source_address)
+        wrapped = None
+        try:
+            # Keep the logical hostname for SNI and certificate verification.
+            # Handshake only after the SSL socket is registered and nonblocking.
+            wrapped = context.wrap_socket(raw, server_hostname=host, do_handshake_on_connect=False)
+            self.attach(wrapped)
+            while True:
+                self._remaining(expires)
+                try:
+                    wrapped.do_handshake()
+                    break
+                except ssl.SSLWantReadError:
+                    self._ready(wrapped, expires, writing=False)
+                except ssl.SSLWantWriteError:
+                    self._ready(wrapped, expires, writing=True)
+            self._remaining(expires)
+            wrapped.settimeout(timeout)
+            return wrapped
+        except BaseException:
+            (wrapped if wrapped is not None else raw).close()
+            raise
+
     def handler(self):
         control = self
         class Connection(http.client.HTTPSConnection):
             def connect(self):
-                control.check()
-                super().connect()
-                control.attach(self.sock)
+                if self._tunnel_host: raise Failure('download')
+                self.sock = control.connect(self.host, self.port, self._context, self.timeout, self.source_address)
         class Handler(urllib.request.HTTPSHandler):
             def https_open(self, request):
                 return self.do_open(Connection, request, context=self._context)

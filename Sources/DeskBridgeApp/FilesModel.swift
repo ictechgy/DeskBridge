@@ -36,7 +36,7 @@ final class FilesModel: ObservableObject {
     private let desktop: DesktopModel
     var desktopForSetup: DesktopModel { desktop }
     static func failureMessage(_ error: any Error) -> String {
-        if error is SFTPError || error is AppFailure || error is EndpointPolicy.Failure || error is BoundedRegularFile.Failure {
+        if error is SFTPError || error is AppFailure || error is EndpointPolicy.Failure || error is BoundedRegularFile.Failure || error is SettingsStore.Failure {
             return error.localizedDescription
         }
         return "파일 작업을 완료하지 못했습니다. 설정 파일과 개인 키의 접근 권한을 확인한 뒤 다시 시도하세요."

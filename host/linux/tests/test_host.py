@@ -1,17 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Fresh synthetic fixtures only. Never starts Sunshine or opens a desktop/port."""
 import io
+import errno
 import json
 import os
 from pathlib import Path
 import signal
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from policy import Failure, address, allowed_download_url, arguments, child_environment, invitation, select_addresses, validate_session, web_credentials, validate_web_credentials
@@ -231,6 +234,153 @@ class HostChecks(unittest.TestCase):
         cancel = threading.Event(); control = TransferControl(cancel, seconds=0.05)
         try: self.assertEqual(self.blocked_transfer(cancel, control), 'download')
         finally: control.close()
+
+    def blocked_establishment(self, stage, deadline):
+        # Exercise the real urllib connection path, replacing every network
+        # operation. DNS is a fresh sleeping child, not a resolver thread.
+        cancel = threading.Event(); control = TransferControl(cancel)
+        phase, timers, children = [], [], []
+        interrupted = threading.Event()
+        def entered():
+            phase.append(stage)
+            if deadline:
+                control.deadline = time.monotonic() + 0.05
+            else:
+                timer = threading.Timer(0.05, cancel.set); timers.append(timer); timer.start()
+        class Socket:
+            closed = False
+            def shutdown(self, _how): interrupted.set()
+            def close(self): self.closed = True
+            def setblocking(self, value): self.blocking = value
+            def setsockopt(self, *_args): pass
+            def connect_ex(self, address):
+                self.address = address
+                if stage == 'tcp': entered(); return errno.EINPROGRESS
+                return 0
+            def do_handshake(self):
+                entered()
+                raise ssl.SSLWantReadError(ssl.SSL_ERROR_WANT_READ, 'synthetic pending handshake')
+        raw, tls = Socket(), Socket()
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443])]
+        def select_ready(readers, writers, exceptional, timeout):
+            self.assertEqual(readers, [tls] if stage == 'tls' else [])
+            self.assertEqual(writers, [raw] if stage == 'tcp' else [])
+            self.assertEqual(exceptional, [])
+            self.assertLessEqual(timeout, 0.05)
+            interrupted.wait(timeout)
+            return [], [], []
+        def wrap(context, sock, *, server_hostname, do_handshake_on_connect):
+            self.assertIs(sock, raw); self.assertFalse(raw.blocking)
+            self.assertEqual(server_hostname, 'github.com')
+            self.assertFalse(do_handshake_on_connect)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(context.check_hostname)
+            return tls
+        popen = subprocess.Popen
+        marker = self.base / ('resolver-entered-' + str(deadline))
+        def spawn(argv, **kwargs):
+            self.assertEqual(argv[:5], ['/usr/bin/python3', '-I', '-S', '-B', '-c'])
+            self.assertEqual(argv[5:], [control.RESOLVER, 'github.com', '443'])
+            self.assertEqual(kwargs['env'], {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+            self.assertTrue(kwargs['close_fds'])
+            code = 'import pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text("ready"); time.sleep(30)'
+            child = popen([sys.executable, '-I', '-S', '-B', '-c', code, str(marker)], **kwargs)
+            children.append(child)
+            for _ in range(100):
+                if marker.exists(): break
+                time.sleep(0.01)
+            self.assertTrue(marker.exists(), 'inert resolver did not enter its blocking operation')
+            entered()
+            return child
+        pin, _ = self.fixture_download(b'fixture!', 8)
+        began = time.monotonic()
+        try:
+            with patch('runtime.subprocess.Popen', side_effect=spawn) as resolver, \
+                 patch('runtime.socket.socket', return_value=raw) as create_socket, \
+                 patch('runtime.select.select', side_effect=select_ready), \
+                 patch('runtime.ssl.SSLContext.wrap_socket', new=wrap):
+                if stage == 'dns':
+                    with self.assertRaises(Failure) as caught:
+                        download(pin, self.store, cancel, control=control)
+                    resolver.assert_called_once(); create_socket.assert_not_called()
+                else:
+                    with patch.object(control, '_resolve', return_value=addresses), self.assertRaises(Failure) as caught:
+                        download(pin, self.store, cancel, control=control)
+                    resolver.assert_not_called(); self.assertTrue(raw.closed if stage == 'tcp' else tls.closed)
+            self.assertLess(time.monotonic() - began, 1)
+            self.assertEqual(phase, [stage])
+            self.assertEqual(caught.exception.key, 'download' if deadline else 'cancel')
+            self.assertFalse(control.worker.is_alive())
+            self.assertEqual(list((self.store.root / 'downloads').iterdir()), [])
+            for child in children:
+                self.assertEqual(child.returncode, -signal.SIGKILL)
+                self.assertTrue(child.stdout.closed)
+        finally:
+            for timer in timers: timer.join()
+            for child in children:
+                if child.poll() is None: child.kill(); child.wait(timeout=1)
+                child.stdout.close()
+            control.close()
+
+    def test_cancel_interrupts_dns_tcp_and_tls_setup(self):
+        for stage in ('dns', 'tcp', 'tls'):
+            with self.subTest(stage=stage): self.blocked_establishment(stage, deadline=False)
+
+    def test_deadline_interrupts_dns_tcp_and_tls_setup(self):
+        for stage in ('dns', 'tcp', 'tls'):
+            with self.subTest(stage=stage): self.blocked_establishment(stage, deadline=True)
+
+    def test_resolver_bounds_and_numeric_addresses_without_network(self):
+        valid = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('192.0.2.1', 443)),
+                 (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('2001:db8::1', 443, 0, 0))]
+        popen = subprocess.Popen
+        for rows, accepted in ((valid, True), ([], False), (valid * 33, False),
+                ([(2, 1, 6, '', ('x' * 17000, 443))], False),
+                ([(2, 1, 6, '', ('must-never-resolve.invalid', 443))], False),
+                ([(2, 1, 6, '', ('192.0.2.1', 80))], False)):
+            with self.subTest(addresses=len(rows), accepted=accepted):
+                control = TransferControl(threading.Event()); children = []
+                def spawn(argv, **kwargs):
+                    # Run the production resolver code with inert getaddrinfo;
+                    # only this test uses the development Python executable.
+                    code = 'import socket,json\nsocket.getaddrinfo=lambda *args,**kwargs: json.loads(' + repr(json.dumps(rows)) + ')\n' + argv[5]
+                    child = popen([sys.executable, '-I', '-S', '-B', '-c', code, *argv[6:]], **kwargs)
+                    children.append(child); return child
+                try:
+                    with patch('runtime.subprocess.Popen', side_effect=spawn):
+                        if accepted:
+                            result = control._resolve('github.com', 443, time.monotonic() + 2)
+                            self.assertEqual([row[3][0] for row in result], ['192.0.2.1', '2001:db8::1'])
+                        else:
+                            self.rejects(lambda: control._resolve('github.com', 443, time.monotonic() + 2))
+                    for child in children:
+                        self.assertIsNotNone(child.returncode); self.assertTrue(child.stdout.closed)
+                finally:
+                    control.close()
+
+    def test_tcp_fallback_and_tls_read_write_handshake_preserve_hostname(self):
+        control = TransferControl(threading.Event())
+        failed = Mock(connect_ex=Mock(return_value=errno.ECONNREFUSED))
+        raw = Mock(connect_ex=Mock(return_value=0))
+        tls = Mock(do_handshake=Mock(side_effect=[ssl.SSLWantWriteError(), ssl.SSLWantReadError(), None]))
+        context = ssl.create_default_context()
+        addresses = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443]),
+                     (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::1', 443, 0, 0])]
+        try:
+            with patch.object(control, '_resolve', return_value=addresses), \
+                 patch('runtime.socket.socket', side_effect=[failed, raw]), \
+                 patch.object(context, 'wrap_socket', return_value=tls) as wrap, \
+                 patch('runtime.select.select', side_effect=lambda r, w, x, t: (r, w, [])) as ready:
+                self.assertIs(control.connect('github.com', 443, context, 20), tls)
+            failed.close.assert_called_once(); raw.setblocking.assert_called_once_with(False)
+            raw.connect_ex.assert_called_once_with(('2001:db8::1', 443, 0, 0))
+            wrap.assert_called_once_with(raw, server_hostname='github.com', do_handshake_on_connect=False)
+            self.assertEqual(ready.call_args_list[0].args[:3], ([], [tls], []))
+            self.assertEqual(ready.call_args_list[1].args[:3], ([tls], [], []))
+            tls.settimeout.assert_called_once_with(20)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED); self.assertTrue(context.check_hostname)
+        finally:
+            tls.close(); control.close()
 
     def test_shutdown_finalizes_after_lost_ownership(self):
         events = []

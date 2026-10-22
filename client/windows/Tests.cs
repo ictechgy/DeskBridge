@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DeskBridge.Reverse
 {
@@ -105,11 +106,60 @@ namespace DeskBridge.Reverse
             Check(manifest.Count == EnginePin.Entries.Length && manifest.ContainsKey("Moonlight.exe") && manifest.ContainsKey("portable.dat"), "complete runtime pin manifest");
             using (var stream = new MemoryStream(Encoding.ASCII.GetBytes("abc")))
                 Check(EngineStore.Hash(stream, CancellationToken.None) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "SHA256 implementation");
+            using (var cancel = new CancellationTokenSource())
+            using (var stream = new MemoryStream())
+            {
+                cancel.Cancel(); bool cancelled = false;
+                try { EngineStore.Hash(stream, cancel.Token); } catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled, "already cancelled verification rejects even an empty stream");
+            }
+            VerifyWorkerScheduling();
+            var environment = new ProcessStartInfo(); environment.EnvironmentVariables.Clear();
+            environment.EnvironmentVariables["z"] = "last"; environment.EnvironmentVariables["A"] = "한글";
+            Check(EngineProcess.EnvironmentBlock(environment) == "A=한글\0z=last\0\0", "native environment is sorted Unicode and double NUL terminated");
+            environment.EnvironmentVariables["z"] = "invalid\0value";
+            Reject(() => EngineProcess.EnvironmentBlock(environment), "native environment cannot inject variables via NUL");
             Console.WriteLine("PASS reverse-client offline checks: " + checks);
             return checks;
         }
 
         private static void Check(bool condition, string label) { checks++; if (!condition) throw new Exception("FAIL: " + label); }
+        private sealed class VerificationStream : MemoryStream
+        {
+            internal readonly ManualResetEventSlim Entered = new ManualResetEventSlim();
+            internal readonly ManualResetEventSlim Release = new ManualResetEventSlim();
+            internal int ReadThread; internal bool Closed;
+            internal VerificationStream() : base(Encoding.ASCII.GetBytes("abc")) { }
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                ReadThread = Thread.CurrentThread.ManagedThreadId; Entered.Set();
+                if (!Release.Wait(5000)) throw new TimeoutException("Synthetic verification wait");
+                return base.Read(buffer, offset, count);
+            }
+            protected override void Dispose(bool disposing) { Closed = true; base.Dispose(disposing); }
+        }
+        private static void VerifyWorkerScheduling()
+        {
+            foreach (bool requestCancel in new[] { false, true })
+            using (var cancel = new CancellationTokenSource())
+            {
+                int caller = Thread.CurrentThread.ManagedThreadId, opener = 0;
+                var stream = new VerificationStream();
+                Task verification = EngineStore.VerifyArchiveAsync(() => { opener = Thread.CurrentThread.ManagedThreadId; return stream; }, 3,
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", cancel.Token);
+                try
+                {
+                    Check(stream.Entered.Wait(5000) && !verification.IsCompleted, "archive verification yields while disk work is pending");
+                    Check(opener != caller && stream.ReadThread != caller, "archive open and hash run off the caller thread");
+                    if (requestCancel) cancel.Cancel();
+                }
+                finally { stream.Release.Set(); }
+                bool cancelled = false;
+                try { verification.GetAwaiter().GetResult(); } catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled == requestCancel && stream.Closed, "verification honors cancellation and closes the archive");
+                stream.Entered.Dispose(); stream.Release.Dispose();
+            }
+        }
         private static void Reject(Action body, string label) { bool rejected = false; try { body(); } catch (FormatException) { rejected = true; } catch (ArgumentException) { rejected = true; } catch (IOException) { rejected = true; } Check(rejected, label); }
         // Independent CRT decoder for one quoted argument; never invokes a process or shell.
         private static string Unquote(string value)

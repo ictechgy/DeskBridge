@@ -6,6 +6,7 @@ param([string] $LauncherPath)
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'SetupContract.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ConnectionInvitation.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'SetupDownload.psm1') -Force
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
@@ -81,7 +82,7 @@ function Set-Busy([bool] $Busy) {
 $null = Add-Text '1   화면 연결 프로그램 설치' 30
 $null = Add-Text 'Sunshine이 Windows 화면을 Mac으로 전달합니다. 이미 설치했다면 다음 단계로 가세요.' 36
 $install = Add-Button 'Sunshine 설치' {
-    Set-Busy $true; $folder=$null; $client=$null; $verifiedDownload=$null
+    Set-Busy $true; $folder=$null; $download=$null; $verifiedDownload=$null
     try {
         $dep=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'SunshineDependency.json') -Raw | ConvertFrom-Json
         if ($dep.url -notmatch '^https://github\.com/LizardByte/Sunshine/releases/download/v[0-9.]+/Sunshine-Windows-AMD64-installer\.msi$' -or $dep.sha256 -notmatch '^[0-9a-f]{64}$' -or ($dep.bytes -isnot [int] -and $dep.bytes -isnot [long]) -or $dep.bytes -lt 1 -or $dep.bytes -gt 268435456) { throw 'Sunshine 설치 파일 정보가 올바르지 않습니다. 새 Knot 배포 파일을 사용하세요.' }
@@ -89,19 +90,15 @@ $install = Add-Button 'Sunshine 설치' {
         $folder=Join-Path ([IO.Path]::GetTempPath()) ('DeskBridgeDownload-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $folder | Out-Null
         $file=Join-Path $folder 'Sunshine.msi'
-        $client=New-Object Net.WebClient
-        $task=$client.DownloadFileTaskAsync([Uri]$dep.url,$file); $timer=[Diagnostics.Stopwatch]::StartNew(); $lastBytes=0L
+        $download=Start-SetupDownload -Url $dep.url -Path $file -ExpectedBytes $dep.bytes
         $downloadCancel.Visible=$true; $downloadCancel.Enabled=$true; $script:cancelDownload=$false
-        while (-not $task.IsCompleted) {
+        while (-not $download.Completion.IsCompleted) {
             [Windows.Forms.Application]::DoEvents()
-            if ($script:cancelDownload) { $client.CancelAsync(); throw (New-Object OperationCanceledException('Sunshine 다운로드를 취소했습니다.')) }
-            $bytes=if (Test-Path -LiteralPath $file) { (Get-Item -LiteralPath $file).Length } else {0L}
-            if ($bytes -ne $lastBytes) { $lastBytes=$bytes; $timer.Restart() }
-            $status.Text='Sunshine 공식 설치 파일을 내려받는 중… ' + [Math]::Min(100,[Math]::Floor(100.0*$bytes/$dep.bytes)) + '%'
-            if ($timer.Elapsed.TotalSeconds -gt 60) { $client.CancelAsync(); throw '60초 동안 다운로드가 진행되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.' }
+            if ($script:cancelDownload) { $download.Cancel(); $downloadCancel.Enabled=$false }
+            $status.Text='Sunshine 공식 설치 파일을 내려받는 중… ' + [Math]::Min(100,[Math]::Floor(100.0*$download.Bytes/$dep.bytes)) + '%'
             Start-Sleep -Milliseconds 80
         }
-        $task.GetAwaiter().GetResult()
+        $download.Completion.GetAwaiter().GetResult()
         $downloadCancel.Visible=$false; $downloadCancel.Enabled=$false
         # Keep this data snapshot locked for the developer-folder fallback too.
         $verifiedDownload=[IO.File]::Open($file,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
@@ -133,15 +130,19 @@ $install = Add-Button 'Sunshine 설치' {
     } catch [OperationCanceledException] { $status.Text='Sunshine 다운로드를 취소했습니다. 필요할 때 다시 시작하세요.' }
     catch { Show-Failure $_ }
     finally {
-        # Recovery must remain available even if an asynchronous download still holds a temporary file.
         $downloadCancel.Visible=$false
-        Set-Busy $false
-        if ($verifiedDownload) { $verifiedDownload.Dispose() }
-        if ($client) { try {$client.CancelAsync(); $client.Dispose()} catch {} }
-        if ($folder -and (Test-Path -LiteralPath $folder)) {
-            try { Remove-Item -LiteralPath $folder -Recurse -Force }
-            catch { $status.Text='임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
-        }
+        try {
+            if ($verifiedDownload) { $verifiedDownload.Dispose() }
+            if ($download) {
+                $download.Cancel()
+                while (-not $download.Completion.IsCompleted) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 80 }
+                $download.Dispose()
+            }
+            if ($folder -and (Test-Path -LiteralPath $folder)) {
+                try { Remove-Item -LiteralPath $folder -Recurse -Force }
+                catch { $status.Text='임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
+            }
+        } finally { Set-Busy $false }
     }
 }
 $downloadCancel=Add-Button '다운로드 취소' { $script:cancelDownload=$true }; $downloadCancel.Visible=$false

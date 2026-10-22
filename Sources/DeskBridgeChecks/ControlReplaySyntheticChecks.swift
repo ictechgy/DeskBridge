@@ -1,0 +1,240 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Production crypto, channel state, inbound dispatch and send files, with inert dependencies.
+// No socket, preferences, diagnostics store, identity, media or UI is initialized.
+#if DESKBRIDGE_CONTROL_REPLAY_SYNTHETIC_CHECKS
+import Foundation
+import CryptoKit
+import Network
+
+private struct ControlReplayFailure: Error { let message: String }
+
+@main
+private struct ControlReplaySyntheticChecks {
+    static let key = [UInt8](0..<16)
+
+    static func main() throws {
+        var checks = 0
+        func require(_ condition: Bool, _ message: String) throws {
+            guard condition else { throw ControlReplayFailure(message: message) }
+            checks += 1
+        }
+        func inject(_ peer: EnetControlChannel, _ envelope: [UInt8], channel: UInt8 = 0,
+                    reliable: UInt16, sentTime: Bool = true) throws {
+            let before = SyntheticControlIO.shared.ackCount
+            peer.onDatagram(datagram(envelope, channel: channel, reliable: reliable, sentTime: sentTime))
+            try require(SyntheticControlIO.shared.ackCount == before + 1,
+                        "every reliable, including rejected replays, must still be ACKed")
+            let high = UInt8(reliable >> 8), low = UInt8(reliable & 0xff)
+            try require(SyntheticControlIO.shared.lastAck == [Enet.cmdAcknowledge, channel, high, low,
+                                                             high, low, 0, sentTime ? 123 : 0],
+                        "ACK must echo the incoming transport labels and timestamp, including retransmissions")
+        }
+        let peer = try makePeer()
+        var delivered: [UInt16] = []
+        peer.onRumble = { _, value, _ in delivered.append(value) }
+        let original = try frame(sequence: 7)
+        try inject(peer, original, reliable: 1)
+        try inject(peer, original, reliable: 1, sentTime: false)
+        try inject(peer, original, reliable: 2)
+        try inject(peer, original, channel: 1, reliable: 1)
+        try require(delivered == [7], "same envelope was dispatched more than once after relabeling")
+        try require(peer.inboundOrder[0]?.next == 2 && peer.inboundOrder[0]?.held.isEmpty == true,
+                    "relabeled replay advanced or occupied the original channel cursor")
+        try require(peer.inboundOrder[1] == nil, "cross-channel replay created ordering state")
+        try inject(peer, try frame(sequence: 8), reliable: 2)
+        try require(delivered == [7, 8] && peer.inboundOrder[0]?.next == 3,
+                    "relabeled replay displaced the legitimate next reliable")
+
+        let reordered = try makePeer()
+        var reorderedDelivery: [UInt16] = []
+        reordered.onRumble = { _, value, _ in reorderedDelivery.append(value) }
+        let held = try frame(sequence: 12)
+        try inject(reordered, held, reliable: 2)
+        try inject(reordered, held, reliable: 3)
+        try inject(reordered, try frame(sequence: 10), channel: 1, reliable: 1)
+        try require(reorderedDelivery == [10] && reordered.inboundOrder[0]?.next == 1
+                    && reordered.inboundOrder[0]?.held.count == 1,
+                    "held replay occupied a second slot or valid cross-channel reordering failed")
+        try inject(reordered, try frame(sequence: 11), reliable: 1)
+        try require(reorderedDelivery == [10, 11, 12] && reordered.inboundOrder[0]?.next == 3,
+                    "valid reordered host counters must drain in reliable order")
+        try inject(reordered, held, channel: 2, reliable: 1)
+        try require(reordered.inboundOrder[2] == nil, "replay of a drained held packet created a new cursor")
+
+        var forged = try frame(sequence: .max)
+        forged[8] ^= 0x80
+        try inject(peer, forged, reliable: 3)
+        var forgedCounter = try frame(sequence: 9)
+        forgedCounter[7] ^= 0x80
+        try inject(peer, forgedCounter, reliable: 3)
+        try require(peer.inboundOrder[0]?.next == 3, "forged high counters moved ENet state")
+        try inject(peer, try frame(sequence: 9), reliable: 3)
+        try require(delivered == [7, 8, 9], "failed authentication poisoned the replay high watermark")
+
+        // Fill and rotate the fixed-size window using real AES-GCM envelopes. A missing
+        // counter on the oldest live edge remains admissible; crossing that edge expires it.
+        let crypto = try ControlCrypto(rikey: key)
+        var window = ControlReplayWindow()
+        let width = UInt32(ControlReplayWindow.capacity)
+        _ = try crypto.open(try frame(sequence: 0), replayWindow: &window)
+        for sequence in 2...width {
+            _ = try crypto.open(try frame(sequence: sequence), replayWindow: &window)
+        }
+        try require(try crypto.open(try frame(sequence: 1), replayWindow: &window).count == 14,
+                    "oldest unseen counter inside the bounded window was lost")
+        for sequence in [UInt32(0), 1, width] {
+            try require(rejects(crypto, try frame(sequence: sequence), window: &window),
+                        "repeated or expired counter was accepted after ring rotation")
+        }
+        _ = try crypto.open(try frame(sequence: width * 3), replayWindow: &window)
+        try require(rejects(crypto, try frame(sequence: width + 1), window: &window),
+                    "a large authenticated jump failed to expire an unseen old counter")
+        _ = try crypto.open(try frame(sequence: width * 3 - 1), replayWindow: &window)
+        try require(rejects(crypto, try frame(sequence: width * 3 - 1), window: &window),
+                    "large jump did not establish duplicate protection for reordered counters")
+
+        var wrapWindow = ControlReplayWindow()
+        _ = try crypto.open(try frame(sequence: .max), replayWindow: &wrapWindow)
+        _ = try crypto.open(try frame(sequence: .max - 1), replayWindow: &wrapWindow)
+        try require(rejects(crypto, try frame(sequence: 0), window: &wrapWindow),
+                    "counter wrap must not reset replay protection")
+        try require(rejects(crypto, try frame(sequence: .max), window: &wrapWindow),
+                    "maximum counter replay must remain rejected")
+        var freshWindow = ControlReplayWindow()
+        try require(try crypto.open(original, replayWindow: &freshWindow).count == 14,
+                    "fresh sessions must own independent receive state")
+
+        // Exercise both production send paths at exhaustion, without creating a connection.
+        for lastReliable in [true, false] {
+            let sender = try makePeer()
+            sender.enetSeq = .max - 1
+            if lastReliable {
+                _ = try sender.sendEncryptedControl(type: 1, payload: [], channel: 0, label: "synthetic")
+            } else {
+                try sender.sendEncryptedControlUnreliable(type: 1, payload: [], channel: 0, label: "synthetic")
+            }
+            let reliableCount = sender.sentReliable.count
+            let unreliableCounter = sender.channelOutgoingUnreliableSeq[0]
+            var failures = 0
+            do { _ = try sender.sendEncryptedControl(type: 1, payload: [], channel: 0, label: "synthetic") }
+            catch StreamCryptoError.counterExhausted { failures += 1 }
+            do { try sender.sendEncryptedControlUnreliable(type: 1, payload: [], channel: 0, label: "synthetic") }
+            catch StreamCryptoError.counterExhausted { failures += 1 }
+            try require(failures == 2 && sender.enetSeq == .max && sender.sentReliable.count == reliableCount
+                        && sender.channelOutgoingUnreliableSeq[0] == unreliableCounter,
+                        "counter exhaustion must fail both send modes without nonce reuse or transport mutation")
+        }
+        print("Control authenticated replay: \(checks) synthetic checks passed; fixed 8 KiB window; no sockets or app state")
+    }
+
+    static func rejects(_ crypto: ControlCrypto, _ envelope: [UInt8], window: inout ControlReplayWindow) -> Bool {
+        do { _ = try crypto.open(envelope, replayWindow: &window); return false }
+        catch StreamCryptoError.replayedCounter { return true }
+        catch { return false }
+    }
+
+    static func makePeer() throws -> EnetControlChannel {
+        EnetControlChannel(host: "192.0.2.1", port: 47999, controlConnectData: 0,
+                           crypto: try ControlCrypto(rikey: key))
+    }
+
+    static func frame(sequence: UInt32) throws -> [UInt8] {
+        var iv = [UInt8](repeating: 0, count: 12)
+        for index in 0..<4 { iv[index] = UInt8(truncatingIfNeeded: sequence >> (index * 8)) }
+        iv[10] = 0x48; iv[11] = 0x43
+        // SS_RUMBLE_DATA: four reserved bytes, controller number, low and high motors.
+        let plaintext: [UInt8] = [0x0b, 0x01, 0x0a, 0x00, 0, 0, 0, 0, 0, 0,
+                                 UInt8(truncatingIfNeeded: sequence), UInt8(truncatingIfNeeded: sequence >> 8), 0, 0]
+        let sealed = try AES.GCM.seal(Data(plaintext), using: SymmetricKey(data: Data(key)),
+                                      nonce: AES.GCM.Nonce(data: Data(iv)))
+        let length = UInt16(20 + plaintext.count)
+        return [1, 0, UInt8(length & 0xff), UInt8(length >> 8)] + Array(iv[0..<4])
+            + Array(sealed.tag) + Array(sealed.ciphertext)
+    }
+
+    static func datagram(_ envelope: [UInt8], channel: UInt8, reliable: UInt16, sentTime: Bool) -> [UInt8] {
+        var bytes = ByteWriter()
+        bytes.u16BE(sentTime ? Enet.headerFlagSentTime : 0)
+        if sentTime { bytes.u16BE(123) }
+        bytes.u8(Enet.cmdSendReliable | Enet.flagAcknowledge)
+        bytes.u8(channel); bytes.u16BE(reliable); bytes.u16BE(UInt16(envelope.count)); bytes.append(envelope)
+        return bytes.bytes
+    }
+}
+
+// Inert dependencies replace unrelated logging, telemetry and handshake, never the
+// production replay, ENet admission, payload dispatch, ACK construction or send code.
+private final class SyntheticControlIO: @unchecked Sendable {
+    static let shared = SyntheticControlIO()
+    private let lock = NSLock()
+    private var acknowledgements = 0
+    private var lastAcknowledgement: [UInt8]?
+    var ackCount: Int { lock.withLock { acknowledgements } }
+    var lastAck: [UInt8]? { lock.withLock { lastAcknowledgement } }
+    func record(_ commands: [[UInt8]]) {
+        lock.withLock {
+            let acks = commands.filter { $0.first == Enet.cmdAcknowledge }
+            acknowledgements += acks.count
+            if let last = acks.last { lastAcknowledgement = last }
+        }
+    }
+}
+extension EnetControlChannel {
+    static let controlTickMs: UInt32 = 20
+    static func msSince(_ before: UInt32, now: UInt32) -> UInt32 { now &- before }
+    func declarePeerDead(code: Int32, reason: DiagMessage) { fatalError("synthetic peer must remain alive") }
+    func handleVerifyConnect(_ reader: inout ByteReader) { fatalError("no handshake in replay fixtures") }
+    func wrapDatagram(commands: [[UInt8]], sentTime: Bool, recordRtt: Bool = true) -> [UInt8] {
+        SyntheticControlIO.shared.record(commands)
+        return commands.flatMap { $0 }
+    }
+}
+struct HdrMetadata: Equatable {
+    let displayPrimariesRX: UInt16, displayPrimariesRY: UInt16, displayPrimariesGX: UInt16, displayPrimariesGY: UInt16
+    let displayPrimariesBX: UInt16, displayPrimariesBY: UInt16, whitePointX: UInt16, whitePointY: UInt16
+    let maxDisplayLuminance: UInt16, minDisplayLuminance: UInt16, maxContentLightLevel: UInt16
+    let maxFrameAverageLightLevel: UInt16, maxFullFrameLuminance: UInt16
+}
+final class InputCallbackProbe { func allowsGate(on queue: DispatchQueue) -> Bool { false } }
+final class ManagedAtomicFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
+}
+struct InputTimingBatch: Sendable {
+    func completed(sent: UInt64, at: UInt64) {}
+    func submitted(at: UInt64) {}
+}
+struct DiagMessage: ExpressibleByStringInterpolation {
+    init(stringLiteral: String) {}
+    init(stringInterpolation: StringInterpolation) {}
+    static func + (lhs: Self, rhs: Self) -> Self { lhs }
+    struct StringInterpolation: StringInterpolationProtocol {
+        enum Privacy { case `private` }
+        init(literalCapacity: Int, interpolationCount: Int) {}
+        mutating func appendLiteral(_ value: String) {}
+        mutating func appendInterpolation<T>(_ value: T) {}
+        mutating func appendInterpolation<T>(_ value: T, privacy: Privacy) {}
+    }
+}
+enum Diag {
+    static func info(_ message: DiagMessage, _ category: String) {}
+    static func notice(_ message: DiagMessage, _ category: String) {}
+    static func error(_ message: DiagMessage, _ category: String) {}
+    static func debug(_ message: DiagMessage, _ category: String) {}
+}
+final class FrameTimingTracker: Sendable { static var shared: FrameTimingTracker? { nil } }
+final class SyntheticControlP2: Sendable { func stampIdrRequest(_ value: UInt64) {} }
+final class SyntheticRumbleActivity: Sendable { func stamp() {} }
+final class TelemetryCounters: Sendable {
+    static let shared = TelemetryCounters()
+    static func monotonicNowNanos() -> UInt64 { 0 }
+    let p2 = SyntheticControlP2()
+    let rumbleActivity = SyntheticRumbleActivity()
+    let rumbleEventTotal = AtomicCounter(), rumbleDroppedInvalidTotal = AtomicCounter()
+    let idrRequestedTotal = AtomicCounter(), rfiTotal = AtomicCounter(), idrRoundTripRequestTotal = AtomicCounter()
+    let enetGapOver20msTotal = AtomicCounter(), enetGapOver50msTotal = AtomicCounter(), enetGapOver100msTotal = AtomicCounter()
+    func noteCtrlIgnored(type: UInt16) {}
+}
+#endif

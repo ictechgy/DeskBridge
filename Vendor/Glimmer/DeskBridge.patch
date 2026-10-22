@@ -280,6 +280,56 @@
 +        let available = raw.count - sep.upperBound
 +        if let length, available < length { throw StreamError.truncatedRead("connection closed before Content-Length satisfied") }
 +        let body = Data(raw[sep.upperBound..<(sep.upperBound + (length ?? available))])
+--- a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
++++ b/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
+@@ -128,2 +128,3 @@
+-    /// Drop duplicates, already ACKed; authenticate everything else before it can
+-    /// hold or move the channel cursor.
++    /// Drop duplicates, already ACKed; authenticate and check the global host replay
++    /// window before any other packet can hold or move a channel cursor. ENet's outer
++    /// channel and reliable sequence remain unauthenticated transport metadata.
+@@ -219 +220 @@
+-    /// Authenticate a control payload (envelope 0x0001), returning its inner
++    /// Authenticate and reject replayed control payloads (envelope 0x0001), returning the inner
+@@ -221 +222 @@
+-    /// Changes no ordering state, so rejected packets cannot move the cursor.
++    /// Commits only the authenticated replay counter; rejected packets cannot move the ENet cursor.
+@@ -233 +234 @@
+-            return try crypto.open(bytes)
++            return try crypto.open(bytes, replayWindow: &inboundReplayWindow)
+@@ -304 +305 @@
+-    /// Count an inbound control payload that failed authentication; only the
++    /// Count an inbound control payload rejected by authentication or replay checks; only the
+--- a/GlimmerEngine/Network/EnetControlChannel+Send.swift
++++ b/GlimmerEngine/Network/EnetControlChannel+Send.swift
+@@ -230 +230,3 @@
+-        let seq = withState {
++        guard let seq = withState({ () -> UInt32? in
++            // Reserve UInt32.max as the exhausted state; never wrap or trap on increment.
++            guard enetSeq < .max else { return nil }
+@@ -234 +236 @@
+-        }
++        }) else { throw StreamCryptoError.counterExhausted }
+@@ -287 +289,2 @@
+-        let (seq, relSeq, unrelSeq): (UInt32, UInt16, UInt16) = withState {
++        guard let (seq, relSeq, unrelSeq) = withState({ () -> (UInt32, UInt16, UInt16)? in
++            guard enetSeq < .max else { return nil }
+@@ -299 +302 @@
+-        }
++        }) else { throw StreamCryptoError.counterExhausted }
+--- a/GlimmerEngine/Network/EnetControlChannel.swift
++++ b/GlimmerEngine/Network/EnetControlChannel.swift
+@@ -230,0 +231,4 @@
++
++    /// Authenticated host counters are global across ENet channels. Confined to the
++    /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
++    var inboundReplayWindow = ControlReplayWindow()
+@@ -433 +437 @@
+-    /// Inbound control payloads that failed authentication (lock-guarded): the
++    /// Inbound control payloads rejected by authentication or replay checks (lock-guarded): the
+@@ -506 +510 @@
+-            Diag.notice("ENet rejected \(rejected) unauthenticated inbound control payload(s) this session",
++            Diag.notice("ENet rejected \(rejected) unauthenticated or replayed inbound control payload(s) this session",
 --- a/GlimmerEngine/Network/InputBatcher.swift
 +++ b/GlimmerEngine/Network/InputBatcher.swift
 @@ -37,0 +38,2 @@
@@ -630,6 +680,69 @@
 +        // DeskBridge requires every channel even when the host makes encryption optional.
 +        result.encryptionFeaturesEnabled = try StreamSecurityPolicy.negotiatedFeatures(
 +            supported: result.encryptionFeaturesSupported)
+--- a/GlimmerEngine/Protocol/StreamCrypto.swift
++++ b/GlimmerEngine/Protocol/StreamCrypto.swift
+@@ -17,0 +18,2 @@
++    case replayedCounter
++    case counterExhausted
+@@ -26,0 +29,2 @@
++        case .replayedCounter: return "control counter repeated or outside the replay window"
++        case .counterExhausted: return "control counter exhausted; a new session key is required"
+@@ -28,0 +33,38 @@
++    }
++}
++
++/// One host counter space across all ENet channels, owned by the session's receive queue.
++/// The fixed 8 KiB bitmap tolerates 65,535 messages of reordering. Older counters expire
++/// permanently; UInt32 comparison never wraps, because wrapping would reuse a GCM nonce.
++package struct ControlReplayWindow {
++    package static let capacity = 65_536
++    private var highest: UInt32?
++    private var received = [UInt64](repeating: 0, count: capacity / UInt64.bitWidth)
++
++    package init() {}
++
++    fileprivate func mayAccept(_ sequence: UInt32) -> Bool {
++        guard let highest, sequence <= highest else { return true }
++        guard highest - sequence < UInt32(Self.capacity) else { return false }
++        let slot = Int(sequence % UInt32(Self.capacity))
++        return received[slot / UInt64.bitWidth] & (UInt64(1) << (slot % UInt64.bitWidth)) == 0
++    }
++
++    /// Only ControlCrypto.open calls this, after successful authentication.
++    fileprivate mutating func recordAuthenticated(_ sequence: UInt32) {
++        if let highest, sequence > highest {
++            let advance = sequence - highest
++            if advance >= UInt32(Self.capacity) {
++                received = [UInt64](repeating: 0, count: Self.capacity / UInt64.bitWidth)
++            } else {
++                // Clear newly occupied ring slots, including unseen counters between packets.
++                // Work is bounded by capacity, independent of the absolute counter jump.
++                for offset in 1...advance {
++                    let slot = Int((highest + offset) % UInt32(Self.capacity))
++                    received[slot / UInt64.bitWidth] &= ~(UInt64(1) << (slot % UInt64.bitWidth))
++                }
++            }
++        }
++        highest = max(highest ?? sequence, sequence)
++        let slot = Int(sequence % UInt32(Self.capacity))
++        received[slot / UInt64.bitWidth] |= UInt64(1) << (slot % UInt64.bitWidth)
+@@ -102,0 +145,2 @@
++    /// The caller retains one replay window across every inbound ENet channel for this
++    /// session. Failed authentication leaves it unchanged; accepted counters never repeat.
+@@ -104 +148 @@
+-    package func open(_ bytes: [UInt8]) throws -> [UInt8] {
++    package func open(_ bytes: [UInt8], replayWindow: inout ControlReplayWindow) throws -> [UInt8] {
+@@ -115,0 +160 @@
++        guard replayWindow.mayAccept(seq) else { throw StreamCryptoError.replayedCounter }
+@@ -125,0 +171 @@
++        let plaintext: [UInt8]
+@@ -127 +173 @@
+-            return [UInt8](try AES.GCM.open(box, using: key))
++            plaintext = [UInt8](try AES.GCM.open(box, using: key))
+@@ -130,0 +177,2 @@
++        replayWindow.recordAuthenticated(seq)
++        return plaintext
 --- /dev/null
 +++ b/GlimmerEngine/Protocol/StreamSecurityPolicy.swift
 @@ -0,0 +1,26 @@

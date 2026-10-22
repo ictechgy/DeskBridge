@@ -227,11 +227,13 @@ extension EnetControlChannel {
         }
         guard payload.count <= Int(Enet.defaultMTU) else { throw EnetError.mtuExceeded }
         let channel = withState { Enet.effectiveChannel(requested, negotiatedCount: negotiatedChannelCount) }
-        let seq = withState {
+        guard let seq = withState({ () -> UInt32? in
+            // Reserve UInt32.max as the exhausted state; never wrap or trap on increment.
+            guard enetSeq < .max else { return nil }
             let current = enetSeq
             enetSeq += 1
             return current
-        }
+        }) else { throw StreamCryptoError.counterExhausted }
         let encrypted: [UInt8]
         do {
             encrypted = try sealControl(crypto, type, payload, seq)
@@ -284,7 +286,8 @@ extension EnetControlChannel {
         defer { outboundLock.unlock() }
         guard payload.count <= Int(Enet.defaultMTU) else { throw EnetError.mtuExceeded }
         let channel = withState { Enet.effectiveChannel(requested, negotiatedCount: negotiatedChannelCount) }
-        let (seq, relSeq, unrelSeq): (UInt32, UInt16, UInt16) = withState {
+        guard let (seq, relSeq, unrelSeq) = withState({ () -> (UInt32, UInt16, UInt16)? in
+            guard enetSeq < .max else { return nil }
             let currentSeq = enetSeq
             enetSeq += 1
             // reliableSequenceNumber = the channel's CURRENT outgoing reliable seq,
@@ -296,7 +299,7 @@ extension EnetControlChannel {
             let nextUnrel = (channelOutgoingUnreliableSeq[channel] ?? 0) &+ 1
             channelOutgoingUnreliableSeq[channel] = nextUnrel
             return (currentSeq, curRel, nextUnrel)
-        }
+        }) else { throw StreamCryptoError.counterExhausted }
 
         let encrypted: [UInt8]
         do {

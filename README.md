@@ -10,7 +10,7 @@ A free, open-source remote desktop app for work: open Windows in a full-screen S
 
 English · [한국어](README.ko.md)
 
-> **Development preview · 0.2.0-preview.14**
+> **Development preview · 0.2.0-preview.15**
 >
 > Real-device installation, video, input, audio and connection performance still need validation. Mac packages are ad-hoc signed and not notarized; Windows executables are unsigned previews. No performance or security advantage over other remote desktop products has been established.
 

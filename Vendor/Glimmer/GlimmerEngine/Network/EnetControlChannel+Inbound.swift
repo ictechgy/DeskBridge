@@ -125,8 +125,9 @@ extension EnetControlChannel {
         return true
     }
 
-    /// Drop duplicates, already ACKed; authenticate everything else before it can
-    /// hold or move the channel cursor.
+    /// Drop duplicates, already ACKed; authenticate and check the global host replay
+    /// window before any other packet can hold or move a channel cursor. ENet's outer
+    /// channel and reliable sequence remain unauthenticated transport metadata.
     private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
         let order = inboundOrder[channelID] ?? EnetInboundOrder()
         if order.isDuplicate(relSeq) {
@@ -216,9 +217,9 @@ extension EnetControlChannel {
     // EnetControlChannel+ControlMessages.swift, split out to keep this file
     // under the length limit.
 
-    /// Authenticate a control payload (envelope 0x0001), returning its inner
+    /// Authenticate and reject replayed control payloads (envelope 0x0001), returning the inner
     /// [type LE][len LE][payload], or nil after counting the rejection.
-    /// Changes no ordering state, so rejected packets cannot move the cursor.
+    /// Commits only the authenticated replay counter; rejected packets cannot move the ENet cursor.
     private func openInboundControl(_ bytes: [UInt8]) -> [UInt8]? {
         guard bytes.count >= 2 else {
             rejectInboundControl("runt, \(bytes.count) bytes")
@@ -230,7 +231,7 @@ extension EnetControlChannel {
             return nil
         }
         do {
-            return try crypto.open(bytes)
+            return try crypto.open(bytes, replayWindow: &inboundReplayWindow)
         } catch {
             rejectInboundControl("decrypt failed: \(error, privacy: .private)")
             return nil
@@ -301,7 +302,7 @@ extension EnetControlChannel {
         }
     }
 
-    /// Count an inbound control payload that failed authentication; only the
+    /// Count an inbound control payload rejected by authentication or replay checks; only the
     /// first per session is logged, the total rides logIgnoredControlTotals.
     private func rejectInboundControl(_ why: DiagMessage) {
         let first = withState { () -> Bool in

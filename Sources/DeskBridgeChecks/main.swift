@@ -34,6 +34,32 @@ struct Checks {
         try expect(try store.load().address == updated.address, "successful settings update persisted")
         try expect(loaded.address == "100.80.10.20", "prior settings value retained")
         try store.save(loaded)
+        let beforeOversize = try Data(contentsOf: temp.appendingPathComponent("settings.json"))
+        var oversized = loaded
+        oversized.host?.name = String(repeating: "합성", count: SettingsStore.maximumBytes)
+        do {
+            try store.save(oversized)
+            throw CheckFailure(message: "oversized settings were committed")
+        } catch SettingsStore.Failure.tooLarge { count += 1 }
+        try expect(try Data(contentsOf: temp.appendingPathComponent("settings.json")) == beforeOversize,
+                   "oversized settings replaced previous trust state")
+        try expect(try store.load().host?.certificatePEM == loaded.host?.certificatePEM,
+                   "oversized settings made previous state unreadable")
+        let absent = temp.appendingPathComponent("rejected-new-store")
+        do { try SettingsStore(directory: absent).save(oversized) }
+        catch SettingsStore.Failure.tooLarge { count += 1 }
+        try expect(!FileManager.default.fileExists(atPath: absent.path), "oversized save touched a new directory")
+        // The encoded limit, including JSON overhead, is inclusive and shared with load.
+        var boundary = SavedSettings()
+        let overhead = try JSONEncoder().encode(boundary).count
+        boundary.sshUsername = String(repeating: "x", count: SettingsStore.maximumBytes - overhead)
+        try expect(try JSONEncoder().encode(boundary).count == SettingsStore.maximumBytes, "settings boundary fixture")
+        try store.save(boundary)
+        try expect(try store.load().sshUsername == boundary.sshUsername, "maximum-size saved settings were unreadable")
+        boundary.sshUsername.append("x")
+        do { try store.save(boundary); throw CheckFailure(message: "one byte beyond settings limit was accepted") }
+        catch SettingsStore.Failure.tooLarge { count += 1 }
+        try store.save(loaded)
         // A real filesystem failure, independent of chmod/root behavior. Only fresh fixtures.
         let blocker = temp.appendingPathComponent("not-a-directory")
         let retainedBytes = Data("synthetic storage blocker".utf8)
