@@ -83,11 +83,11 @@ function Update-HeadlessState {
         }
         $script:canRemove=[bool]$state.Managed
         if ($state.Status -ne 'Installed') {
-            $status.Text='이전 작업의 복구가 필요합니다. Windows를 재시작한 뒤 “Knot 가상 화면 제거”를 실행하고 다시 설치하세요.'; return
+            $status.Text='이전 작업의 복구가 필요합니다. Windows를 재시작한 뒤 “Knot 가상 화면 제거”를 실행하세요. 자동 설치는 계속 보류되며 이 버전에서는 다시 설치할 수 없습니다.'; return
         }
         $devices=@($inventory.Devices | Where-Object { $_.InstanceId -ieq $state.InstanceId })
         $screens=@($inventory.Displays | Where-Object { $_.AdapterInstanceId -ieq $state.InstanceId })
-        if ($devices.Count -ne 1) { $status.Text='설치 기록은 있지만 장치를 확인하지 못했습니다. 재시작 후에도 같으면 Knot 가상 화면을 제거한 뒤 다시 설치하세요.'; return }
+        if ($devices.Count -ne 1) { $status.Text='설치 기록은 있지만 장치를 확인하지 못했습니다. 재시작 후에도 같으면 “Knot 가상 화면 제거”를 실행하세요. 자동 설치는 계속 보류되며 이 버전에서는 다시 설치할 수 없습니다.'; return }
         $active=@($screens | Where-Object { $_.Active })
         if ($active.Count -gt 0) {
             $names=($active | ForEach-Object { 'name: '+$_.Name+', display_name: '+$_.DisplayName }) -join '; '
