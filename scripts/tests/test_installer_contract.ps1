@@ -196,3 +196,7 @@ try {
  Remove-Variable -Name DeskBridgeInstallerContractCheckCount -Scope Global -ErrorAction SilentlyContinue
  if ([IO.Directory]::Exists($fixtureRoot)) {[IO.Directory]::Delete($fixtureRoot,$true)}
 }
+
+# A successful test must not leak the deliberately failing mock native status.
+# Keep this after the try/finally so assertion or cleanup failures still terminate.
+$global:LASTEXITCODE=0
