@@ -1,0 +1,1138 @@
+{
+  "AntiHooking.dll": {
+    "bytes": 62728,
+    "sha256": "4e6bc7eedc7e6947002563357863c63f5b0a11294cea909df41575185148d54c"
+  },
+  "Moonlight.exe": {
+    "bytes": 2860296,
+    "sha256": "2f2536a5670a9c3f2a2a9c5e9fb46dfd684ccd9721be8f2d5ac590b81b7cb0db"
+  },
+  "Qt6Core.dll": {
+    "bytes": 10476304,
+    "sha256": "08aba63c734d66d240f7e3492c7ff5551f67c34799a8fa1f7a7ff577a6f7cec7"
+  },
+  "Qt6Gui.dll": {
+    "bytes": 9686800,
+    "sha256": "56c85756e6fcc9dfdcd271d23ff01faa197262953b55c94786fb10fdc16324ca"
+  },
+  "Qt6Network.dll": {
+    "bytes": 1784072,
+    "sha256": "7996de747dbd807bc75fcd01f65819a3974396b731dc73526e2d3f63b410d90c"
+  },
+  "Qt6OpenGL.dll": {
+    "bytes": 1993480,
+    "sha256": "2b7994d96bb02ded56784e93fcdf30f4400c1c412d4f62b788adf26344c99963"
+  },
+  "Qt6Qml.dll": {
+    "bytes": 5393672,
+    "sha256": "b85aae5cfe2f60621638475a4f84ac63ba8266dbe50b55683d7357cd7d44c4e5"
+  },
+  "Qt6QmlMeta.dll": {
+    "bytes": 162056,
+    "sha256": "4ff6dfc0f06ebfc231e171f09a4a38b7d0e25cecca4d1002a8523176602ac7cc"
+  },
+  "Qt6QmlModels.dll": {
+    "bytes": 1025288,
+    "sha256": "52203f8bcf6e42376ffda9d251016ef1618b3609237736c7a1fdb3251af4df5a"
+  },
+  "Qt6QmlWorkerScript.dll": {
+    "bytes": 83720,
+    "sha256": "aaa16a5f670c18b6091e04d3bdc867e17de60c4816273255cf4e3403a1319825"
+  },
+  "Qt6Quick.dll": {
+    "bytes": 6756104,
+    "sha256": "96f01df8ef5becf59408b0771cc6d55aabf286a15b7a9e2d1c14538e3c4cb7bd"
+  },
+  "Qt6QuickControls2.dll": {
+    "bytes": 106248,
+    "sha256": "2c498b891047932bebfb0df896eecfb01fcf5af8010b6050e45aed27decb5dff"
+  },
+  "Qt6QuickControls2Basic.dll": {
+    "bytes": 2543376,
+    "sha256": "1f6d184e117c39b8bdb51ae97390920e488c1baa63656fe576840d08160c931f"
+  },
+  "Qt6QuickControls2BasicStyleImpl.dll": {
+    "bytes": 107272,
+    "sha256": "0940551ed12f0e4ef74b677f8dbf894fc486c15b24768fff85ac3dfefdc790a9"
+  },
+  "Qt6QuickControls2FluentWinUI3.dll": {
+    "bytes": 3592464,
+    "sha256": "a7b498308d9fe3a775fcd73dc34c6dfdd11284b669c058b32cf321f86e344b0d"
+  },
+  "Qt6QuickControls2Impl.dll": {
+    "bytes": 329488,
+    "sha256": "42d91cd32e413d474c081f4b4acc949f8140a68e8bb9c6a85f9255dfa2387169"
+  },
+  "Qt6QuickControls2Material.dll": {
+    "bytes": 2623752,
+    "sha256": "0dfafa89ef9f57cf7f13a68ce811f8ab2f683a2fd72404b13ff936a337dad0ad"
+  },
+  "Qt6QuickControls2MaterialStyleImpl.dll": {
+    "bytes": 394504,
+    "sha256": "fe89e7964f260d3ca6b7d9418f432b3c12224b3c6d4d49d0fb1cf10ab17119f1"
+  },
+  "Qt6QuickControls2Windows.dll": {
+    "bytes": 960272,
+    "sha256": "24fdb754b9d8047c9b0e624f031c687b918b416413ddd0a4053fed10cea2eff6"
+  },
+  "Qt6QuickEffects.dll": {
+    "bytes": 449296,
+    "sha256": "3dec4a590a697a468ca37021af214c23c0208d8d7440809e79d0f161b23542b0"
+  },
+  "Qt6QuickLayouts.dll": {
+    "bytes": 317712,
+    "sha256": "2d0d2a29c86768b6d89bc109d4d9137a9475fc12caeb0034976dae59d9bc6a70"
+  },
+  "Qt6QuickNativeStyle.dll": {
+    "bytes": 1203984,
+    "sha256": "ce089ea19ac9e5b72724d992c6ca2023f3c616813ca349631152cb47206d13f1"
+  },
+  "Qt6QuickShapes.dll": {
+    "bytes": 352016,
+    "sha256": "12bd16006bcf131a9c710e021eb2d92e8b4c01186485b47a4055c7af5c3b9b23"
+  },
+  "Qt6QuickTemplates2.dll": {
+    "bytes": 2052368,
+    "sha256": "d9b5ab4612c45459cc85d3c4f2b32d106876f107a5ceb490595bf018680a3002"
+  },
+  "Qt6Svg.dll": {
+    "bytes": 611600,
+    "sha256": "17eee25e46a77c5f7245b3dab810f812d511d24e4ac9b76375224f9b6c63406a"
+  },
+  "SDL2.dll": {
+    "bytes": 356112,
+    "sha256": "1df1b9a1e7c13b2429135dbeb9decfa4617cd31a1a674a43dddb8c013ceb211d"
+  },
+  "SDL2_ttf.dll": {
+    "bytes": 793360,
+    "sha256": "7ad48fb63286c16759497449c2b34b99ed522268b0d22ae0c0e361f1e2f820d3"
+  },
+  "SDL3.dll": {
+    "bytes": 3201296,
+    "sha256": "af1671d2a250ebc4606423e34886adbf3e709d7820cf74e3fd43a25273996d87"
+  },
+  "avcodec-63.dll": {
+    "bytes": 5236488,
+    "sha256": "e3cb8b26444f047fa985e14435f6773eec7866ff3e6bdc8a2d52d3d5461e153b"
+  },
+  "avformat-63.dll": {
+    "bytes": 1263368,
+    "sha256": "81d50f8c303edf0074c57d330728650fd818c4ea3ab823bbc2d05b8594c15e19"
+  },
+  "avutil-61.dll": {
+    "bytes": 2419984,
+    "sha256": "b9133c5c5ce01e4e74957dadac5c1788a360d1f2d50025750bcf27b56902b508"
+  },
+  "concrt140.dll": {
+    "bytes": 374200,
+    "sha256": "54716f0738af891f283d213b5c8d11b25896bb8ee3097d301eae718560cf974e"
+  },
+  "dav1d.dll": {
+    "bytes": 1993992,
+    "sha256": "ef776bf1718a8377dfa57e0f26ae545acc709cd4b4e7c8bee9b471bdb075ed88"
+  },
+  "discord-rpc.dll": {
+    "bytes": 72464,
+    "sha256": "d62be22374fb125f52c5d25952a4c926914d3f9e5af4fa6227c2f38c5ee5d54c"
+  },
+  "gamecontrollerdb.txt": {
+    "bytes": 601816,
+    "sha256": "5b5bb6808b3cf14b6fb7d6884dc88f5ea1eebdcbe5c7c03e7f59f2735aa4f617"
+  },
+  "iconengines/qsvgicon.dll": {
+    "bytes": 76048,
+    "sha256": "eb5ffc5d27ae117d1b3fb332e6c1d76467c3c588c3445227e2a39d2aa31464e6"
+  },
+  "imageformats/qgif.dll": {
+    "bytes": 51984,
+    "sha256": "eb1df9313ea7d82f60970b320bed8199a6f14849b67f4d9d9f4d13a3283d7d37"
+  },
+  "imageformats/qico.dll": {
+    "bytes": 50960,
+    "sha256": "c534bfb72ee8b820df8e664f9995cc89391c2dedad0727b98c2f7fc97d3590d2"
+  },
+  "imageformats/qjpeg.dll": {
+    "bytes": 596240,
+    "sha256": "15b2d21e4d88ff366e42bf34bdeae8d99da0726ba2bbf578010111df06e6ed84"
+  },
+  "imageformats/qsvg.dll": {
+    "bytes": 43784,
+    "sha256": "c05757611d8f0061718d00df5fa90c0c4b399fcf0bc59d5ebfc4bf955de4112e"
+  },
+  "libcrypto-3-x64.dll": {
+    "bytes": 6987016,
+    "sha256": "2aa46b55a42278683657ed989cfcb6c91e88c6439eda954e4fc5f11a5d4ab8f0"
+  },
+  "libplacebo-374.dll": {
+    "bytes": 8609032,
+    "sha256": "156c38b556c32962bca7f43c985f4ac4e2e9f588ef93213c463db5762fb4a1a4"
+  },
+  "libssl-3-x64.dll": {
+    "bytes": 1586440,
+    "sha256": "999b56869415f80afacfaebbc854550e658200a2ab7b4554b268de893199d279"
+  },
+  "msvcp140.dll": {
+    "bytes": 643512,
+    "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca"
+  },
+  "msvcp140_1.dll": {
+    "bytes": 35768,
+    "sha256": "206c931bf90fdad8816de3b5e2ef80b2bcaa9406c89ecc05fe6fddffe251e982"
+  },
+  "msvcp140_2.dll": {
+    "bytes": 274872,
+    "sha256": "d50d7883f20d1dc6191768d3746f52dd9cac89c346ffaed5be1f110c2f34a838"
+  },
+  "msvcp140_atomic_wait.dll": {
+    "bytes": 57792,
+    "sha256": "3d0cbfaa1bf3eecf5a3f4491d2960ee803cb994f30292c6adc4a07c498f60e2b"
+  },
+  "msvcp140_codecvt_ids.dll": {
+    "bytes": 31160,
+    "sha256": "8a65c7596ef2e6938731f5a1058e7e40145b6d97967cc649231a076b9a608d78"
+  },
+  "networkinformation/qnetworklistmanager.dll": {
+    "bytes": 82704,
+    "sha256": "8dd60c807a99a7ff1037ccc65db6cfd8a23889e55e4171db921a29da273ae312"
+  },
+  "opus.dll": {
+    "bytes": 497424,
+    "sha256": "2641ba34ec178cfd3c3419e639ba7ab93570830386f86063022af332077a6b2e"
+  },
+  "platforms/qwindows.dll": {
+    "bytes": 1005320,
+    "sha256": "640d4d4c1d0c71cf9ab81312cfa81f5d995f0621bbc16f41ea3c3705e4687629"
+  },
+  "portable.dat": {
+    "bytes": 3,
+    "sha256": "6bdf66b5bf2a44e658bea2ee86695ab150a06e600bf67cd5cce245ad54962c61"
+  },
+  "qml/QML/plugins.qmltypes": {
+    "bytes": 163974,
+    "sha256": "156e5981000f67e9521aa38bc05cc2cc2ff10f7c7205e54907855b94ae0a83c1"
+  },
+  "qml/QML/qmldir": {
+    "bytes": 114,
+    "sha256": "0ba0b60157111b988cc583b73ceb445a2d0c8633179513e284ede7a2794bce70"
+  },
+  "qml/QtQml/Models/modelsplugin.dll": {
+    "bytes": 34576,
+    "sha256": "25305815d3420ac1f7dfdd5ba652ab587aa7026767bc347b1bf627fef0d4bc73"
+  },
+  "qml/QtQml/Models/plugins.qmltypes": {
+    "bytes": 83922,
+    "sha256": "0a5b76dbcc1d431a973e4d7f29b804e237733c9b59c556072df763e9b53b2ac2"
+  },
+  "qml/QtQml/Models/qmldir": {
+    "bytes": 222,
+    "sha256": "313cec98e20382271b7627998f3afba3cbb1c69bc05204728406517000db0247"
+  },
+  "qml/QtQml/WorkerScript/plugins.qmltypes": {
+    "bytes": 1510,
+    "sha256": "701cd44fd43b9bdae92685471d0e8f8cf6d7c743518aaa6fc3e544fb3989807d"
+  },
+  "qml/QtQml/WorkerScript/qmldir": {
+    "bytes": 252,
+    "sha256": "7e930397861106a9a5931f5448f76b3e981c0bc0c150a1e7bc6fbe6a049f9ed8"
+  },
+  "qml/QtQml/WorkerScript/workerscriptplugin.dll": {
+    "bytes": 34568,
+    "sha256": "c9bb56b2ec6a5c2763cf6bace3da429369c48cfe9fd8be4a9d99e5ccbdedafc9"
+  },
+  "qml/QtQml/plugins.qmltypes": {
+    "bytes": 7869,
+    "sha256": "2832f8f726dc5dbb14260f02b07d1d0173c89d7b4b1adc0edb2dfa43aea60520"
+  },
+  "qml/QtQml/qmldir": {
+    "bytes": 253,
+    "sha256": "4487f30737a083fa69c5b9d408fc29856908cb50956a0652db50c47b9683a289"
+  },
+  "qml/QtQml/qmlplugin.dll": {
+    "bytes": 34568,
+    "sha256": "db185e1a53894873a3d51a7b06b938a8b77f7739cfe1fddc9d221fcbc256f2f9"
+  },
+  "qml/QtQuick/Controls/Basic/AbstractButton.qml": {
+    "bytes": 610,
+    "sha256": "5fa041c5807e08d014f6f3b18fe024380a842189b2dac09c45d203bd50c3e314"
+  },
+  "qml/QtQuick/Controls/Basic/Action.qml": {
+    "bytes": 260,
+    "sha256": "051f5d75fa8fe7a8d4666eb812fc5a309421dca12322752fa56025891be0250d"
+  },
+  "qml/QtQuick/Controls/Basic/ActionGroup.qml": {
+    "bytes": 265,
+    "sha256": "bdc70c4a56862fd038161e64950426a68c4015fff0aa89890f3cdc6331723804"
+  },
+  "qml/QtQuick/Controls/Basic/ApplicationWindow.qml": {
+    "bytes": 354,
+    "sha256": "d870991929aaf167dd3b5e016f089c53dfc2685cfe3c22b909854ad3e8eefa7e"
+  },
+  "qml/QtQuick/Controls/Basic/BusyIndicator.qml": {
+    "bytes": 983,
+    "sha256": "b89a77d45505759d9f09936b814942f1b37df9e0d49cd297fc66bb9df28701e4"
+  },
+  "qml/QtQuick/Controls/Basic/Button.qml": {
+    "bytes": 1932,
+    "sha256": "9f5478c372a1d32774592c0af352cdc869f391f2eaa99c6e7f45371ea1031f7b"
+  },
+  "qml/QtQuick/Controls/Basic/ButtonGroup.qml": {
+    "bytes": 265,
+    "sha256": "680d2a00b58cec1c335b44b13be180ebea5050ec34fb2fc0672ffee4227b8ac6"
+  },
+  "qml/QtQuick/Controls/Basic/Calendar.qml": {
+    "bytes": 265,
+    "sha256": "1db0c2e654bfacac2d4fcdd948b2d53a15c457e39a01d230c46869b3013dc307"
+  },
+  "qml/QtQuick/Controls/Basic/CalendarModel.qml": {
+    "bytes": 250,
+    "sha256": "41b803c3d839d84eaf99fed878487ad92f94b7b26d540e278c2c01947b495bd1"
+  },
+  "qml/QtQuick/Controls/Basic/CheckBox.qml": {
+    "bytes": 2733,
+    "sha256": "106b10377034add8426fbf44bbcf3bb62b0c810e95b847319293664de6497b71"
+  },
+  "qml/QtQuick/Controls/Basic/CheckDelegate.qml": {
+    "bytes": 3195,
+    "sha256": "2f4f91291a06007eefef1d3187ae020490ea7b6e3437815a16620142e14c8e2e"
+  },
+  "qml/QtQuick/Controls/Basic/ComboBox.qml": {
+    "bytes": 5574,
+    "sha256": "f6cedc629180fc21d88435abd93d3ae02092c7950c35091d4caac6a61a2de661"
+  },
+  "qml/QtQuick/Controls/Basic/Container.qml": {
+    "bytes": 605,
+    "sha256": "3f5e134b583c74018bb0255c3af9eade635a29b9c5102259850027dd78b523e7"
+  },
+  "qml/QtQuick/Controls/Basic/Control.qml": {
+    "bytes": 603,
+    "sha256": "216dd75b082c6cc4a9c8cffe42132b48a1dc9097488502e5649e3f9579cc974a"
+  },
+  "qml/QtQuick/Controls/Basic/DayOfWeekRow.qml": {
+    "bytes": 1212,
+    "sha256": "efdee120c095e4e8a01f5ec6b0783b9eb821ddb51a91b532dded50ef44e9421d"
+  },
+  "qml/QtQuick/Controls/Basic/DelayButton.qml": {
+    "bytes": 2689,
+    "sha256": "4ef7dfe658ab89dbcc27b72bb4b3f84dfe13b582a4a48aea5961035923a184c8"
+  },
+  "qml/QtQuick/Controls/Basic/Dial.qml": {
+    "bytes": 1977,
+    "sha256": "2e1f851a28e56c442b3ebb30dbfc9f914a0abc61d024f9ccfcb382fca7aa0aff"
+  },
+  "qml/QtQuick/Controls/Basic/Dialog.qml": {
+    "bytes": 1743,
+    "sha256": "8e2416855705be692c39fd4a6d73ae3e07f8f8d98aaf54128eac145b309fe5a1"
+  },
+  "qml/QtQuick/Controls/Basic/DialogButtonBox.qml": {
+    "bytes": 1390,
+    "sha256": "1c7291c96a3d88f990730ea30be7bbd8425b70664e3994b917ce33f6065d6eaa"
+  },
+  "qml/QtQuick/Controls/Basic/DoubleSpinBox.qml": {
+    "bytes": 4270,
+    "sha256": "8d9d7e3a73ae427601a52e225a0d3121bff0ef5b9f884930767ac1555f16019c"
+  },
+  "qml/QtQuick/Controls/Basic/Drawer.qml": {
+    "bytes": 1802,
+    "sha256": "65521c84893a665475f78b9b2fcf6aeb3362fb33625c8f580ab5383fe3219459"
+  },
+  "qml/QtQuick/Controls/Basic/Frame.qml": {
+    "bytes": 989,
+    "sha256": "1a6f7cf46def311d05dd93bb2badf389574e03ba2cdc5b08d165aaffcd5fa6c0"
+  },
+  "qml/QtQuick/Controls/Basic/GroupBox.qml": {
+    "bytes": 1615,
+    "sha256": "2a8b0da4488380b06ee964e45fca7b8d8be3d6dd23c230f71a1c7f8a10c06351"
+  },
+  "qml/QtQuick/Controls/Basic/HorizontalHeaderView.qml": {
+    "bytes": 851,
+    "sha256": "529300dab184b8b597775933d749e973a37377c9e15fe295ea232204a0865e3b"
+  },
+  "qml/QtQuick/Controls/Basic/HorizontalHeaderViewDelegate.qml": {
+    "bytes": 1171,
+    "sha256": "c450201e728ed0569d36fba1838c6b0115410f629f950d46b5a04db589dac9db"
+  },
+  "qml/QtQuick/Controls/Basic/ItemDelegate.qml": {
+    "bytes": 1868,
+    "sha256": "b17615ba64311d7e3b6e43f8cd7ef57137efda09d3ab3f4121db09c0fdbcbf27"
+  },
+  "qml/QtQuick/Controls/Basic/Label.qml": {
+    "bytes": 385,
+    "sha256": "d46120c5f4fd394c83bd21fc8a843f88e19209fa0cbfe4de874610ca44247b97"
+  },
+  "qml/QtQuick/Controls/Basic/Menu.qml": {
+    "bytes": 1487,
+    "sha256": "a3f0026fc66e57ba200d8057f5d505c2669d4aba03e98bbba30b50fc5dc761b3"
+  },
+  "qml/QtQuick/Controls/Basic/MenuBar.qml": {
+    "bytes": 1076,
+    "sha256": "f81c51205916616a27e46beec1262b82cced1f2420598926f1190f8991858894"
+  },
+  "qml/QtQuick/Controls/Basic/MenuBarItem.qml": {
+    "bytes": 1561,
+    "sha256": "05b5bd0fe8ee25a05eb14ae310973b20ccf1203daa9b77d3a172e6fca4e14820"
+  },
+  "qml/QtQuick/Controls/Basic/MenuItem.qml": {
+    "bytes": 2966,
+    "sha256": "c55552273e5cdcefb256f62cb2bc82ec28db3dc5b6504bdaf044d31394389fe1"
+  },
+  "qml/QtQuick/Controls/Basic/MenuSeparator.qml": {
+    "bytes": 894,
+    "sha256": "b8194fc759406c3a26d4b596d2f59349f51e7c2b47a2a53ce60178370b66b909"
+  },
+  "qml/QtQuick/Controls/Basic/MonthGrid.qml": {
+    "bytes": 1279,
+    "sha256": "46a6299b74a8089e33b6d5a9ccf27a523c4163cf821d91114684cf20d91490f5"
+  },
+  "qml/QtQuick/Controls/Basic/Page.qml": {
+    "bytes": 999,
+    "sha256": "b77f10ca786492ad963d1a588961fa3129ed47d6582e9ac687f6a56f7c93795e"
+  },
+  "qml/QtQuick/Controls/Basic/PageIndicator.qml": {
+    "bytes": 1191,
+    "sha256": "a1e451b24c907d008ec02bf4a66dbf975f6f19878b9c3b2158e51149e44d04e3"
+  },
+  "qml/QtQuick/Controls/Basic/Pane.qml": {
+    "bytes": 726,
+    "sha256": "5de2dd3c225a889d5bbeb94cece80239812ade32129854d6382bb2bed5587f0e"
+  },
+  "qml/QtQuick/Controls/Basic/Popup.qml": {
+    "bytes": 987,
+    "sha256": "fdb2bf6c142c64cfce0d51a278202e1e6a7cf2514e23580584c4ba55f38b40f7"
+  },
+  "qml/QtQuick/Controls/Basic/ProgressBar.qml": {
+    "bytes": 1120,
+    "sha256": "bed89370558e2d85b822768843186f894faa5cc87dc759c0526c129b12f73645"
+  },
+  "qml/QtQuick/Controls/Basic/RadioButton.qml": {
+    "bytes": 2420,
+    "sha256": "763b99057b3daf4bc24bf670403c9d87166bdddd3543d979b96a1cc392e5b894"
+  },
+  "qml/QtQuick/Controls/Basic/RadioDelegate.qml": {
+    "bytes": 2882,
+    "sha256": "59637c498e602dc527dc19bb8edba35d6b2bffeb1fb8cdba6012d5cbe49df263"
+  },
+  "qml/QtQuick/Controls/Basic/RangeSlider.qml": {
+    "bytes": 3743,
+    "sha256": "a1077096f9fff8c7fc67aba9117c62a4bbb824d3b224d14e85df93021f781c3c"
+  },
+  "qml/QtQuick/Controls/Basic/RoundButton.qml": {
+    "bytes": 2298,
+    "sha256": "10920195f5ba8c1849958f97a5eead279ba8efa22c73cb2a24971fb61bd3f59d"
+  },
+  "qml/QtQuick/Controls/Basic/ScrollBar.qml": {
+    "bytes": 2021,
+    "sha256": "1027ccdc91a42375078df7fcfa8e611b0b927c7001b0043f89d24bd128213eb4"
+  },
+  "qml/QtQuick/Controls/Basic/ScrollIndicator.qml": {
+    "bytes": 1664,
+    "sha256": "6101799f11e3af59f103bfd144b2433fff2e99c62bc053cee12d7657b7a2d22e"
+  },
+  "qml/QtQuick/Controls/Basic/ScrollView.qml": {
+    "bytes": 1120,
+    "sha256": "4c2b30446b2c41685188d9a5ab82b97fd4e73e39893bad21eed2850aab2047d3"
+  },
+  "qml/QtQuick/Controls/Basic/SearchField.qml": {
+    "bytes": 6753,
+    "sha256": "4c88422e4484fa66bb6c16e3f2f45f98677ad5f5260e0ff9d4fbbd11d27b68dd"
+  },
+  "qml/QtQuick/Controls/Basic/SelectionRectangle.qml": {
+    "bytes": 864,
+    "sha256": "c57480406aa226d91f6fcccc85328cad0dadde81a9158ac8be3fe4cd4ca97225"
+  },
+  "qml/QtQuick/Controls/Basic/Slider.qml": {
+    "bytes": 2742,
+    "sha256": "e67d2c83aec07e3feabccdb3d383bb25c8b47d913bab8fa285a691cfb42b6b20"
+  },
+  "qml/QtQuick/Controls/Basic/SpinBox.qml": {
+    "bytes": 4225,
+    "sha256": "a00a8d538d86abba678fcfa24f28243c443dc4e66c23335119b5c38bbfe84763"
+  },
+  "qml/QtQuick/Controls/Basic/SplitView.qml": {
+    "bytes": 1126,
+    "sha256": "c47a7b1dc06ed6fdb6c9a3cdab9a0a03c3cfbeaa73967b1bbc6085b1c0a1cde9"
+  },
+  "qml/QtQuick/Controls/Basic/StackView.qml": {
+    "bytes": 1263,
+    "sha256": "a9f8b0d1099940f8e9a6c91872cf1103744f7ec1fa60fc78bc7d24292283bca7"
+  },
+  "qml/QtQuick/Controls/Basic/SwipeDelegate.qml": {
+    "bytes": 2131,
+    "sha256": "6595d69675ab70ed77aa31b0a3bfdfad84abb26cf7f9c711f58ef4cca26b1978"
+  },
+  "qml/QtQuick/Controls/Basic/SwipeView.qml": {
+    "bytes": 1221,
+    "sha256": "3fbb61d5cb053edb32eb9a403e87ca0432f713a597f84aca6da01acac157e738"
+  },
+  "qml/QtQuick/Controls/Basic/Switch.qml": {
+    "bytes": 2885,
+    "sha256": "17fb36d73cf4b7a1312750f0950521721e9abadfafa69709879c7b0e54de55d2"
+  },
+  "qml/QtQuick/Controls/Basic/SwitchDelegate.qml": {
+    "bytes": 3433,
+    "sha256": "ebb4c014a7ae66ce3e4445babe721fe3db26aab5e0dc93bf38d5ebcb900aab76"
+  },
+  "qml/QtQuick/Controls/Basic/TabBar.qml": {
+    "bytes": 1203,
+    "sha256": "61b021092cac6d6843109be4d2febe883af056938c7874ac1454e4968b070c5b"
+  },
+  "qml/QtQuick/Controls/Basic/TabButton.qml": {
+    "bytes": 1475,
+    "sha256": "07bfcfac0c2c0ad30da6ce30ecfc6fb6abc4748f1dfab9258ded410887f37f70"
+  },
+  "qml/QtQuick/Controls/Basic/TableViewDelegate.qml": {
+    "bytes": 2750,
+    "sha256": "c23588e4d805bb6cef7c7c4ce15ea82a24141d1bb67a60a5ba208541ba8c87d3"
+  },
+  "qml/QtQuick/Controls/Basic/TextArea.qml": {
+    "bytes": 2205,
+    "sha256": "fdf623adc74b8a6bd8514021890403b2168306599094a8fb9d8dd3b26c84f447"
+  },
+  "qml/QtQuick/Controls/Basic/TextField.qml": {
+    "bytes": 2390,
+    "sha256": "d22172da8037ac34f064f8c61a2dd053ac996e163ba885416c6718b16a188eb4"
+  },
+  "qml/QtQuick/Controls/Basic/ToolBar.qml": {
+    "bytes": 904,
+    "sha256": "152a336fe967bfd458586431f22389032934e39e00d35d7c47831cff32f991fd"
+  },
+  "qml/QtQuick/Controls/Basic/ToolButton.qml": {
+    "bytes": 1990,
+    "sha256": "e3602af06521c303ac35e9694dc4f584312d527e5d9830d9a4191ae5ad391a6b"
+  },
+  "qml/QtQuick/Controls/Basic/ToolSeparator.qml": {
+    "bytes": 1037,
+    "sha256": "b90207f8220a3a54e0f279d6e7be93ed2791aa864c10835130e505589bf22309"
+  },
+  "qml/QtQuick/Controls/Basic/ToolTip.qml": {
+    "bytes": 1158,
+    "sha256": "0f70c39a283641f6d309b62a62dc8b62c5fde500510a117d554f932fa4ba0d82"
+  },
+  "qml/QtQuick/Controls/Basic/TreeViewDelegate.qml": {
+    "bytes": 4389,
+    "sha256": "ffab415177daa180dc978c5edc4e78b5d04b306159dd859b6471e48fabfb3930"
+  },
+  "qml/QtQuick/Controls/Basic/Tumbler.qml": {
+    "bytes": 2126,
+    "sha256": "8bc5db7673954df7f925b806d3657ea7ca6feb067ba34ca26d9eb752e7cce541"
+  },
+  "qml/QtQuick/Controls/Basic/VerticalHeaderView.qml": {
+    "bytes": 841,
+    "sha256": "bfb44b28be8636cf5fedd504b41ded92dde35350a9e437f61f327e413cb18f07"
+  },
+  "qml/QtQuick/Controls/Basic/VerticalHeaderViewDelegate.qml": {
+    "bytes": 1171,
+    "sha256": "c450201e728ed0569d36fba1838c6b0115410f629f950d46b5a04db589dac9db"
+  },
+  "qml/QtQuick/Controls/Basic/WeekNumberColumn.qml": {
+    "bytes": 1181,
+    "sha256": "20c891cf756f0711f8fdbf2371f04d0a8f0d8f556613eb0f85f2a18fa5c2724c"
+  },
+  "qml/QtQuick/Controls/Basic/impl/TextEditingContextMenu.qml": {
+    "bytes": 858,
+    "sha256": "7dbff23e277b12a9c1a0f0fcdf38bf463a12531116820418a9efe1b98d1d110d"
+  },
+  "qml/QtQuick/Controls/Basic/impl/plugins.qmltypes": {
+    "bytes": 5467,
+    "sha256": "14c5c67df9664a7f60a3a4edfc31234e553581bca8bae54c60bb5c74beaf2d96"
+  },
+  "qml/QtQuick/Controls/Basic/impl/qmldir": {
+    "bytes": 361,
+    "sha256": "3673cca17ed3522692c942f148bb8a9d37ae2d40ea1bb2e5df05439d56968ac7"
+  },
+  "qml/QtQuick/Controls/Basic/impl/qtquickcontrols2basicstyleimplplugin.dll": {
+    "bytes": 34576,
+    "sha256": "8c528f0b5e49c6d87d96bfc220837c2479703e3738e8821aedfb9b102abd0441"
+  },
+  "qml/QtQuick/Controls/Basic/plugins.qmltypes": {
+    "bytes": 4216,
+    "sha256": "98dbeb88a37e10fd2bf06014425723d0cf6bda1922727c668921e016e5ed6943"
+  },
+  "qml/QtQuick/Controls/Basic/qmldir": {
+    "bytes": 4294,
+    "sha256": "f855404786210fd15a4464b4ccb2dc68f0fde137b952015d17536247a8ed535f"
+  },
+  "qml/QtQuick/Controls/Basic/qtquickcontrols2basicstyleplugin.dll": {
+    "bytes": 35080,
+    "sha256": "39c9f5a7ea0665fbc45f2e9317a6402c84f2d160c9c076bf939aa78c392739fd"
+  },
+  "qml/QtQuick/Controls/Material/ApplicationWindow.qml": {
+    "bytes": 384,
+    "sha256": "9e855156a70ce5a4df931cdea9f3b42c83429b845743f5f164373afc53cf8802"
+  },
+  "qml/QtQuick/Controls/Material/BusyIndicator.qml": {
+    "bytes": 1044,
+    "sha256": "c34183235722b709b2fb6b9083d646c6a6ef4181c46f148b3f885b90cb006011"
+  },
+  "qml/QtQuick/Controls/Material/Button.qml": {
+    "bytes": 3297,
+    "sha256": "92064a2a62058a81f62c5b85d819a3c10ba82d4f84cb220e2a9bf8b915189b47"
+  },
+  "qml/QtQuick/Controls/Material/CheckBox.qml": {
+    "bytes": 2068,
+    "sha256": "977722929dd84ff6fe8290c57ef2cd11e739e11f4b8b4fc926e8c998ad176558"
+  },
+  "qml/QtQuick/Controls/Material/CheckDelegate.qml": {
+    "bytes": 2419,
+    "sha256": "cb65e04fc58cb5f933481f51d11cbe5a3275a2c26fabf5d8295148a137f70a5e"
+  },
+  "qml/QtQuick/Controls/Material/ComboBox.qml": {
+    "bytes": 5260,
+    "sha256": "fc94e32f37b75bf2ef872fa10b377778dac260ce0bac49630dab1c6783f50fda"
+  },
+  "qml/QtQuick/Controls/Material/DelayButton.qml": {
+    "bytes": 2955,
+    "sha256": "0014ef9cd097ac3dd3f331413d57053ed7b0de4d4c59a06029c2e6333f38032a"
+  },
+  "qml/QtQuick/Controls/Material/Dial.qml": {
+    "bytes": 1936,
+    "sha256": "ae6948667bc8a45ef4911a51fc2c742eaa38a8a9a624ae0bf5751f6fdc88a985"
+  },
+  "qml/QtQuick/Controls/Material/Dialog.qml": {
+    "bytes": 3571,
+    "sha256": "a22f55cd16e6ad3406b73dbfdc22cc25ef06dffcbd396196711844c1ab1868aa"
+  },
+  "qml/QtQuick/Controls/Material/DialogButtonBox.qml": {
+    "bytes": 1720,
+    "sha256": "5202816473b0473539f29b18933368ae73647edf1cdb028acdcd7c1abf91ac0c"
+  },
+  "qml/QtQuick/Controls/Material/DoubleSpinBox.qml": {
+    "bytes": 4853,
+    "sha256": "91d3303ac4bb21214c9fe802e2d92bdcb1fc123a67b055d7def9e2df25b28eb3"
+  },
+  "qml/QtQuick/Controls/Material/Drawer.qml": {
+    "bytes": 2555,
+    "sha256": "01cc3fc004a582383bff27939eed74a04e1973559cc82998ef5da7c5191ebc94"
+  },
+  "qml/QtQuick/Controls/Material/Frame.qml": {
+    "bytes": 1273,
+    "sha256": "a9dfcd9f778e4daa9db282602b62255087fd321910eb52c375856e58a950f1b2"
+  },
+  "qml/QtQuick/Controls/Material/GroupBox.qml": {
+    "bytes": 2012,
+    "sha256": "68dbc7b6f98eb19d1a704f8be27654e5ca35bcf058aade4dbf84a07f59fc6a3f"
+  },
+  "qml/QtQuick/Controls/Material/HorizontalHeaderView.qml": {
+    "bytes": 885,
+    "sha256": "c794f5b77241d0d02ec04e3c6b65133479aa9bbb0478f0f0edbbd3392238885c"
+  },
+  "qml/QtQuick/Controls/Material/HorizontalHeaderViewDelegate.qml": {
+    "bytes": 1115,
+    "sha256": "e0e4088a60473491f649372a1852afc80334163e04426a2644e0acdde09b374c"
+  },
+  "qml/QtQuick/Controls/Material/ItemDelegate.qml": {
+    "bytes": 1924,
+    "sha256": "a5ea449c6ccdc72830cd4192db8beacad078e88fc1051ae213cfe991e275056b"
+  },
+  "qml/QtQuick/Controls/Material/Label.qml": {
+    "bytes": 417,
+    "sha256": "338f4290f35a5f9fe058eaff34f36fae195ac12b7ea01af65e62b82757afd7ed"
+  },
+  "qml/QtQuick/Controls/Material/Menu.qml": {
+    "bytes": 2725,
+    "sha256": "d81da0673522f25011b5316ac77c47edfa8adc81aac81ea292f9d2a5acbb1598"
+  },
+  "qml/QtQuick/Controls/Material/MenuBar.qml": {
+    "bytes": 1155,
+    "sha256": "db659e12158285860fca18fff71bd3a76d9d53cb7f1e5b3a7765549cefdadb83"
+  },
+  "qml/QtQuick/Controls/Material/MenuBarItem.qml": {
+    "bytes": 1811,
+    "sha256": "6b00f257e1a71d6b16bee08b14c7006ffbb7f3dd614cf7a1dd837955637d3752"
+  },
+  "qml/QtQuick/Controls/Material/MenuItem.qml": {
+    "bytes": 3162,
+    "sha256": "573701f26039ff11c8b361de395b6f41949e9e2c8d1664139e3954f2e3bb012e"
+  },
+  "qml/QtQuick/Controls/Material/MenuSeparator.qml": {
+    "bytes": 809,
+    "sha256": "fa4b748429c2e1f5d0bc901f3397410d81bc3e0f2f2b1295343db8dd359df95a"
+  },
+  "qml/QtQuick/Controls/Material/Page.qml": {
+    "bytes": 1231,
+    "sha256": "31f5d32881a3bfbb31fb371fa7483b81618629101dccfd54cbf727fdc534df38"
+  },
+  "qml/QtQuick/Controls/Material/PageIndicator.qml": {
+    "bytes": 1462,
+    "sha256": "e0a1bb056751bc6eb24e57856031d766dcdd3921ef186c98e6384953a616ccbb"
+  },
+  "qml/QtQuick/Controls/Material/Pane.qml": {
+    "bytes": 1173,
+    "sha256": "8b1d0bbdac5ec68e887d31250b6d7bc5c0eca623cd8af4b4396a9b35e00a7a97"
+  },
+  "qml/QtQuick/Controls/Material/Popup.qml": {
+    "bytes": 2080,
+    "sha256": "0337c1760defae14059c324d98c241a41b18202275b75ed2cd31c0e6a241d25a"
+  },
+  "qml/QtQuick/Controls/Material/ProgressBar.qml": {
+    "bytes": 1224,
+    "sha256": "bc084efa4134d5ef622ed1d856807b3d2ce054c765d5352cb6fa6aa5e01e9dd7"
+  },
+  "qml/QtQuick/Controls/Material/RadioButton.qml": {
+    "bytes": 2058,
+    "sha256": "2837d4b6bdd380ee055a773adca82ca70ec0900a8858a217480c6d328adbcfda"
+  },
+  "qml/QtQuick/Controls/Material/RadioDelegate.qml": {
+    "bytes": 2406,
+    "sha256": "cb64a68e2417c47a62339c79adef36694c1c3306791468c588b2dce5f204e7f6"
+  },
+  "qml/QtQuick/Controls/Material/RangeSlider.qml": {
+    "bytes": 5954,
+    "sha256": "8555302aa8e4a06ace3e92f67de714141f5f3f3b0a9b0e7b59381f92bd841ab0"
+  },
+  "qml/QtQuick/Controls/Material/RoundButton.qml": {
+    "bytes": 2874,
+    "sha256": "add324be8c9ba9725e652b1c270ab945a78405284de4d1ed2eb314ec302e82fb"
+  },
+  "qml/QtQuick/Controls/Material/ScrollBar.qml": {
+    "bytes": 2181,
+    "sha256": "4f10e4630aff346e77d730eab055fff521312b68ad05cbd07bf00aa22af28b44"
+  },
+  "qml/QtQuick/Controls/Material/ScrollIndicator.qml": {
+    "bytes": 1367,
+    "sha256": "24e6e05dd28c1044ab833b54de969e4cfd15921eea59ff796969a2792ba378f8"
+  },
+  "qml/QtQuick/Controls/Material/ScrollView.qml": {
+    "bytes": 1120,
+    "sha256": "981ab6db297e985d37b6d83f26801075ec35abeaff38c28adb2e7255ceae1a31"
+  },
+  "qml/QtQuick/Controls/Material/SearchField.qml": {
+    "bytes": 7483,
+    "sha256": "b06bfcfaa08d213c60acf9b633dfd5ecff03c7a6afd3be7f0d996aef78abbe7a"
+  },
+  "qml/QtQuick/Controls/Material/SelectionRectangle.qml": {
+    "bytes": 930,
+    "sha256": "66253e63e9f6c73bee32b3a6d3220a98febe84e28555a13a0ac342889333c751"
+  },
+  "qml/QtQuick/Controls/Material/Slider.qml": {
+    "bytes": 4970,
+    "sha256": "7540a70c0ea28dcb62f22f7b31431bd8ad742b745fd2d4976a349599b2e3b3dc"
+  },
+  "qml/QtQuick/Controls/Material/SpinBox.qml": {
+    "bytes": 4808,
+    "sha256": "2ffd976eb2551cad85cc525e44ff841cb629e8b3ab2d828d9c720bfa9e704abe"
+  },
+  "qml/QtQuick/Controls/Material/SplitView.qml": {
+    "bytes": 1689,
+    "sha256": "860cf87493e0af4c476a619bbfe38bf8ab4c9bd21fe1c361345ea7799062cf80"
+  },
+  "qml/QtQuick/Controls/Material/StackView.qml": {
+    "bytes": 1790,
+    "sha256": "1c8450f97734021c92a97cd2c3cb7309558b337b9f050b673d14647112bce646"
+  },
+  "qml/QtQuick/Controls/Material/SwipeDelegate.qml": {
+    "bytes": 2241,
+    "sha256": "0cdc025c5d00cd1b9699356ce95c80f757cfc804637769ad7d144b8da42f0f18"
+  },
+  "qml/QtQuick/Controls/Material/SwipeView.qml": {
+    "bytes": 1255,
+    "sha256": "259de0888166e423015d201137114c0638511213d837ef7e355f4105e0fd0a67"
+  },
+  "qml/QtQuick/Controls/Material/Switch.qml": {
+    "bytes": 2471,
+    "sha256": "2bb9b1d6317fe83283ff0c9f5632e7f73f475bbeeb64681739c92c07e46f0974"
+  },
+  "qml/QtQuick/Controls/Material/SwitchDelegate.qml": {
+    "bytes": 2458,
+    "sha256": "3031cdecbefa769a25d58a0b10246a3322f0c887b2e755e3d6cc2f17b0874ad2"
+  },
+  "qml/QtQuick/Controls/Material/TabBar.qml": {
+    "bytes": 1857,
+    "sha256": "e8b5e4499e263e4f36619f122bebc99762a17eb283c30d5dc8c4b2c74759598c"
+  },
+  "qml/QtQuick/Controls/Material/TabButton.qml": {
+    "bytes": 1533,
+    "sha256": "d8f0df3140e18b224d2f9f327f0785a7071120479e20978d7c94ee102dae1792"
+  },
+  "qml/QtQuick/Controls/Material/TextArea.qml": {
+    "bytes": 4447,
+    "sha256": "8993b17d9c9921bcaa40c79815b83cd42e8037d3d611acc1b3ef8396b4d5a8b7"
+  },
+  "qml/QtQuick/Controls/Material/TextField.qml": {
+    "bytes": 3875,
+    "sha256": "1daae4aa7d850f30756ad72d6476b7a215775aac659d55149714b2a5553955d3"
+  },
+  "qml/QtQuick/Controls/Material/ToolBar.qml": {
+    "bytes": 1234,
+    "sha256": "c7765d33986b4e78a1194f33a9fe401ca1cf3e7fb3dca2b4c14633ad7067cb1f"
+  },
+  "qml/QtQuick/Controls/Material/ToolButton.qml": {
+    "bytes": 1895,
+    "sha256": "960ba0e20b8a1cdcfaec9ab65f42eb1930d401882a349c948a9ad3a1d45e0eeb"
+  },
+  "qml/QtQuick/Controls/Material/ToolSeparator.qml": {
+    "bytes": 914,
+    "sha256": "0a13cb3b1c6e96638a8b03d2fcf3929b855dee22e53db5a5bba95ed70c91b8a3"
+  },
+  "qml/QtQuick/Controls/Material/ToolTip.qml": {
+    "bytes": 1631,
+    "sha256": "629a26443db5e940c510dfc0dea5b6b99d55ec5d596ef735ab349385b26887ae"
+  },
+  "qml/QtQuick/Controls/Material/TreeViewDelegate.qml": {
+    "bytes": 4653,
+    "sha256": "33faf0dc9214cef8f04cbeaf7f8b1d38ec490baf3f0efbf628453404ff102dd0"
+  },
+  "qml/QtQuick/Controls/Material/Tumbler.qml": {
+    "bytes": 1668,
+    "sha256": "e7a69e79568f1f4abc8880c6cfad816cc2ab2dedb9332c1c69d9c1c78335c2b4"
+  },
+  "qml/QtQuick/Controls/Material/VerticalHeaderView.qml": {
+    "bytes": 875,
+    "sha256": "2c62607662eaa79a85de814c10dffab912837bf0c20e5ae4d4993c5bf4a4d044"
+  },
+  "qml/QtQuick/Controls/Material/VerticalHeaderViewDelegate.qml": {
+    "bytes": 1115,
+    "sha256": "e0e4088a60473491f649372a1852afc80334163e04426a2644e0acdde09b374c"
+  },
+  "qml/QtQuick/Controls/Material/impl/BoxShadow.qml": {
+    "bytes": 1771,
+    "sha256": "ea85c17abf066263ab45ab4921f3656fdd2fce4d62875b7edb74af3333a806b8"
+  },
+  "qml/QtQuick/Controls/Material/impl/CheckIndicator.qml": {
+    "bytes": 2561,
+    "sha256": "5a007636e49c95cfd03da92ea46b5fba5a1479a1c4d70e9bd4cfb829aefe7fb9"
+  },
+  "qml/QtQuick/Controls/Material/impl/CursorDelegate.qml": {
+    "bytes": 1039,
+    "sha256": "2ee81c1de76232e4a8bc19739907f60dfc3e4b4bf59bc1443d5eca167779998e"
+  },
+  "qml/QtQuick/Controls/Material/impl/ElevationEffect.qml": {
+    "bytes": 8693,
+    "sha256": "71383f8b8216fa8dc51336c0ebb98bdf92782d1a85d8267748265801e1fd42a7"
+  },
+  "qml/QtQuick/Controls/Material/impl/RadioIndicator.qml": {
+    "bytes": 1572,
+    "sha256": "1902bf2242eb4e8b35a1288232c178a47976764f123b0ad8c01f23edd0b08575"
+  },
+  "qml/QtQuick/Controls/Material/impl/RectangularGlow.qml": {
+    "bytes": 6730,
+    "sha256": "96645eb91f5475886ad5c36f5effc6155586fa8f0862a4c0d201426bde1ae7a5"
+  },
+  "qml/QtQuick/Controls/Material/impl/RoundedElevationEffect.qml": {
+    "bytes": 1812,
+    "sha256": "4a45d8893774b5557777ba76d0418d9836975ea963159021223615173832d622"
+  },
+  "qml/QtQuick/Controls/Material/impl/SliderHandle.qml": {
+    "bytes": 1283,
+    "sha256": "ba46a393c4477f75ac5a773f52113bb7034a307ee1745f71d1eb7c47179ad210"
+  },
+  "qml/QtQuick/Controls/Material/impl/SwitchIndicator.qml": {
+    "bytes": 4272,
+    "sha256": "f8a15f38f9cef487edf7913ce3f8f4c213f46590e6d9ef83650c67435adf8bab"
+  },
+  "qml/QtQuick/Controls/Material/impl/TextEditingContextMenu.qml": {
+    "bytes": 861,
+    "sha256": "10c7812096d8692bb8dd36c29923c679d90235bed3872682330f4a38cf3222e2"
+  },
+  "qml/QtQuick/Controls/Material/impl/plugins.qmltypes": {
+    "bytes": 13409,
+    "sha256": "fb296adbd4a933025c2b6a84c91eeb364c1a4912001db081a31dc63ef7a0add9"
+  },
+  "qml/QtQuick/Controls/Material/impl/qmldir": {
+    "bytes": 1130,
+    "sha256": "e79db41994851c10755c47910924a896b10e45d7d792942544f89a2322351e6b"
+  },
+  "qml/QtQuick/Controls/Material/impl/qtquickcontrols2materialstyleimplplugin.dll": {
+    "bytes": 34568,
+    "sha256": "356d86e9b598e612a6e89ac287f9c87377dc26036d94ccd49c76eef9605fedbf"
+  },
+  "qml/QtQuick/Controls/Material/plugins.qmltypes": {
+    "bytes": 24505,
+    "sha256": "3ca03495f895a706eb6f5663b545dd05a4dc334b5dc06fee71314056dbcdc406"
+  },
+  "qml/QtQuick/Controls/Material/qmldir": {
+    "bytes": 3770,
+    "sha256": "ff546bfbd47c2c4eebc5d02c6e4afe56c0e22d620428064da6ae0c95a0b113da"
+  },
+  "qml/QtQuick/Controls/Material/qtquickcontrols2materialstyleplugin.dll": {
+    "bytes": 35080,
+    "sha256": "9e23c6ace4d61c34c03bde4790953f787c2d698d6872b7ad55318b75da55fb00"
+  },
+  "qml/QtQuick/Controls/impl/CopyAction.qml": {
+    "bytes": 533,
+    "sha256": "1c568adfc62ff4bb2b41107f0975245b585483e58f45854003a46b7a38a67765"
+  },
+  "qml/QtQuick/Controls/impl/CutAction.qml": {
+    "bytes": 1088,
+    "sha256": "4c9d7b346b6b917eaf1a4bc1cd2f17e50545d3589d5b0176575b6e369dc2da28"
+  },
+  "qml/QtQuick/Controls/impl/DeleteAction.qml": {
+    "bytes": 570,
+    "sha256": "f48ab60eb0eac508db0d343b21eb588cefc94972037f731b3ceb115e50a66ac1"
+  },
+  "qml/QtQuick/Controls/impl/PasteAction.qml": {
+    "bytes": 524,
+    "sha256": "ced9d6b9497b8e1c0423f648581f16e4faab58791de5a97b42b7b8315d5a59fd"
+  },
+  "qml/QtQuick/Controls/impl/RedoAction.qml": {
+    "bytes": 435,
+    "sha256": "46e67f8681d82d18695de58ff0e287799a5613fc6b1bde7b46aea1870a1ca5be"
+  },
+  "qml/QtQuick/Controls/impl/SelectAllAction.qml": {
+    "bytes": 477,
+    "sha256": "be8cfbcd5815fa21e5b7c359c6547a2ddd7f367b76d26e33790feac672fef25e"
+  },
+  "qml/QtQuick/Controls/impl/UndoAction.qml": {
+    "bytes": 435,
+    "sha256": "77e368eeb3fee65acca0ba8205a7974950bf09cbe331b76a470af54c7beb546b"
+  },
+  "qml/QtQuick/Controls/impl/plugins.qmltypes": {
+    "bytes": 52033,
+    "sha256": "7f87a441807cbaebf942e3aaac6299462690857738b544e7e5f145d58be70eec"
+  },
+  "qml/QtQuick/Controls/impl/qmldir": {
+    "bytes": 533,
+    "sha256": "218fbf40bc80d5577807dcd865520248d49b64c81e4ea87d2dce8c93fd043b24"
+  },
+  "qml/QtQuick/Controls/impl/qtquickcontrols2implplugin.dll": {
+    "bytes": 34568,
+    "sha256": "8e13302de910633522c631d40cc063e80820332cfdc5a106f17fda84475feb8d"
+  },
+  "qml/QtQuick/Controls/plugins.qmltypes": {
+    "bytes": 215,
+    "sha256": "a96c7bf5832767bdc9d91e2290a3920aec3abfbf2e3814bce38b49483f16f84a"
+  },
+  "qml/QtQuick/Controls/qmldir": {
+    "bytes": 584,
+    "sha256": "5b252442be4023a86ddd0d53c17f62f9c38f934bab65e04a0fae06b14c584da9"
+  },
+  "qml/QtQuick/Controls/qtquickcontrols2plugin.dll": {
+    "bytes": 44808,
+    "sha256": "64211b56a88aaa9cd7933f9267675e2eb9cc6d8f4b4469f343bc0eaa384222fd"
+  },
+  "qml/QtQuick/Effects/BlurItem.qml": {
+    "bytes": 274,
+    "sha256": "d3c430ec7d3be34a2b035f078abf7a6ee161e110b5e8c51874379c0172dae023"
+  },
+  "qml/QtQuick/Effects/effectsplugin.dll": {
+    "bytes": 34568,
+    "sha256": "522dc4a83dd597c759b54f66b988f59afdff9865454bc55990320c64c913df50"
+  },
+  "qml/QtQuick/Effects/plugins.qmltypes": {
+    "bytes": 14650,
+    "sha256": "6fcb39e966e0269d261e2e3a772cbef77e7d33643950f1c257e475100841c4f2"
+  },
+  "qml/QtQuick/Effects/qmldir": {
+    "bytes": 251,
+    "sha256": "50074a68e54d35e3cd55ca8b1f7c552e9549444d98d17d338e2800f4ff0b28fb"
+  },
+  "qml/QtQuick/Layouts/plugins.qmltypes": {
+    "bytes": 28713,
+    "sha256": "14b0064a675ba2d46c67f4c3dfe88bf957df635226b444746aff103dce070392"
+  },
+  "qml/QtQuick/Layouts/qmldir": {
+    "bytes": 250,
+    "sha256": "be7bc0d0defd3037fd4493987ade323210f191bad527255eb32d1df15b1b8edf"
+  },
+  "qml/QtQuick/Layouts/qquicklayoutsplugin.dll": {
+    "bytes": 34568,
+    "sha256": "80c09352a50dfa9f518b05a8f7e3653667ab23522fb18c7ffb8d85d338fc485e"
+  },
+  "qml/QtQuick/Shapes/plugins.qmltypes": {
+    "bytes": 21936,
+    "sha256": "36f2d7df9dfd03450b554ad6d0b1e7ecf669b716d6383376c8256b9fab6829ed"
+  },
+  "qml/QtQuick/Shapes/qmldir": {
+    "bytes": 207,
+    "sha256": "de2dab12c07574207db93315ebf5bd6ec6656d1aa506df756328f73342b2a7f9"
+  },
+  "qml/QtQuick/Shapes/qmlshapesplugin.dll": {
+    "bytes": 34568,
+    "sha256": "2e05a0d22fd005da8261f605eee21e72c92e03127cb35b90e7f0fb827ec25d79"
+  },
+  "qml/QtQuick/Templates/plugins.qmltypes": {
+    "bytes": 315977,
+    "sha256": "bfa659daf48307bf454c82704fcdaa1023c5c2d0540b230489edf4f4a904fc9f"
+  },
+  "qml/QtQuick/Templates/qmldir": {
+    "bytes": 237,
+    "sha256": "60e185a2a878267d15f2b54f6088e1bcb3c7e66b67ac016b121b9e79b305a9ac"
+  },
+  "qml/QtQuick/Templates/qtquicktemplates2plugin.dll": {
+    "bytes": 35080,
+    "sha256": "3f3597b378e4960f4983e2b34bd8e7365e594261887de79093eb8d6270586f88"
+  },
+  "qml/QtQuick/Window/qmldir": {
+    "bytes": 213,
+    "sha256": "cf518c3574e25f91acaec7ad8831e28c18fccfe15411672ea56809b2eb94077c"
+  },
+  "qml/QtQuick/Window/quickwindow.qmltypes": {
+    "bytes": 215,
+    "sha256": "a96c7bf5832767bdc9d91e2290a3920aec3abfbf2e3814bce38b49483f16f84a"
+  },
+  "qml/QtQuick/Window/quickwindowplugin.dll": {
+    "bytes": 35080,
+    "sha256": "564225a5f2cc4fa86d2a81e0449a4bad0fd5a395242ca2e6a4eb8297fdd41a00"
+  },
+  "qml/QtQuick/plugins.qmltypes": {
+    "bytes": 675924,
+    "sha256": "20ecc5a3e17d975328d7230afaeccedf9a436ecb4295ed16aed5997ae37669db"
+  },
+  "qml/QtQuick/qmldir": {
+    "bytes": 215,
+    "sha256": "137c386f9b2ba49fb3a3417b55096f6f1bd15a794a98613a862b490a6fe4fa79"
+  },
+  "qml/QtQuick/qtquick2plugin.dll": {
+    "bytes": 34568,
+    "sha256": "f99618bb1692309fbb1748665c010028d498655a42af68dc26fd3ff3a8600118"
+  },
+  "swscale-10.dll": {
+    "bytes": 2563856,
+    "sha256": "4f92756c324e1152993b623434af866c10dd43e39b94d96222df116eec0b93ad"
+  },
+  "tls/qcertonlybackend.dll": {
+    "bytes": 109328,
+    "sha256": "8406e0aadf521830f9819c96193582e47e71924300eaa65f7bb8f381e747f55c"
+  },
+  "tls/qschannelbackend.dll": {
+    "bytes": 252680,
+    "sha256": "93c0d2b408b86dc043e52706e1fe773512b328a6f04cc00468c02e465d77cb3f"
+  },
+  "translations/qt_ar.qm": {
+    "bytes": 160604,
+    "sha256": "eb09d3211567f7a0419738a8b29c8f8dffd33a72cc7826f8a06b04dd63e7b80d"
+  },
+  "translations/qt_bg.qm": {
+    "bytes": 236116,
+    "sha256": "3c466e21df3b04188c77b4712cc068fc1ed3fa4ae87c133c0848e91abdf7cf1f"
+  },
+  "translations/qt_ca.qm": {
+    "bytes": 372823,
+    "sha256": "8b01fa037d2203bddc1f8891ae2a9c084fe1b6afe5d4057c42e61ab81a92c94c"
+  },
+  "translations/qt_cs.qm": {
+    "bytes": 174701,
+    "sha256": "03028b42df5479270371e4c3bdc7df2f56cbbe6dda956a2864ac6f6415861fe8"
+  },
+  "translations/qt_da.qm": {
+    "bytes": 251481,
+    "sha256": "7ae318be007b0525f3d34f019f81840b98c34fdbdd3660aaa59d3828bf733368"
+  },
+  "translations/qt_de.qm": {
+    "bytes": 335225,
+    "sha256": "0d42ad6a2e34e320198d6c741e3a3a2349112f429cdd1982edeac7d30eefcb95"
+  },
+  "translations/qt_en.qm": {
+    "bytes": 33,
+    "sha256": "494ac9a2b2cb2fdeced353f4a9f898ed8dcf616e9bc667438c62681e3f7f79cf"
+  },
+  "translations/qt_es.qm": {
+    "bytes": 225002,
+    "sha256": "661105be6e930ec3b8ee2ad11ce9644514d5ff41e4a11c4f0d97419ff148319b"
+  },
+  "translations/qt_fa.qm": {
+    "bytes": 178019,
+    "sha256": "e3fb7456660442dd9907bd1776f7d21c33bc64a9645d64f5ce96d97e437150a6"
+  },
+  "translations/qt_fi.qm": {
+    "bytes": 245716,
+    "sha256": "1592fe9d114d96bb15d43c42c8acb3ba7786bb698c3b51335964df153aff21a9"
+  },
+  "translations/qt_fr.qm": {
+    "bytes": 213901,
+    "sha256": "6a2af2232299317a0559612b8326355272ae787c325eb1552742a3cfd43ee372"
+  },
+  "translations/qt_gd.qm": {
+    "bytes": 189580,
+    "sha256": "63b439dd44139aa3aed54c2ebe03fa9bc77f22c14ed8fba8eff2608445bb233d"
+  },
+  "translations/qt_he.qm": {
+    "bytes": 138690,
+    "sha256": "e1ebca16afe8994356f81ca007fbdb9ddf865842010fe908923d873b687cad3f"
+  },
+  "translations/qt_hr.qm": {
+    "bytes": 210554,
+    "sha256": "789064113567808f2a968e2ba973349cb537250adc3cfc3b14a75e4c5c0b6952"
+  },
+  "translations/qt_hu.qm": {
+    "bytes": 306227,
+    "sha256": "d5fee6e7e708956edd50e4eb7f252abf0d939724bb12e34346effc42416a4838"
+  },
+  "translations/qt_it.qm": {
+    "bytes": 161133,
+    "sha256": "eddce0a4677b28c100d880bacd333846ce872b12ea9ff97384e4e21b658b3e93"
+  },
+  "translations/qt_ja.qm": {
+    "bytes": 175181,
+    "sha256": "5ad12b2b8c520129fd81050636e597cf8a6c48b8b6c35b9a49aef0067762c805"
+  },
+  "translations/qt_ka.qm": {
+    "bytes": 295955,
+    "sha256": "583fc623628e172adaf1f0da097b81373f281870d6acb1be35ff596f2c087aef"
+  },
+  "translations/qt_kk.qm": {
+    "bytes": 357766,
+    "sha256": "88093fd31061699edfb70badadff65296100bbe97a9484b1b36a9498a5827bdc"
+  },
+  "translations/qt_ko.qm": {
+    "bytes": 207002,
+    "sha256": "4745455ef25561732ba5ef92ea429fb15cc374159b408713a8e7adee57eac313"
+  },
+  "translations/qt_lg.qm": {
+    "bytes": 315764,
+    "sha256": "31c0cc4ce13b1d74fe0c19ed0b47638fb31e20c93ee08092533e884007aebfb5"
+  },
+  "translations/qt_lv.qm": {
+    "bytes": 207499,
+    "sha256": "d87cb760d1864772e28190ba1539821eaa7963e18c6d021f43f2bb1f01ed9b9a"
+  },
+  "translations/qt_nl.qm": {
+    "bytes": 277794,
+    "sha256": "2d46e62f973f786a4312dbebef7708df81bf710977ae7341b69880ca15a46a4c"
+  },
+  "translations/qt_nn.qm": {
+    "bytes": 261835,
+    "sha256": "fdba48066c854a3be558f121f9da441d87b2eeeb87d43643da0a2512381c0e0a"
+  },
+  "translations/qt_pl.qm": {
+    "bytes": 227101,
+    "sha256": "4ee1e943c6110db91e97e8be5280f0c8453e5567a29d301131ad7cb66ea093fd"
+  },
+  "translations/qt_pt_BR.qm": {
+    "bytes": 415940,
+    "sha256": "9da2186587f5b8aad872bdbca4a0d4b72bb83dc869ef04e482b96002f0faaa91"
+  },
+  "translations/qt_ru.qm": {
+    "bytes": 270851,
+    "sha256": "3806fe039e79ee19207e82816ac3e0db14f05e9da10f519f5019e9bd5c99c5d4"
+  },
+  "translations/qt_sk.qm": {
+    "bytes": 174373,
+    "sha256": "b09b46ddccd6a321f5f4caa87be9477f6cecd9c5d4680f22e3815ccbb42715c6"
+  },
+  "translations/qt_sv.qm": {
+    "bytes": 344503,
+    "sha256": "b8aaa8885a6a276d2351e417edb7578c49869b538587f434ff5946ae8df406a5"
+  },
+  "translations/qt_tr.qm": {
+    "bytes": 343286,
+    "sha256": "e7c2f8aa9b69f6695dde6d8ed61e83c171f18bddc578d9ccbb588adb0e334563"
+  },
+  "translations/qt_uk.qm": {
+    "bytes": 231553,
+    "sha256": "e1c0f6b9667e5d83f35b3eacc80294d3204561d609d4f01f8dfe1e50b1dcb6d2"
+  },
+  "translations/qt_zh_CN.qm": {
+    "bytes": 210800,
+    "sha256": "4b6e3079994d5982799da59e37135353421cc8556e8df52d99b7c457e6c2153b"
+  },
+  "translations/qt_zh_TW.qm": {
+    "bytes": 126796,
+    "sha256": "4e73b9103c0da6b81d31c7f3c3c564addd53b68c0690233c77d99725cfa7fddc"
+  },
+  "vccorlib140.dll": {
+    "bytes": 350648,
+    "sha256": "09f93d5ff96ae09767f3e1af3cdd43a5a58f2598654fc63089429bb6f9f4737f"
+  },
+  "vcruntime140.dll": {
+    "bytes": 178616,
+    "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+  },
+  "vcruntime140_1.dll": {
+    "bytes": 50112,
+    "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+  },
+  "vcruntime140_threads.dll": {
+    "bytes": 38840,
+    "sha256": "40f39e8cee5f5a531b4010e18b807e8fe265b908dc58f959ecb7ebc6ea6cb11a"
+  }
+}

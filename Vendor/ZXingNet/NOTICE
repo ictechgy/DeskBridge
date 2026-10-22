@@ -1,0 +1,12 @@
+ZXing.Net QR decoding source subset, version 0.16.11
+Copyright ZXing authors and ZXing.Net contributors.
+https://github.com/micjahn/ZXing.Net
+
+The unmodified source files in Source/ are from commit
+fd58f3c4a5d80ccf45ef1237899a65b0ba5b83a0 and retain their original notices.
+They are licensed under the Apache License, Version 2.0; see LICENSE.
+UPSTREAM.json records the exact source inventory and SHA-256 digests.
+
+DeskBridge compiles this QR-only subset offline into DeskBridge.QrDecoder.dll
+and embeds it in its Windows client. It contains no camera, clipboard, network,
+image codec, QR writer, or other barcode format integrations.

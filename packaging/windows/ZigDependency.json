@@ -1,0 +1,16 @@
+{
+  "version": "0.17.0",
+  "source": "https://ziglang.org/download/index.json",
+  "platforms": {
+    "aarch64-macos": {
+      "tarball": "https://ziglang.org/download/0.17.0/zig-aarch64-macos-0.17.0.tar.xz",
+      "shasum": "b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a",
+      "size": "53985220"
+    },
+    "x86_64-windows": {
+      "tarball": "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip",
+      "shasum": "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428",
+      "size": "100268137"
+    }
+  }
+}

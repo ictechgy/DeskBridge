@@ -1,0 +1,13 @@
+{
+  "version": "2026.914.233613",
+  "releaseCommit": "63d35f702ee9e362e43263742981836ec0710384",
+  "packageVersion": "2026.914.233613-1+ubuntu24.04",
+  "architecture": "amd64",
+  "ubuntuVersion": "24.04",
+  "url": "https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/sunshine_2026.914.233613-1%2Bubuntu24.04_amd64.deb",
+  "bytes": 11001782,
+  "sha256": "c38e9c705f650f8705f61702717e99bec34044c5028fcb8f23a08fe041292c21",
+  "binary": "/usr/bin/sunshine",
+  "binarySHA256": "61e1ecbc8db2df786b9760c652aa4b9885dff36c57d4af09616344314cb7c34c",
+  "provenance": "Official release API and freshly downloaded Ubuntu 24.04 amd64 package verified 2026-10-22. Extracted as inert data. The upstream package supplies uaccess rules and file capabilities; DeskBridge adds no privileged installer and suppresses privilege gains at runtime using setpriv --no-new-privs."
+}

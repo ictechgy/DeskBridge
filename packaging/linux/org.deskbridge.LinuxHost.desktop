@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DeskBridge Linux Host
+Name[ko]=DeskBridge · 이 Linux 공유
+Comment=Share a logged-in Ubuntu X11 desktop with Mac or Windows
+Exec=/usr/bin/deskbridge-linux
+Icon=org.deskbridge.LinuxHost
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupNotify=true

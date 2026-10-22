@@ -1,0 +1,1380 @@
+{
+  "upstreamRepository": "https://github.com/Se7enbrc/glimmer",
+  "upstreamRef": "2026.10.8-rc.12",
+  "upstreamCommit": "dc74ced497fc84defd706b4270e50478b430e562",
+  "license": "GPL-3.0-only",
+  "originalBlobs": [
+    {
+      "path": "EnginePackageTests/ArtworkAPITests.swift",
+      "gitBlobSha": "def2d45c7dea57453cc2c15c937d6eff3d365d33",
+      "size": 2557
+    },
+    {
+      "path": "EnginePackageTests/EnginePackageTests.swift",
+      "gitBlobSha": "4ca188073ac37424e1b7598f94a75e55ca91a917",
+      "size": 3400
+    },
+    {
+      "path": "EnginePackageTests/FailureAPITests.swift",
+      "gitBlobSha": "49e7588f4f18ce0f75bda8674f6edb6414bb46e3",
+      "size": 2976
+    },
+    {
+      "path": "EnginePackageTests/InputAPITests.swift",
+      "gitBlobSha": "dd015434ce70220fd032fc0586941048ad82d087",
+      "size": 1866
+    },
+    {
+      "path": "EnginePackageTests/PCCommunicationTests.swift",
+      "gitBlobSha": "0e625d61e93cf6e5f728a22fda082c8aae88084e",
+      "size": 14112
+    },
+    {
+      "path": "EnginePackageTests/SessionAPITests.swift",
+      "gitBlobSha": "a813ba36b2c5ae5b3370d79cac26ecaa5e199316",
+      "size": 3613
+    },
+    {
+      "path": "EnginePackageTests/TransportBoundaryTests.swift",
+      "gitBlobSha": "8089133768fb6c5fa8407f2217db2abc8aa94b89",
+      "size": 9635
+    },
+    {
+      "path": "EnginePackageTests/VideoAPITests.swift",
+      "gitBlobSha": "8c98c29a3d7e8180db40be25c8225409957088b6",
+      "size": 1254
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+CushionMemory.swift",
+      "gitBlobSha": "74749c3049a5076dc1e5222aeae0387fc1a3fe1b",
+      "size": 32687
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Decode.swift",
+      "gitBlobSha": "9819149e4ffce51ac243aa52d61269e22d6ef0c6",
+      "size": 7413
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Engine.swift",
+      "gitBlobSha": "156deb05bb2e05ca4bd582b7d47586e7b854146d",
+      "size": 15752
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Meter.swift",
+      "gitBlobSha": "bf936ba69f7be44bce810ab2710df0fe1cff650b",
+      "size": 30708
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Platform.swift",
+      "gitBlobSha": "bd0ba63ab45b4ecc7534575a662255f99a702321",
+      "size": 1879
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Prime.swift",
+      "gitBlobSha": "2b343bebf79e5f6278e2415f9c5fc060e8e522cd",
+      "size": 8900
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Resampler.swift",
+      "gitBlobSha": "28fd8e8f2b85c38867e324d93fbf031aec6fc2a4",
+      "size": 12410
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Route.swift",
+      "gitBlobSha": "50f1f5e3aa5f0c4664d9bdcaf66aae3cfd63df66",
+      "size": 4979
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder+Worker.swift",
+      "gitBlobSha": "423b9ee931cc9060de6571551ab0b0783d02a1ba",
+      "size": 8003
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioDecoder.swift",
+      "gitBlobSha": "a5eafa99fc9b86ab465688210fbbe9fbe2dfa8bb",
+      "size": 23343
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioOutput+Silence.swift",
+      "gitBlobSha": "1833d15ab340cae34583b31532ae4b08e787d709",
+      "size": 5152
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioOutput.swift",
+      "gitBlobSha": "27f23a459ee7e1917af36b8737f9b6b365687704",
+      "size": 3375
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioPCMQueue.swift",
+      "gitBlobSha": "a9a9c3ef61d4dcbf227f368dd2e931fc228f7d11",
+      "size": 6630
+    },
+    {
+      "path": "GlimmerEngine/Audio/AudioPlatform.swift",
+      "gitBlobSha": "ea7d547e374f2c1ae9a0e5310d7c92ab2d75a8b8",
+      "size": 2935
+    },
+    {
+      "path": "GlimmerEngine/Audio/OpusDecoder+Packet.swift",
+      "gitBlobSha": "0d93777cc14b7e0144230655439956cb3e2a86fe",
+      "size": 3739
+    },
+    {
+      "path": "GlimmerEngine/Audio/OpusDecoder+Stream.swift",
+      "gitBlobSha": "3b8e09be6aafa04cea0ebb58cf2488541f90f27f",
+      "size": 5464
+    },
+    {
+      "path": "GlimmerEngine/Audio/OpusDecoder.swift",
+      "gitBlobSha": "7c500e92bbf1c928c3ed554f1c450790d7bd2467",
+      "size": 6568
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/AtomicCounter.swift",
+      "gitBlobSha": "cda5a85381d273f57a21f4cd998606f26450302c",
+      "size": 715
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/AudioDiagnostics.swift",
+      "gitBlobSha": "a836a9bd182c6717ae19141717f202750bb6adf7",
+      "size": 1052
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/AudioPipelineTelemetry.swift",
+      "gitBlobSha": "e68fbf5bc29d1ada1e14c50b01493c610e0d76bc",
+      "size": 4888
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/ClusterResidencySnapshot.swift",
+      "gitBlobSha": "3fe03a593cfbc6a40065f46253868c1d0e3361c4",
+      "size": 2187
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/DisplayTelemetry.swift",
+      "gitBlobSha": "7032b197e0eb10227639a1443efdf985a4c442f7",
+      "size": 8858
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/InputLatency.swift",
+      "gitBlobSha": "7bbb53089a63833ed3e6a6b465029049e8526951",
+      "size": 10673
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/LogStore.swift",
+      "gitBlobSha": "25c4ed89ee40f4652f1a55aae7fb2fc53cfa6342",
+      "size": 18013
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/NetworkSnapshots.swift",
+      "gitBlobSha": "b6d6fc18a22d2177ddf9bac089ba500a917e6fc5",
+      "size": 3850
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/PacerSnapshots.swift",
+      "gitBlobSha": "ff8ffe7ed1ea2b6a6c20a0e92ba7329266092b1c",
+      "size": 6313
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/ProcessThermalState.swift",
+      "gitBlobSha": "5916505b0abea7786d3415d3d91e3d446cd3115e",
+      "size": 512
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/ReceiveTimingTelemetry.swift",
+      "gitBlobSha": "f58500b0ae7f29c3e6d973c36da16ee7b5bbf9aa",
+      "size": 4199
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/RendererTelemetry+Compositing.swift",
+      "gitBlobSha": "883368228d9aa962ebe4348506fdc338c2b823c1",
+      "size": 2749
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/RendererTelemetry.swift",
+      "gitBlobSha": "1e691fb2bde9a381b2676cbbbc147a7e6d1455ef",
+      "size": 8835
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/ResourceSnapshot.swift",
+      "gitBlobSha": "ee503a086dcddab2101ee4fa326fc4e494a5110d",
+      "size": 3669
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/Signposts.swift",
+      "gitBlobSha": "0b6a50836251266ea2182f767edb39c9e17704d8",
+      "size": 1943
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/StatsCollector+Record.swift",
+      "gitBlobSha": "4fe49d725e3bf3e7beae6fdfc9d55d6ee92aefa0",
+      "size": 21577
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/StatsCollector.swift",
+      "gitBlobSha": "f67939afb40bb186fa5f5cc3f1c09e5f11c80f9c",
+      "size": 25791
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/SystemStatsSnapshot.swift",
+      "gitBlobSha": "6369e0a14150909359228d30e13bc34368fc3030",
+      "size": 1096
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCapture.swift",
+      "gitBlobSha": "778ee0477899cb0090b3c0dc1f1a274f944950b6",
+      "size": 4502
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+AudioGauges.swift",
+      "gitBlobSha": "21a77fe7b967fe6c7feb70b44a517574e5739a81",
+      "size": 15481
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+AudioSkew.swift",
+      "gitBlobSha": "5712310c97b793de228d3343aa0f1f91ecd73c81",
+      "size": 25850
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+Gauges.swift",
+      "gitBlobSha": "4084f5ada0f835017a91a98d8f874949e56829fc",
+      "size": 15477
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+InputActivity.swift",
+      "gitBlobSha": "35d90a5fe273b4788dc9e0200779270a3cc3b1b1",
+      "size": 4853
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+Lifecycle.swift",
+      "gitBlobSha": "ef6a86034b40b2bd3dba4d3298a45464f9fc73d6",
+      "size": 8242
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters+Types.swift",
+      "gitBlobSha": "15b9cee740199f51be384cf96ef5f0b3b58df6af",
+      "size": 8191
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryCounters.swift",
+      "gitBlobSha": "58c58f012b7d623d5d0e65a31c172242ca646662",
+      "size": 38228
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+AudioPipeline.swift",
+      "gitBlobSha": "0803738edc67005aa0aae2958e68ae3d0be4d581",
+      "size": 3984
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+Capture.swift",
+      "gitBlobSha": "75b8f9afcfd758228acacb2e94eb217ad508cd67",
+      "size": 27586
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+CaptureExtras.swift",
+      "gitBlobSha": "4f798db0938ff7403625f1e5667f3c4c23bef840",
+      "size": 20358
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+CaptureSections.swift",
+      "gitBlobSha": "c060e7d9ed9a6eb33e65ba5cad9382813415d54b",
+      "size": 22939
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+Render.swift",
+      "gitBlobSha": "01ea3ddcf28aca74a15968d69b199d6429373b97",
+      "size": 11221
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderAudio.swift",
+      "gitBlobSha": "6578c479fb6acc460fd1e4ef686b2badfde3eb0a",
+      "size": 10301
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderInput.swift",
+      "gitBlobSha": "8495e6c042a1ecbb4d976480d8f72fb9e59b8e0c",
+      "size": 2022
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderNDJSON.swift",
+      "gitBlobSha": "0017c7ae3eeea877b0200ac2572ce9a443d0d96e",
+      "size": 32771
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderNDJSONLink.swift",
+      "gitBlobSha": "b2deaad9a83ea8cdc0f493752ae74effc9680678",
+      "size": 2944
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderNetwork.swift",
+      "gitBlobSha": "b9797e8b16ad1f13307219c7269c2a3d250f99af",
+      "size": 14833
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderP2.swift",
+      "gitBlobSha": "b358e059a9f397860b5163b5e48cfa85f324e1ba",
+      "size": 8475
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderRenderer.swift",
+      "gitBlobSha": "50e4c8322a6b0babb63e98696d13557d41d550cc",
+      "size": 3744
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderSystem.swift",
+      "gitBlobSha": "23dfde24c7afc773e8cbb6a181b97a849d4ba822",
+      "size": 11077
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+RenderVideo.swift",
+      "gitBlobSha": "a38ffc40bb33dce37f884a454f329e4fa4209019",
+      "size": 24864
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter+Sinks.swift",
+      "gitBlobSha": "17bf59a78e07b6df57473e17868d5716b4428a0e",
+      "size": 11982
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryExporter.swift",
+      "gitBlobSha": "2999b83ba5dcbbb3e78d952fa05aed7bf2298a74",
+      "size": 30570
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryFrameTrace.swift",
+      "gitBlobSha": "431ffa355a1546599782be321c688cd587446e6f",
+      "size": 8991
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryLatency+Composites.swift",
+      "gitBlobSha": "9276dac11d4a39e71f750ec7a98c65239c3d5b02",
+      "size": 3204
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryLatency+Trace.swift",
+      "gitBlobSha": "3b6447cba3f29bdc5a88050ef33a9de5a1b970e0",
+      "size": 7406
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryLatency.swift",
+      "gitBlobSha": "6873e3d0e6341a36444a97b54d29db514d7e4f1c",
+      "size": 31959
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryLatencyHistograms.swift",
+      "gitBlobSha": "a0a4dd92631857c524a3a2b33383a59d51c26ac2",
+      "size": 11668
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetryLatencySnapshot.swift",
+      "gitBlobSha": "aa61cd9e48316674482bc3e9df86af1f51e96fb0",
+      "size": 10437
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetrySessionAggregate.swift",
+      "gitBlobSha": "2f3a5bbefe2110b0803df08907c79d382fbf7691",
+      "size": 12321
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetrySessionEvents.swift",
+      "gitBlobSha": "d8613e90cd1d229bbc75a2f5a723a3ae0952d512",
+      "size": 29520
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetrySessionReport.swift",
+      "gitBlobSha": "f54d9f74a22a4eb373e3b62655cc38f8499b5fde",
+      "size": 28011
+    },
+    {
+      "path": "GlimmerEngine/Diagnostics/TelemetrySnapshot.swift",
+      "gitBlobSha": "006efbb5d63d0bb0a4146824921b2e7b81ab07b5",
+      "size": 32537
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerBattery.swift",
+      "gitBlobSha": "0e563c7b7b92c8346b75e66840aea891e7bfa83d",
+      "size": 10778
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerBatteryCapture.swift",
+      "gitBlobSha": "1def26af31a44de1f7090a8c1962e4216788b622",
+      "size": 862
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerButtonLayout.swift",
+      "gitBlobSha": "1cae81673c4b3ef8e0240b7eca111d6097fd2549",
+      "size": 928
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerChord.swift",
+      "gitBlobSha": "9d41cebc318ac52ffcf856afe19776a381d4b3af",
+      "size": 2144
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerChordDwell.swift",
+      "gitBlobSha": "7da2f81d90e8b39030372223d710c6cff0f91ad5",
+      "size": 2685
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerFeedbackOutput.swift",
+      "gitBlobSha": "01e9ce223f9246877b8e67272785e8f95d894572",
+      "size": 2765
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerHaptics+Actuation.swift",
+      "gitBlobSha": "d39119459634715dc539d20464a42eea7a47a40c",
+      "size": 16243
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerHaptics.swift",
+      "gitBlobSha": "a0c1c84e526569baadd2deef3b666aff73b6d115",
+      "size": 19393
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerMotion.swift",
+      "gitBlobSha": "dd3ee73facb119f0da5353fc5973c09822fd12d3",
+      "size": 12140
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerMotionCapture.swift",
+      "gitBlobSha": "ca5ac600ee22746d77c442e134f69b1babc2ff36",
+      "size": 1744
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerMouseMapping.swift",
+      "gitBlobSha": "93b87f65413d6aa145ecbc1428ad0b3ef3c7d793",
+      "size": 2186
+    },
+    {
+      "path": "GlimmerEngine/Input/ControllerRearmState.swift",
+      "gitBlobSha": "1b54ac65f14f037787713959d7d1a768ce703036",
+      "size": 2476
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Chord.swift",
+      "gitBlobSha": "6df3dea76aa36ce92715cbb62b5f0e6277904c72",
+      "size": 675
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Controller.swift",
+      "gitBlobSha": "d84529a14066525c27ac48648b3998b79e9991e2",
+      "size": 5249
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Mouse.swift",
+      "gitBlobSha": "dffdb2a56d9126a223dddaf812180bfb13ee44d5",
+      "size": 10642
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Pointer.swift",
+      "gitBlobSha": "b6c60619348a2c5b528bf20a00a4d8deab9e8902",
+      "size": 2876
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Slots.swift",
+      "gitBlobSha": "351947c0e6f17a189cff6749b77846c623657529",
+      "size": 2320
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+Touchpad.swift",
+      "gitBlobSha": "1679d87bdada9926d23bc42d9ab42252a0138b6f",
+      "size": 4533
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore+TouchpadMouse.swift",
+      "gitBlobSha": "f7749fe4a1d20ffb92ec65f44dbe21b77d54cdee",
+      "size": 4554
+    },
+    {
+      "path": "GlimmerEngine/Input/InputCore.swift",
+      "gitBlobSha": "6d19065a7b5436b84d66b042e8b18067ba458ac0",
+      "size": 10153
+    },
+    {
+      "path": "GlimmerEngine/Input/InputReconciliation.swift",
+      "gitBlobSha": "b03ff9fedf5830dec5853155ba0340905788383d",
+      "size": 1807
+    },
+    {
+      "path": "GlimmerEngine/Input/InputReleaseLedger.swift",
+      "gitBlobSha": "dc906aa8570ea60338781b5120ddfb5e6846a5bc",
+      "size": 3103
+    },
+    {
+      "path": "GlimmerEngine/Input/InputText.swift",
+      "gitBlobSha": "3ea20f5729c15f505265073d27d835be817ae400",
+      "size": 1991
+    },
+    {
+      "path": "GlimmerEngine/Input/PointerMapping.swift",
+      "gitBlobSha": "839b95e483c43a30c527354ee8560b4d7f32e26f",
+      "size": 2703
+    },
+    {
+      "path": "GlimmerEngine/Input/ScrollQuantizer.swift",
+      "gitBlobSha": "dea4deac96dcfdeb098ed9425424228199cce891",
+      "size": 1218
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+Attempts.swift",
+      "gitBlobSha": "b7db31ddd5a496f5013630d71270a53656fd0256",
+      "size": 2454
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+Chord.swift",
+      "gitBlobSha": "c1eb0786f85c25f229e9059597b2ea9e1b9e5d3a",
+      "size": 2559
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+ControllerMouse.swift",
+      "gitBlobSha": "d6f49efd8929bf9d14566288123e4cf2bcdb8e17",
+      "size": 1530
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+Pointer.swift",
+      "gitBlobSha": "cc29d70304e34aeded5086911b8ccd35cfda5048",
+      "size": 1804
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+Sensors.swift",
+      "gitBlobSha": "c92c1d61742f483cbaf30c3fd82873b2e907f87f",
+      "size": 1976
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput+Values.swift",
+      "gitBlobSha": "f1f3df1cd09c93121458c6984ade3ab899b02d31",
+      "size": 6238
+    },
+    {
+      "path": "GlimmerEngine/Input/StreamInput.swift",
+      "gitBlobSha": "c0baa5255f0e61a4f0d6d5801ca16cb60bf31577",
+      "size": 12369
+    },
+    {
+      "path": "GlimmerEngine/Input/VKScanCode.swift",
+      "gitBlobSha": "040fb8d7b7a255925462c74d447bbc29f4e43737",
+      "size": 845
+    },
+    {
+      "path": "GlimmerEngine/Models/BitrateMode.swift",
+      "gitBlobSha": "c5f7954cbac818aac5871452183bbe42f06258eb",
+      "size": 1202
+    },
+    {
+      "path": "GlimmerEngine/Models/HostCodecPreference.swift",
+      "gitBlobSha": "8c1a0095663ac1ea4cd27c2809fa5d57b0657469",
+      "size": 2829
+    },
+    {
+      "path": "GlimmerEngine/Models/HostRecord.swift",
+      "gitBlobSha": "72e5d9f9e289581af631bb358caaf9c60a47f5ea",
+      "size": 2314
+    },
+    {
+      "path": "GlimmerEngine/Models/HostValues.swift",
+      "gitBlobSha": "19cab123c5afb55d98871597b89bf8dcdb596c57",
+      "size": 12460
+    },
+    {
+      "path": "GlimmerEngine/Models/LauncherArtCache.swift",
+      "gitBlobSha": "1607ad35fa7154bda8a2f218c0da384eee1961fe",
+      "size": 6919
+    },
+    {
+      "path": "GlimmerEngine/Models/LinkGateDecision.swift",
+      "gitBlobSha": "c02a6b37f46e15657504f61731b825c6cc0733bd",
+      "size": 1097
+    },
+    {
+      "path": "GlimmerEngine/Models/PairStatus.swift",
+      "gitBlobSha": "cc659bc3b4a9be1c38c0af3acc1ab5a8f6307346",
+      "size": 185
+    },
+    {
+      "path": "GlimmerEngine/Models/RttStats.swift",
+      "gitBlobSha": "5a7e2e8b30cdf8604319cd47f4374ca36f82b4bc",
+      "size": 1066
+    },
+    {
+      "path": "GlimmerEngine/Models/StreamFailure.swift",
+      "gitBlobSha": "48343cb48501a14e394733ba3be8dbbf3f8e633b",
+      "size": 4191
+    },
+    {
+      "path": "GlimmerEngine/Models/StreamFailureCopy.swift",
+      "gitBlobSha": "b4e0c756c98d1af8ec32a0bfebbcfc45986db851",
+      "size": 281
+    },
+    {
+      "path": "GlimmerEngine/Models/StreamRequest.swift",
+      "gitBlobSha": "8e629ec24664c5a3c6892c11a02ba69a8cf2a50e",
+      "size": 2795
+    },
+    {
+      "path": "GlimmerEngine/Models/StreamSizeBounds.swift",
+      "gitBlobSha": "bcdfccae2d8c30488f92bb460ecf5041970f26cf",
+      "size": 970
+    },
+    {
+      "path": "GlimmerEngine/Models/StreamStatsSnapshot.swift",
+      "gitBlobSha": "8332c7c47b551a78a609c0b2ef938f74aecbd350",
+      "size": 10622
+    },
+    {
+      "path": "GlimmerEngine/Models/Types.swift",
+      "gitBlobSha": "e154d676213a88e967c780badb90583123fc1655",
+      "size": 14114
+    },
+    {
+      "path": "GlimmerEngine/Network/AudioFecDecoder+Queue.swift",
+      "gitBlobSha": "87fc014a18e1c6bc583bb56180bd477eccb00166",
+      "size": 459
+    },
+    {
+      "path": "GlimmerEngine/Network/AudioPacketWorker.swift",
+      "gitBlobSha": "319e0539ff8bae16621315a51055165e5ebd74b1",
+      "size": 4447
+    },
+    {
+      "path": "GlimmerEngine/Network/ControlTransport.swift",
+      "gitBlobSha": "810bc5c7edcc684b295b0c940119c1f1a7290404",
+      "size": 16342
+    },
+    {
+      "path": "GlimmerEngine/Network/DatagramBatch.swift",
+      "gitBlobSha": "af6d87da588bfbb53393a731a131dd518838ac45",
+      "size": 4569
+    },
+    {
+      "path": "GlimmerEngine/Network/Discovery.swift",
+      "gitBlobSha": "d79c211de9f9bdb78b99c83bc422242940ea3895",
+      "size": 11693
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift",
+      "gitBlobSha": "138aa5e6558507f2fbd537d381e4917371b6c0c9",
+      "size": 15789
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel+ControlMessages.swift",
+      "gitBlobSha": "36cde2d58d624af033249448bd41c23e42141ac6",
+      "size": 11709
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel+Handshake.swift",
+      "gitBlobSha": "4ec1b893f885a1119cdf906a99b91a21c010c081",
+      "size": 16541
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel+Inbound.swift",
+      "gitBlobSha": "13e206e1ad2e28a355502ea0b4a03fde84ccd96f",
+      "size": 23151
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel+Send.swift",
+      "gitBlobSha": "df81d50b14b517480570409c19fef3c510195040",
+      "size": 16149
+    },
+    {
+      "path": "GlimmerEngine/Network/EnetControlChannel.swift",
+      "gitBlobSha": "0b2f6a75a4c2f23241412726d1f7cdd6c16bcde6",
+      "size": 30898
+    },
+    {
+      "path": "GlimmerEngine/Network/HostReadiness.swift",
+      "gitBlobSha": "f9854c96a2c589ee7844d4cf018c532129dd0dc1",
+      "size": 1278
+    },
+    {
+      "path": "GlimmerEngine/Network/Identity+Crypto.swift",
+      "gitBlobSha": "2f5ad282a3d9d3c1a48a48b7a35e956f0ae9b9d2",
+      "size": 2758
+    },
+    {
+      "path": "GlimmerEngine/Network/Identity+Loading.swift",
+      "gitBlobSha": "b1efdf843192453f7fdcd562302cd7a54cc9567b",
+      "size": 7636
+    },
+    {
+      "path": "GlimmerEngine/Network/Identity.swift",
+      "gitBlobSha": "194ba2b9cd8fc5174b5a45d07642bf2503a810c9",
+      "size": 8866
+    },
+    {
+      "path": "GlimmerEngine/Network/InputBatcher.swift",
+      "gitBlobSha": "4115424ed7af4b00be6ea2d164d950c8955079e5",
+      "size": 30414
+    },
+    {
+      "path": "GlimmerEngine/Network/InputCallbackProbe.swift",
+      "gitBlobSha": "62f003b8db16fed4ac24944c338a18f26ce2e10f",
+      "size": 1736
+    },
+    {
+      "path": "GlimmerEngine/Network/InputSendThread.swift",
+      "gitBlobSha": "748b463841ec0ceda05835419abc093f179ccea4",
+      "size": 4411
+    },
+    {
+      "path": "GlimmerEngine/Network/Network+Support.swift",
+      "gitBlobSha": "3aa7756a6406ebe4e865b00045b80292b32906bd",
+      "size": 3708
+    },
+    {
+      "path": "GlimmerEngine/Network/Network.swift",
+      "gitBlobSha": "1b01447adf85189c21eb4abfbb8c8ca12b9f9e30",
+      "size": 13836
+    },
+    {
+      "path": "GlimmerEngine/Network/NetworkClient+Endpoints.swift",
+      "gitBlobSha": "b8fecb5c80f3d118f42723857959bd021cc4e4f1",
+      "size": 17106
+    },
+    {
+      "path": "GlimmerEngine/Network/NetworkClient+Request.swift",
+      "gitBlobSha": "f4baa7998d96da435f8e87bd4889946398beb038",
+      "size": 11667
+    },
+    {
+      "path": "GlimmerEngine/Network/PEM.swift",
+      "gitBlobSha": "13cec6aefa094160452db85b545afde2e68e68cc",
+      "size": 7921
+    },
+    {
+      "path": "GlimmerEngine/Network/Pairing+Crypto.swift",
+      "gitBlobSha": "62d0c78b928c1bc7966f405463e08b6bf66cc5b6",
+      "size": 8009
+    },
+    {
+      "path": "GlimmerEngine/Network/Pairing.swift",
+      "gitBlobSha": "1def11a3d432d7bc8c1fe7c072ee2d0296815cff",
+      "size": 15449
+    },
+    {
+      "path": "GlimmerEngine/Network/PairingFailure.swift",
+      "gitBlobSha": "085d12533598219b7bb2a6ef5571f7b21987f2c6",
+      "size": 258
+    },
+    {
+      "path": "GlimmerEngine/Network/ReceiveTiming.swift",
+      "gitBlobSha": "29607340334e24f3eea26502d8741ea7fd3f3d82",
+      "size": 2668
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioQueue+Fec.swift",
+      "gitBlobSha": "1b54429f935c2ad17bfa7bc412fd3cd6522aac9a",
+      "size": 11332
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioQueue.swift",
+      "gitBlobSha": "d35050e9d1fb91f24c82856831a546e975eda5c2",
+      "size": 19797
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift",
+      "gitBlobSha": "d5c3dc4138894d758c0786fc0fb584fb66cad09c",
+      "size": 5038
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Events.swift",
+      "gitBlobSha": "2038d0fb090ba47ead51eff40b679d1b4dc4df78",
+      "size": 7979
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Ping.swift",
+      "gitBlobSha": "b1fc0de20384cde8350f66aa8402a7e0390da89c",
+      "size": 5688
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Receive.swift",
+      "gitBlobSha": "0825889f870ee11b86f20bbe83c90413e8d0005f",
+      "size": 11030
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Socket.swift",
+      "gitBlobSha": "2359cf896a3e2cfed10670d6348e15132833f75a",
+      "size": 3719
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+StartupGate.swift",
+      "gitBlobSha": "dfb61108bda558bb1243c8ecf97367066af286ce",
+      "size": 7355
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver+Telemetry.swift",
+      "gitBlobSha": "17bdf6ae76e440e386bccb1b469e95c066caa786",
+      "size": 3282
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpAudioReceiver.swift",
+      "gitBlobSha": "ffc0bf197ef247d2238921a51e3d96dac10f2528",
+      "size": 21502
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpVideoQueue+AddPacket.swift",
+      "gitBlobSha": "2351ade040f5df36307cbcbbea848dbf00a52206",
+      "size": 16808
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpVideoQueue+ReceiveQuality.swift",
+      "gitBlobSha": "6e0c781a83b76d053889d161128a5d43e72d0489",
+      "size": 8981
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpVideoQueue+Reconstruct.swift",
+      "gitBlobSha": "40494a30cf02d95bf721f5dc515c534ca0703dd3",
+      "size": 12507
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpVideoQueue+ReorderStats.swift",
+      "gitBlobSha": "dec8d25cdabbdeade5ee6abd3523d30b6a4c8b46",
+      "size": 4147
+    },
+    {
+      "path": "GlimmerEngine/Network/RtpVideoQueue.swift",
+      "gitBlobSha": "b7301cd333bb33bea103d023ae993b2b92ef6ceb",
+      "size": 26737
+    },
+    {
+      "path": "GlimmerEngine/Network/RtspClient+Handshake.swift",
+      "gitBlobSha": "97f715d5d345eeea6096ced016a8e1a816b6d8a7",
+      "size": 8858
+    },
+    {
+      "path": "GlimmerEngine/Network/RtspClient.swift",
+      "gitBlobSha": "3e07bc0aea729aa1a48b8dcbf025b86d61c50a2e",
+      "size": 24422
+    },
+    {
+      "path": "GlimmerEngine/Network/SocketTimestamp.swift",
+      "gitBlobSha": "c09d0812a143e2e77ba0d5d14e5a0856995a0137",
+      "size": 1669
+    },
+    {
+      "path": "GlimmerEngine/Network/StreamAttempt.swift",
+      "gitBlobSha": "5f1b2325b1e151fee25119b6899831588bd609ce",
+      "size": 2468
+    },
+    {
+      "path": "GlimmerEngine/Network/StreamPathMTU.swift",
+      "gitBlobSha": "5aae755b979a670e9574bc1f624d1b66c59c53db",
+      "size": 18700
+    },
+    {
+      "path": "GlimmerEngine/Network/TransportRoute.swift",
+      "gitBlobSha": "c1224f2df99979764b3f27c23e62fb46990b2815",
+      "size": 538
+    },
+    {
+      "path": "GlimmerEngine/Network/Types+Cert.swift",
+      "gitBlobSha": "c0451f7c819de893456a3a2426abc3e3b58a8c42",
+      "size": 10041
+    },
+    {
+      "path": "GlimmerEngine/Network/UdpPinger.swift",
+      "gitBlobSha": "7085dda9a026aa3e50991cd3bbf56b894b1d0fd7",
+      "size": 10890
+    },
+    {
+      "path": "GlimmerEngine/Network/VideoDepacketizer+AnnexB.swift",
+      "gitBlobSha": "2df26e9aa4cc22bc92e24b625971ce52871e129c",
+      "size": 4767
+    },
+    {
+      "path": "GlimmerEngine/Network/VideoDepacketizer+FrameHeader.swift",
+      "gitBlobSha": "06a3222e2ab344b60dcf8ab33cbc184598a6cbab",
+      "size": 2810
+    },
+    {
+      "path": "GlimmerEngine/Network/VideoDepacketizer.swift",
+      "gitBlobSha": "ac9a22bbef1f9085cdb643c3272637193aabeaab",
+      "size": 23134
+    },
+    {
+      "path": "GlimmerEngine/Network/VideoRtpReceiver+Recovery.swift",
+      "gitBlobSha": "1baf3cad70874943258075d67d495aabf995787a",
+      "size": 5723
+    },
+    {
+      "path": "GlimmerEngine/Network/VideoRtpReceiver.swift",
+      "gitBlobSha": "a3dbe0fb1de6ac603839b0ee43b6f7d0dcf9a904",
+      "size": 28042
+    },
+    {
+      "path": "GlimmerEngine/Network/WakeOnLAN.swift",
+      "gitBlobSha": "c2687da08ec68d68665a022899fbb13890e6a22d",
+      "size": 2368
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+AdaptiveDepth.swift",
+      "gitBlobSha": "c6c119ba59d273186b881c9bf09a50ca225b79d2",
+      "size": 10825
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+Constants.swift",
+      "gitBlobSha": "eebdd056ca87b420843fab02699626180325b46e",
+      "size": 7444
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+DeficitTimer.swift",
+      "gitBlobSha": "ea55a607c67d76a12a5f3bded11d9b3118ccfaab",
+      "size": 6165
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+DueGate.swift",
+      "gitBlobSha": "b6720458d4632ba401c87745fcba8bfa936c96a1",
+      "size": 30145
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+FrameRateRange.swift",
+      "gitBlobSha": "b4878782387fb7b985290edf40406facf09a1424",
+      "size": 12804
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+Recovery.swift",
+      "gitBlobSha": "ad9369ce5ce29fa1e628e88f53cee33110ec51bb",
+      "size": 20110
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+State.swift",
+      "gitBlobSha": "eea9ea0edb04237c9ec79ebaebdb3b8c89eb0d7d",
+      "size": 15435
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+Submit.swift",
+      "gitBlobSha": "1874a78ab9426e27264ca9b98d3b119638f18add",
+      "size": 12216
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+Tick.swift",
+      "gitBlobSha": "c57ed3821a5a8c7ed9ff6ea732e1338236b68a4b",
+      "size": 14449
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+TickDeficit.swift",
+      "gitBlobSha": "e8ec87af30a6702936510f8869c11af8f7f6654e",
+      "size": 30608
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+TickDeficitEvents.swift",
+      "gitBlobSha": "377a3bf66aafa0fe9d70641783a00b3de26b036f",
+      "size": 9352
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer+TickThread.swift",
+      "gitBlobSha": "2d5dad0f321828605e189b8b56a3c3154c1a72d6",
+      "size": 10546
+    },
+    {
+      "path": "GlimmerEngine/Pacing/FramePacer.swift",
+      "gitBlobSha": "06ae512be3272f6e369e43aaedfcd462bff81a1f",
+      "size": 26783
+    },
+    {
+      "path": "GlimmerEngine/Pacing/PacerDisplay.swift",
+      "gitBlobSha": "17a36f4581d7717668f597432a25cbe059f841b9",
+      "size": 1468
+    },
+    {
+      "path": "GlimmerEngine/Pacing/PacerHeadroom.swift",
+      "gitBlobSha": "b52ca4234dec31eb0b048928a5b067e33ee85294",
+      "size": 760
+    },
+    {
+      "path": "GlimmerEngine/Protocol/AudioFecDecoder+Recovery.swift",
+      "gitBlobSha": "85296d79b18a983036e91f9c26a77e5c0e75226b",
+      "size": 3054
+    },
+    {
+      "path": "GlimmerEngine/Protocol/AudioFecDecoder.swift",
+      "gitBlobSha": "9518bd987185ae1e3a7d756df793db29b38ff00c",
+      "size": 2148
+    },
+    {
+      "path": "GlimmerEngine/Protocol/EnetWire.swift",
+      "gitBlobSha": "f2abead402e2c76d5b280c7c3b37332bff8165be",
+      "size": 13225
+    },
+    {
+      "path": "GlimmerEngine/Protocol/InputEncoder.swift",
+      "gitBlobSha": "0d1084070310508269c982345448b0f21e268060",
+      "size": 15712
+    },
+    {
+      "path": "GlimmerEngine/Protocol/NativeAudioSink.swift",
+      "gitBlobSha": "da790a1b16588e6316ad40698907186a5cedc2af",
+      "size": 1677
+    },
+    {
+      "path": "GlimmerEngine/Protocol/ReedSolomon.swift",
+      "gitBlobSha": "3b54daa1913fb5c55d8bbcc28fb9d7505e1fd8bf",
+      "size": 14308
+    },
+    {
+      "path": "GlimmerEngine/Protocol/SdpCodec.swift",
+      "gitBlobSha": "7505bcb31e2924c8adfbe8bfc7c160272a5386f4",
+      "size": 20748
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamCrypto+VideoDecryptor.swift",
+      "gitBlobSha": "a00c40b78a35e4fd1e1e95e522b10c2bde91a783",
+      "size": 2066
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamCrypto+VideoPacketLayout.swift",
+      "gitBlobSha": "b5e853047d8061f06a974923b5237f035da4c83a",
+      "size": 797
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamCrypto.swift",
+      "gitBlobSha": "89b81ee9c76d90e7aba9436032306f5d409c151e",
+      "size": 6145
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamProtocolConstants.swift",
+      "gitBlobSha": "52d1720f093d44228225d4073a6bab1f9d4fefb2",
+      "size": 10758
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamingBackend+Values.swift",
+      "gitBlobSha": "5a2b1d379a137b002b03cab0076fd88282ef5509",
+      "size": 3897
+    },
+    {
+      "path": "GlimmerEngine/Protocol/StreamingBackend.swift",
+      "gitBlobSha": "c8b2b3a08a2ec4c936ebe85da4ebf271c0bded7f",
+      "size": 19277
+    },
+    {
+      "path": "GlimmerEngine/Session/BitrateDownshiftController.swift",
+      "gitBlobSha": "b8bb30580690518855b51939ce325133b7e2a511",
+      "size": 7937
+    },
+    {
+      "path": "GlimmerEngine/Session/EnvObservationSource.swift",
+      "gitBlobSha": "415e931c4ccd590cd18178b5126d7c056f525389",
+      "size": 1009
+    },
+    {
+      "path": "GlimmerEngine/Session/EnvSignalController+Evidence.swift",
+      "gitBlobSha": "4b7161580c3417dd4ee7d8be43dc64e8c6bee203",
+      "size": 17313
+    },
+    {
+      "path": "GlimmerEngine/Session/EnvSignalController+Tunables.swift",
+      "gitBlobSha": "ed99dfbe275b65733ceb461de9188a390b4073a7",
+      "size": 6633
+    },
+    {
+      "path": "GlimmerEngine/Session/EnvSignalController.swift",
+      "gitBlobSha": "a6904f0f0a78041546b95e5e4c61f8f1da7654aa",
+      "size": 12676
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeBackend+Controllers.swift",
+      "gitBlobSha": "26dcf7eaced49b56b9c386a14f152bd296b07345",
+      "size": 1437
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeBackend+Helpers.swift",
+      "gitBlobSha": "3760d9fcda1c686f868aaecaf47a5c9d6153e528",
+      "size": 2657
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeBackend+Input.swift",
+      "gitBlobSha": "045d2aa8a9386f9c772b539447b66ef01bbec035",
+      "size": 7496
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeBackend+Pipeline.swift",
+      "gitBlobSha": "9e998c3f2dfd3bbb4ce961f193867047aba47340",
+      "size": 22300
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeBackend.swift",
+      "gitBlobSha": "6b71aa3870883987bdaa265a124a069845b2a627",
+      "size": 11234
+    },
+    {
+      "path": "GlimmerEngine/Session/NativeConnectionEvents.swift",
+      "gitBlobSha": "f4eb760d7cf99fb5c2759dcb5b095d4121f3788b",
+      "size": 9405
+    },
+    {
+      "path": "GlimmerEngine/Session/RouteBitratePolicy.swift",
+      "gitBlobSha": "7daddb0c9aa98d940b459dd7f60c2150509dac7e",
+      "size": 3146
+    },
+    {
+      "path": "GlimmerEngine/Session/SessionAdapters.swift",
+      "gitBlobSha": "c34cc7270a356f9ac67a9d463a6aa5aa706559b6",
+      "size": 4601
+    },
+    {
+      "path": "GlimmerEngine/Session/SessionDeadline.swift",
+      "gitBlobSha": "4908682ca7bf5cd47dc9ede4c668106b48cafcba",
+      "size": 1474
+    },
+    {
+      "path": "GlimmerEngine/Session/SessionEventSource.swift",
+      "gitBlobSha": "2a2164264eac097e676405b31e2f6a0954281802",
+      "size": 1937
+    },
+    {
+      "path": "GlimmerEngine/Session/SessionFeedback+Input.swift",
+      "gitBlobSha": "252da290ee28bc5c456689338398f82cb0d29a6a",
+      "size": 1023
+    },
+    {
+      "path": "GlimmerEngine/Session/SessionFeedback.swift",
+      "gitBlobSha": "9aafcb7d71136a5f74a5d8e958b11d357e394284",
+      "size": 932
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamBridgeContext.swift",
+      "gitBlobSha": "cd77429f36b230db74384c3107a39c9a1cdbe481",
+      "size": 4370
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamConnection+Configuration.swift",
+      "gitBlobSha": "aa9a8605f3586302d35dbac910b1d7f9c9d9417d",
+      "size": 2299
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamConnection.swift",
+      "gitBlobSha": "181dd84ada4c89479560d5bd63921d98cb97a348",
+      "size": 6521
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamHostDisposition.swift",
+      "gitBlobSha": "d2ecff093db5fde0cfa8a65bb33fd8d8d23d02d7",
+      "size": 718
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamQuality.swift",
+      "gitBlobSha": "5f48e031a0c90e769e774d7c6131bebbaa095718",
+      "size": 5469
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Attempt.swift",
+      "gitBlobSha": "72d6790f6636608cefcaf75ce994f6f531e27970",
+      "size": 2105
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Callbacks.swift",
+      "gitBlobSha": "28d68b59cdd21fbe5fc1fbb0a6f77ada2517ad85",
+      "size": 1320
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Connect.swift",
+      "gitBlobSha": "70f60923275fda7a0437ab7bd9ab10521d0057ad",
+      "size": 12226
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Downshift.swift",
+      "gitBlobSha": "dc25732c100f4c43a68b87d0eb374a096d7a40ab",
+      "size": 5108
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+FrameWatchdog.swift",
+      "gitBlobSha": "5c9af9659d97d1f53f1daea04361ad848259e0ff",
+      "size": 15618
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Lifecycle.swift",
+      "gitBlobSha": "5360fd274b00ec0d118edad412f759da3a6792db",
+      "size": 19585
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+PresentMetric.swift",
+      "gitBlobSha": "7a0544e3da9f339b0901837c3e329d1b894888f6",
+      "size": 5246
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+PresentTrip.swift",
+      "gitBlobSha": "12d829197d276472dfe9e9d36330e38411a21713",
+      "size": 25959
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Public.swift",
+      "gitBlobSha": "6955e5c43113899539c62c042b571aeadbf53915",
+      "size": 4775
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Reconnect.swift",
+      "gitBlobSha": "1ea2eac0cc22908f0ddee0924d70e04f987f70be",
+      "size": 22530
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Start.swift",
+      "gitBlobSha": "2a4a00c8b9ee16c0dad5c0e03dc27f36750c0127",
+      "size": 19019
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Telemetry.swift",
+      "gitBlobSha": "5e6e3110ce3c500e06e1ee14c556eb8448577b87",
+      "size": 7312
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Wake.swift",
+      "gitBlobSha": "292f67ac7788f1bb137e82de999b37a09661d01f",
+      "size": 4825
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession+Watchdog.swift",
+      "gitBlobSha": "c3d17d897594eb1bdd94f41b68534babca283ff9",
+      "size": 19666
+    },
+    {
+      "path": "GlimmerEngine/Session/StreamSession.swift",
+      "gitBlobSha": "5d805ae9ce7fb504bae9bb861f65bae4a305375d",
+      "size": 22940
+    },
+    {
+      "path": "GlimmerEngine/Session/TransportPlatform.swift",
+      "gitBlobSha": "7f8c4c87f415a28864803d015d2a0ce2b24b5ffa",
+      "size": 1285
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+API.swift",
+      "gitBlobSha": "687d0f05d8ef443dcc42abfee7ee41f8e65feddb",
+      "size": 18660
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+AV1.swift",
+      "gitBlobSha": "5a538767141bfc207fdcd1609492a7e044fb812b",
+      "size": 16728
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Backdrop.swift",
+      "gitBlobSha": "7a5b55ab37c6051d885bf86c6d27cd27b9081bb4",
+      "size": 7926
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Backlog.swift",
+      "gitBlobSha": "228a9eca8a2f1eb75aae545e0bfd599d5d08bb1b",
+      "size": 9075
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Bitstream.swift",
+      "gitBlobSha": "d221e177380fd15db7f20a83a9451c5b99f6bb9d",
+      "size": 15758
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Color.swift",
+      "gitBlobSha": "007a6877a167371f577c916925cc5826f4e45e6f",
+      "size": 7176
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+ColorProbe.swift",
+      "gitBlobSha": "4982cb2ffe427d6f183f53254b60c36e93830886",
+      "size": 5701
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Compositing.swift",
+      "gitBlobSha": "c03c34600dff53aa7f7b79d6cf34257b880451a0",
+      "size": 395
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Decode.swift",
+      "gitBlobSha": "77377ef680c40257cc0fa68d4c540207f5d73b46",
+      "size": 27078
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+DecodeTelemetry.swift",
+      "gitBlobSha": "48486e313744278b7cb846d362fd0ff87aa1b797",
+      "size": 8762
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+GovernorRepaint.swift",
+      "gitBlobSha": "5a6b945af35afee2a4d4d03942f8af6fca2e4405",
+      "size": 2762
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+HDR.swift",
+      "gitBlobSha": "ec109d49d8e3a3f56744eeb93120455f166dc2ab",
+      "size": 4893
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+HDRMetadata.swift",
+      "gitBlobSha": "c70bb9daa741e2507089da8e4c86a5c932880249",
+      "size": 571
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Pacing.swift",
+      "gitBlobSha": "780b204580c8fabc95609f3c6d84b8536f124197",
+      "size": 20699
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Session.swift",
+      "gitBlobSha": "599e7713e70f68c9b85e0e29191455dfc32d5bf9",
+      "size": 17223
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Sink.swift",
+      "gitBlobSha": "699ed67872dd4426af3fef275bd6d20c4a6f24ca",
+      "size": 4061
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder+Suppression.swift",
+      "gitBlobSha": "909c865b4a4faeb8ac7abf53b64f5adf115f48e7",
+      "size": 21966
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDecoder.swift",
+      "gitBlobSha": "bbbda5b8f3168c04b2a0a2254e4aeb30fdf85694",
+      "size": 29873
+    },
+    {
+      "path": "GlimmerEngine/Video/VideoDisplayInfo.swift",
+      "gitBlobSha": "d113d9724732e0c31bc63be67bd5883f9bc0dfad",
+      "size": 1125
+    },
+    {
+      "path": "Package.swift",
+      "gitBlobSha": "5e27a0fb61805eb0107e10f7617d45829fd2aaaf",
+      "size": 529
+    }
+  ],
+  "additionalBlobs": [
+    {
+      "path": "LICENSE",
+      "sha": "9cecc1d4669ee8af2ca727a5d8cde10cd8b2d7cc"
+    },
+    {
+      "path": "CREDITS.md",
+      "sha": "e333f522f2c9984162ce815b260e5786f513ccfa"
+    },
+    {
+      "path": "docs/SECURITY.md",
+      "sha": "f0661e40cf61842f0fa667b20b7ad53a09b10f0c"
+    }
+  ],
+  "host": {
+    "repository": "https://github.com/LizardByte/Sunshine",
+    "reviewedCommit": "3d6e1d6008bd4a24906283ab25fcd0becc0a1c07",
+    "bundled": false,
+    "note": "Separately installed upstream host; no Sunshine binary/code distributed in Mac app."
+  },
+  "modifiedFiles": [
+    "GlimmerEngine/Input/InputText.swift",
+    "GlimmerEngine/Input/StreamInput.swift",
+    "GlimmerEngine/Network/ControlTransport.swift",
+    "GlimmerEngine/Network/InputBatcher.swift",
+    "GlimmerEngine/Network/Network.swift",
+    "GlimmerEngine/Network/NetworkClient+Endpoints.swift",
+    "GlimmerEngine/Network/NetworkClient+Request.swift",
+    "GlimmerEngine/Network/Pairing.swift",
+    "GlimmerEngine/Network/RtspClient.swift",
+    "GlimmerEngine/Session/NativeBackend+Input.swift",
+    "GlimmerEngine/Session/NativeBackend.swift",
+    "GlimmerEngine/Session/StreamConnection+Configuration.swift",
+    "GlimmerEngine/Session/StreamSession+Connect.swift",
+    "GlimmerEngine/Session/StreamSession+Public.swift",
+    "GlimmerEngine/Video/VideoDecoder+Decode.swift"
+  ],
+  "newFiles": [
+    "GlimmerEngine/Protocol/StreamSecurityPolicy.swift",
+    "GlimmerEngine/Input/StreamInput+Desktop.swift",
+    "GlimmerEngine/Input/DesktopInputWire.swift"
+  ]
+}

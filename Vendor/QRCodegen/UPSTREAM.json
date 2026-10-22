@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/manuelbl/QrCodeGenerator",
+  "tag": "v2.0.7",
+  "commit": "f414417201fa7c639463730fe41099528f8026cb",
+  "origin": "MIT C# port of Project Nayuki QR Code generator",
+  "license": "MIT; unchanged full notices retained in all source files",
+  "files": {
+    "LICENSE": "0b779e4665125a151b77b93a636bfec5ceb2c9ce656408f46a4f312e80745c35",
+    "BitArrayExtensions.cs": "3d251ed5e8bc219282ef2c1a28c00ebd3eb546e82846c63725da6ffedd643107",
+    "DataTooLongException.cs": "0fcf3dec7d307265bdaf92886bc1beeb9abd207db362c95c1b9306643b574c66",
+    "Graphics.cs": "26ea42d86f3e9f6cb471b051131efaae851f6599a1011de09213c8de3218c22e",
+    "Objects.cs": "10762d33f8238270f45e075e6d834d73d8f1e0e86d93fe74e8e5c1c1db3cf479",
+    "QrCode.cs": "be98f1ff13e5620947b0d41a22842e5f677ac20b14a5aa392b3350ae4ab8a290",
+    "QrSegment.cs": "cf6517e00ba75dde2b1e04b370eb4f301871ff2c90def08e7d8b3069b1fa29f0",
+    "QrSegmentAdvanced.cs": "15a2bf6b59fe1ae1a5e3a658edb8172fcb6743804527381978026546b60a42ec",
+    "ReedSolomonGenerator.cs": "79ac2576b8794816c9dee19362570dd44008bdeef8c657d2ac443554cc7a5ede"
+  }
+}

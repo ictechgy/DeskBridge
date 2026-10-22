@@ -1,0 +1,7 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-3.0-only
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, '/usr/lib/deskbridge-linux')
+from ui import main
+main('/usr/lib/deskbridge-linux/SunshineDependency.json')

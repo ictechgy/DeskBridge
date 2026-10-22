@@ -1,0 +1,752 @@
+--- /dev/null
++++ b/GlimmerEngine/Input/DesktopInputWire.swift
+@@ -0,0 +1,53 @@
++// SPDX-License-Identifier: GPL-3.0-only
++// DeskBridge additions: ordered desktop input packet submission.
++import Foundation
++
++// Host dispatch evidence (read-only source verification; Windows runtime remains pending):
++// https://github.com/LizardByte/Sunshine/blob/3d6e1d6008bd4a24906283ab25fcd0becc0a1c07/src/stream.cpp#L779
++// https://github.com/LizardByte/Sunshine/blob/3d6e1d6008bd4a24906283ab25fcd0becc0a1c07/src/stream.cpp#L1308
++// https://github.com/LizardByte/Sunshine/blob/3d6e1d6008bd4a24906283ab25fcd0becc0a1c07/src/input.cpp#L2214
++// https://github.com/LizardByte/Sunshine/blob/3d6e1d6008bd4a24906283ab25fcd0becc0a1c07/src/input.cpp#L2240
++
++/// Real packet/channel seam: Sunshine dispatches input by payload type, not by ENet channel ID.
++/// Desktop text, keys and pointer edges share reliable channel 2 so network loss cannot reorder edits.
++public enum DesktopInputWire {
++    public enum Kind { case keyboard, mouse, text }
++    public static func channel(for kind: Kind, desktopOrdering: Bool) -> UInt8 {
++        if desktopOrdering { return Enet.ctrlChannelKeyboard }
++        switch kind {
++        case .keyboard: return Enet.ctrlChannelKeyboard
++        case .mouse: return Enet.ctrlChannelMouse
++        case .text: return Enet.ctrlChannelUtf8
++        }
++    }
++}
++
++/// One current text submission, preserving its accepted prefix across a local retry.
++/// This is a packet cursor, not another input queue; the existing desktop continuation owns later actions.
++public struct DesktopTextSubmission {
++    private var text: String?
++    private var packets: [[UInt8]] = []
++    private var next = 0
++    public init() {}
++    /// A cancelled logical commit must not lend its cursor to a later identical commit.
++    public mutating func abandon() {
++        text = nil
++        packets.removeAll(keepingCapacity: true)
++        next = 0
++    }
++    public mutating func submit(_ value: String, accept: ([UInt8]) -> Int32) -> Int32 {
++        if text != value {
++            text = value
++            packets = InputEncoder.utf8TextPackets(value)
++            next = 0
++        }
++        while next < packets.count {
++            let result = accept(packets[next])
++            guard result == 0 else { return result }
++            next += 1
++        }
++        abandon()
++        return 0
++    }
++}
++
+--- a/GlimmerEngine/Input/InputText.swift
++++ b/GlimmerEngine/Input/InputText.swift
+@@ -31,2 +31,3 @@
+-                core.record("LiSendUtf8TextEvent", backend.sendUtf8Text(text))
+-                return true
++                let result = backend.sendUtf8Text(text)
++                core.record("LiSendUtf8TextEvent", result)
++                return result == 0
+--- /dev/null
++++ b/GlimmerEngine/Input/StreamInput+Desktop.swift
+@@ -0,0 +1,113 @@
++// SPDX-License-Identifier: GPL-3.0-only
++// DeskBridge additions: ownership-aware desktop input over the existing encrypted uplink.
++import Foundation
++
++
++extension StreamInput {
++    /// Windows virtual key in 0...255. Keys are positional; the Mac adapter owns layout mapping.
++    @MainActor public func setKey(_ virtualKey: UInt16, pressed: Bool, modifiers: UInt8 = 0,
++                                   capturedAt: TimeInterval) {
++        guard virtualKey <= 255 else { return }
++        if desktopTextTask != nil {
++            desktopEvents.append { [weak self] in
++                self?.setKey(virtualKey, pressed: pressed, modifiers: modifiers, capturedAt: capturedAt)
++            }
++            return
++        }
++        core.withLock {
++            guard accepts(capturedAt) else { return }
++            defer { scheduleReconciliation() }
++            (core.backend as? NativeBackend)?.enableDesktopInputOrdering()
++            let key = VKScanCode(vk: Int16(virtualKey))
++            if pressed {
++                guard core.flushReleases() else { return }
++                guard !core.releases.held.contains(.key(key)) else { return }
++                let result = core.backend?.sendKeyboard(keyCode: key.wireCode,
++                    action: Int8(StreamProtocol.KEY_ACTION_DOWN), modifiers: Int8(bitPattern: modifiers), flags: 0) ?? -2
++                core.record("desktop key down", result)
++                if result == 0 { core.releases.hold(.key(key)) }
++            } else {
++                // Record every owned release before retrying older releases. Otherwise an
++                // older rejected key up can discard this key up and leave its key held.
++                core.releases.release(.key(key), modifiers: Int8(bitPattern: modifiers))
++                _ = core.flushReleases()
++            }
++        }
++    }
++
++    /// Host pixels within the displayed image; finite coordinates are clamped to the host rectangle.
++    public func positionPointer(x: Double, y: Double, width: Int, height: Int, capturedAt: TimeInterval) {
++        core.withLock {
++            guard accepts(capturedAt), x.isFinite, y.isFinite,
++                  (1...32767).contains(width), (1...32767).contains(height) else { return }
++            (core.backend as? NativeBackend)?.enableDesktopInputOrdering()
++            guard core.flushReleases() else { return }
++            let result = core.backend?.sendMousePosition(x: Int16(max(0, min(Double(width - 1), x))),
++                y: Int16(max(0, min(Double(height - 1), y))), refW: Int16(width), refH: Int16(height)) ?? -2
++            core.record("desktop absolute pointer", result)
++        }
++    }
++
++    /// Text commits are bounded and ordered before later keys, including rejected-packet retries.
++    @MainActor public func commitText(_ value: String, capturedAt: TimeInterval) {
++        let text = InputText.prepared(value)
++        guard !text.isEmpty, core.withLock({ accepts(capturedAt) }) else { return }
++        if desktopTextTask != nil {
++            desktopEvents.append { [weak self] in self?.commitText(text, capturedAt: capturedAt) }
++            return
++        }
++        let attempt = core.withLock { () -> UUID? in
++            if let native = core.backend as? NativeBackend {
++                native.enableDesktopInputOrdering()
++                // This is a new logical commit. InputText's internal retries bypass this reset.
++                native.readyBatcher()?.abandonTextSubmission()
++            }
++            let held = core.releases.held.filter { if case .key = $0 { return true }; return false }
++            for key in held { core.releases.release(key) }
++            _ = core.flushReleases()
++            return activeAttempt
++        }
++        let token = UUID()
++        desktopTextGeneration = token
++        desktopTextTask = InputText.send(text, core: core, waitForRelease: false,
++            isCurrent: { [weak self] in
++                guard let self else { return false }
++                return self.core.withLock { self.activeAttempt == attempt && self.accepts(capturedAt) }
++            }, flushReleases: { [weak self] in self?.core.withLock { self?.core.flushReleases() ?? false } ?? false },
++            finished: { [weak self] in
++                guard let self, self.desktopTextGeneration == token else { return }
++                self.desktopTextTask = nil
++                let queued = self.desktopEvents
++                self.desktopEvents.removeAll()
++                for event in queued { event() }
++            })
++    }
++
++    /// Reuse the existing text continuation FIFO for a click/caret action after a pending commit.
++    @MainActor public func afterDesktopText(capturedAt: TimeInterval, _ action: @escaping @MainActor () -> Void) {
++        let attempt = core.withLock { activeAttempt }
++        let guarded: @MainActor () -> Void = { [weak self] in
++            guard let self, self.core.withLock({ self.activeAttempt == attempt && self.accepts(capturedAt) }) else { return }
++            action()
++        }
++        if desktopTextTask != nil {
++            // Re-enter at replay: an earlier queued commit may have opened another acceptance wait.
++            desktopEvents.append { [weak self] in self?.afterDesktopText(capturedAt: capturedAt, guarded) }
++        } else { guarded() }
++    }
++
++    /// The native view invokes this before focus is lost or its window closes.
++    @MainActor public func releaseDesktopInput() {
++        desktopTextGeneration = UUID()
++        desktopTextTask?.cancel()
++        desktopTextTask = nil
++        desktopEvents.removeAll()
++        setFocused(false)
++        // The task is cancelled and its continuations revoked before the owned send cursor resets.
++        let batcher = core.withLock { () -> InputBatcher? in
++            guard let native = core.backend as? NativeBackend else { return nil }
++            return native.withState { native.inputBatcher }
++        }
++        batcher?.abandonTextSubmission()
++    }
++}
+--- a/GlimmerEngine/Input/StreamInput.swift
++++ b/GlimmerEngine/Input/StreamInput.swift
+@@ -18,0 +19,3 @@
++    @MainActor var desktopTextGeneration = UUID()
++    @MainActor var desktopTextTask: Task<Void, Never>?
++    @MainActor var desktopEvents: [@MainActor () -> Void] = []
+--- a/GlimmerEngine/Network/ControlTransport.swift
++++ b/GlimmerEngine/Network/ControlTransport.swift
+@@ -37,0 +38,8 @@
++            }
++        }
++
++        func detach() -> NWConnection? {
++            state.withLock { state in
++                let connection = state.connection
++                state.connection = nil
++                return connection
+@@ -125,0 +134 @@
++        private var backstop: DispatchWorkItem?
+@@ -135,0 +145 @@
++            guard let pinnedCertPEM = credential.pinnedCertPEM else { throw StreamError.crypto("TLS control requests require a pinned host certificate") }
+@@ -145,5 +155,2 @@
+-            let pinned = try credential.pinnedCertPEM.map { pem in
+-                _ = try PEM.certificateKey(pem, context: "paired PC certificate")
+-                guard let der = PEM.der(pem) else { throw StreamError.crypto("could not parse pinned host cert") }
+-                return der
+-            }
++            _ = try PEM.certificateKey(pinnedCertPEM, context: "paired PC certificate")
++            guard let pinned = PEM.der(pinnedCertPEM) else { throw StreamError.crypto("could not parse pinned host cert") }
+@@ -173 +180 @@
+-                queue.async { [self] in
++                queue.async { [self, connection] in
+@@ -178 +185,4 @@
+-                    connection.stateUpdateHandler = { [self] state in handle(state, on: connection) }
++                    connection.stateUpdateHandler = { [weak self, weak connection] state in
++                        guard let self, let connection else { return }
++                        handle(state, on: connection)
++                    }
+@@ -180,3 +190,3 @@
+-                    let backstop = max(0, lifetime.deadline.timeIntervalSinceNow) + backstopGrace
+-                    queue.asyncAfter(deadline: .now() + backstop) { [self] in
+-                        finish(.failure(StreamError.hostUnreachable("Control request timed out.")), closing: connection)
++                    let delay = max(0, lifetime.deadline.timeIntervalSinceNow) + backstopGrace
++                    let work = DispatchWorkItem { [weak self, weak connection] in
++                        self?.finish(.failure(StreamError.hostUnreachable("Control request timed out.")), closing: connection)
+@@ -183,0 +194,2 @@
++                    backstop = work
++                    queue.asyncAfter(deadline: .now() + delay, execute: work)
+@@ -209,6 +221,2 @@
+-                    if let data, try reply.append(data) {
+-                        return finish(.success(try parse(reply.bytes)), closing: connection)
+-                    }
+-                    // The PC's close ends the reply; a body short of Content-Length is truncated.
+-                    if done || error != nil {
+-                        return finish(.success(try parse(reply.finish())), closing: connection)
++                    if let raw = try reply.receive(data, done: done, error: error.map { failure($0) }) {
++                        return finish(.success(try parse(raw)), closing: connection)
+@@ -236,0 +245,6 @@
++            backstop?.cancel()
++            backstop = nil
++            let owned = lifetime.detach()
++            owned?.stateUpdateHandler = nil
++            connection?.stateUpdateHandler = nil
++            owned?.cancel()
+@@ -249,0 +264 @@
++        guard let pinnedDER, SecCertificateCopyData(certificate) as Data == pinnedDER else { return false }
+@@ -251 +266 @@
+-        return pinnedDER.map { SecCertificateCopyData(certificate) as Data == $0 } ?? true
++        return true
+@@ -275,0 +291,7 @@
++
++        /// A transport error is never a clean close, even without Content-Length.
++        mutating func receive(_ chunk: Data?, done: Bool, error: Error?) throws -> Data? {
++            if let error { throw error }
++            if let chunk, try append(chunk) { return bytes }
++            return done ? try finish() : nil
++        }
+@@ -302 +324 @@
+-    /// the PC's close; the last matching line wins, and nil (also for an empty or negative value) = no header.
++    /// the PC's close. Invalid or conflicting lengths are rejected rather than treated as absent.
+@@ -309,4 +331,8 @@
+-        for line in head.split(separator: "\r\n") where line.lowercased().hasPrefix("content-length:") {
+-            let parts = line.split(separator: ":", maxSplits: 1)
+-            let value = parts.count == 2 ? Int(parts[1].trimmingCharacters(in: .whitespaces)) : nil
+-            length = value.flatMap { $0 >= 0 ? $0 : nil }
++        for line in head.split(separator: "\r\n") {
++            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
++            guard parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length" else { continue }
++            guard parts.count == 2, parts[0].lowercased() == "content-length" else { throw StreamError.hostUnreachable("malformed Content-Length header") }
++            let text = parts[1].trimmingCharacters(in: .whitespaces)
++            guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }), let value = Int(text),
++                  length == nil || length == value else { throw StreamError.hostUnreachable("invalid or conflicting Content-Length") }
++            length = value
+@@ -319 +345 @@
+-    private static func parse(_ raw: Data) throws -> Response {
++    package static func parse(_ raw: Data) throws -> Response {
+@@ -336 +362,4 @@
+-        let body = Data(raw[sep.upperBound...])
++        let length = try contentLengthHeader(in: Data(raw[raw.startIndex..<sep.lowerBound]))
++        let available = raw.count - sep.upperBound
++        if let length, available < length { throw StreamError.truncatedRead("connection closed before Content-Length satisfied") }
++        let body = Data(raw[sep.upperBound..<(sep.upperBound + (length ?? available))])
+--- a/GlimmerEngine/Network/InputBatcher.swift
++++ b/GlimmerEngine/Network/InputBatcher.swift
+@@ -37,0 +38,2 @@
++    // Only the owned send thread touches the current text packet cursor.
++    private var textSubmission = DesktopTextSubmission()
+@@ -50,0 +53 @@
++    private var relMouseChannel = Enet.ctrlChannelMouse
+@@ -62,0 +66 @@
++    private var absMouseChannel = Enet.ctrlChannelMouse
+@@ -160 +164 @@
+-    func accumulateMouseMove(dx: Int16, dy: Int16) -> Int32 {
++    func accumulateMouseMove(dx: Int16, dy: Int16, channel: UInt8 = Enet.ctrlChannelMouse) -> Int32 {
+@@ -168 +172,9 @@
+-            if self.absMouseDirty { self.flushAbsoluteMouse(tracker: self.tracker()) }
++            if self.absMouseDirty, !self.flushAbsoluteMouse(tracker: self.tracker()) {
++                self.armFlush()
++                return InputBatcherResult.sendFailed
++            }
++            if self.relMouseDirty && self.relMouseChannel != channel,
++               !self.flushRelativeMouse(tracker: self.tracker()) {
++                self.armFlush()
++                return InputBatcherResult.sendFailed
++            }
+@@ -172,0 +185 @@
++            self.relMouseChannel = channel
+@@ -180 +193 @@
+-    func setAbsMouse(x: Int16, y: Int16, refW: Int16, refH: Int16) -> Int32 {
++    func setAbsMouse(x: Int16, y: Int16, refW: Int16, refH: Int16, channel: UInt8 = Enet.ctrlChannelMouse) -> Int32 {
+@@ -188 +201,9 @@
+-            if self.relMouseDirty { self.flushRelativeMouse(tracker: self.tracker()) }
++            if self.relMouseDirty, !self.flushRelativeMouse(tracker: self.tracker()) {
++                self.armFlush()
++                return InputBatcherResult.sendFailed
++            }
++            if self.absMouseDirty && self.absMouseChannel != channel,
++               !self.flushAbsoluteMouse(tracker: self.tracker()) {
++                self.armFlush()
++                return InputBatcherResult.sendFailed
++            }
+@@ -196,0 +218 @@
++            self.absMouseChannel = channel
+@@ -307 +329 @@
+-            flushLocked()
++            guard flushLocked() else { return InputBatcherResult.sendFailed }
+@@ -324,7 +346,7 @@
+-            self.flushLocked()
+-            _ = self.enet?.sendInputPacket(plaintext, channel: channel)
+-            return InputBatcherResult.ok
+-        }
+-    }
+-
+-    /// Pass-through that sends TWO packets atomically in order (controller arrival
++            guard self.flushLocked() else { return InputBatcherResult.sendFailed }
++            return self.enet?.sendInputPacket(plaintext, channel: channel) == true
++                ? InputBatcherResult.ok : InputBatcherResult.sendFailed
++        }
++    }
++
++    /// Pass-through that submits TWO packets in order (controller arrival
+@@ -339,8 +361,10 @@
+-            self.flushLocked()
+-            _ = self.enet?.sendInputPacket(first, channel: channel)
+-            _ = self.enet?.sendInputPacket(second, channel: channel)
+-            return InputBatcherResult.ok
+-        }
+-    }
+-
+-    func passThroughText(_ text: String) -> Int32 {
++            guard self.flushLocked(),
++                  self.enet?.sendInputPacket(first, channel: channel) == true else {
++                return InputBatcherResult.sendFailed
++            }
++            return self.enet?.sendInputPacket(second, channel: channel) == true
++                ? InputBatcherResult.ok : InputBatcherResult.sendFailed
++        }
++    }
++
++    func passThroughText(_ text: String, channel: UInt8 = Enet.ctrlChannelUtf8) -> Int32 {
+@@ -350,3 +374,10 @@
+-            for packet in InputEncoder.utf8TextPackets(text) {
+-                _ = passThrough(packet, channel: Enet.ctrlChannelUtf8)
+-            }
++            return textSubmission.submit(text) { packet in
++                passThrough(packet, channel: channel)
++            }
++        }
++    }
++
++    /// The desktop owner starts/abandons logical commits; retries keep this cursor untouched.
++    func abandonTextSubmission() {
++        _ = queue.sync {
++            textSubmission.abandon()
+@@ -365 +396 @@
+-        guard !flushArmed else { return }
++        guard !stopped.load(ordering: .relaxed), !flushArmed else { return }
+@@ -373,0 +405 @@
++        guard !stopped.load(ordering: .relaxed) else { return }
+@@ -390 +422 @@
+-        flushLocked()
++        _ = flushLocked()
+@@ -395 +427 @@
+-    private func flushLocked() {
++    private func flushLocked() -> Bool {
+@@ -397 +429,3 @@
+-        guard hasPendingState, let enet else { return }
++        guard hasPendingState else { return true }
++        guard let enet else { return false }
++        defer { if hasPendingState { armFlush() } }
+@@ -409,2 +443,2 @@
+-        if relMouseDirty { flushRelativeMouse(tracker: latencyTracker) }
+-        if absMouseDirty { flushAbsoluteMouse(tracker: latencyTracker) }
++        if relMouseDirty, !flushRelativeMouse(tracker: latencyTracker) { return false }
++        if absMouseDirty, !flushAbsoluteMouse(tracker: latencyTracker) { return false }
+@@ -414 +448 @@
+-            flushController(slot, tracker: latencyTracker)
++            guard flushController(slot, tracker: latencyTracker) else { return false }
+@@ -440 +474 @@
+-                    _ = enet.sendInputPacket(plaintext, channel: channel)
++                    guard enet.sendInputPacket(plaintext, channel: channel) else { return false }
+@@ -450,3 +484,4 @@
+-            }
+-            motionDirtyCount = 0
+-        }
++                motionDirtyCount -= 1
++            }
++        }
++        return true
+@@ -520,2 +555,2 @@
+-    private func flushRelativeMouse(tracker: FrameTimingTracker?) {
+-        guard let enet else { return }
++    private func flushRelativeMouse(tracker: FrameTimingTracker?) -> Bool {
++        guard let enet else { return false }
+@@ -523 +557,0 @@
+-        relTimings.removeAll(keepingCapacity: true)
+@@ -527,19 +561,3 @@
+-            let chunkX: Int16
+-            if relMouseDX < Int(Int16.min) {
+-                chunkX = Int16.min; relMouseDX -= Int(Int16.min)
+-            } else if relMouseDX > Int(Int16.max) {
+-                chunkX = Int16.max; relMouseDX -= Int(Int16.max)
+-            } else {
+-                chunkX = Int16(relMouseDX); relMouseDX = 0
+-            }
+-
+-            let chunkY: Int16
+-            if relMouseDY < Int(Int16.min) {
+-                chunkY = Int16.min; relMouseDY -= Int(Int16.min)
+-            } else if relMouseDY > Int(Int16.max) {
+-                chunkY = Int16.max; relMouseDY -= Int(Int16.max)
+-            } else {
+-                chunkY = Int16(relMouseDY); relMouseDY = 0
+-            }
+-
+-            _ = enet.sendInputPacket(
++            let chunkX = Int16(clamping: relMouseDX)
++            let chunkY = Int16(clamping: relMouseDY)
++            guard enet.sendInputPacket(
+@@ -547 +565,6 @@
+-                channel: Enet.ctrlChannelMouse, timing: timing)
++                channel: relMouseChannel, timing: timing) else { return false }
++            // Accepted chunks are committed exactly once; a later rejection retains
++            // only the remainder. Timing samples follow the first accepted chunk.
++            relMouseDX -= Int(chunkX)
++            relMouseDY -= Int(chunkY)
++            relTimings.removeAll(keepingCapacity: true)
+@@ -549,0 +573 @@
++        relTimings.removeAll(keepingCapacity: true)
+@@ -553,0 +578 @@
++        return true
+@@ -558,2 +583,2 @@
+-    private func flushAbsoluteMouse(tracker: FrameTimingTracker?) {
+-        guard let enet else { return }
++    private func flushAbsoluteMouse(tracker: FrameTimingTracker?) -> Bool {
++        guard let enet else { return false }
+@@ -561 +586 @@
+-        _ = enet.sendInputPacket(
++        guard enet.sendInputPacket(
+@@ -564 +589 @@
+-            channel: Enet.ctrlChannelMouse, timing: timing)
++            channel: absMouseChannel, timing: timing) else { return false }
+@@ -569,0 +595 @@
++        return true
+--- a/GlimmerEngine/Network/Network.swift
++++ b/GlimmerEngine/Network/Network.swift
+@@ -267,0 +268,19 @@
++    /// Provisional pairing pins belong to an isolated client. Failure/cancellation cannot
++    /// change the caller's trust, and concurrent replacement cannot be overwritten at commit.
++    package func confirmPairing(_ prove: @Sendable (NetworkClient) async throws -> ServerInfo) async throws -> ServerInfo {
++        try Task.checkCancellation()
++        let previous = server
++        let candidate = freshClient(for: previous)
++        let verified = try await prove(candidate)
++        try Task.checkCancellation()
++        guard server.address == previous.address, server.uniqueId == previous.uniqueId,
++              server.serverCertPEM == previous.serverCertPEM else { throw CancellationError() }
++        guard verified.address == previous.address, !verified.uniqueId.isEmpty,
++              previous.uniqueId.isEmpty || verified.uniqueId == previous.uniqueId,
++              verified.pairStatus == .paired, let pin = verified.serverCertPEM,
++              previous.serverCertPEM == nil || previous.serverCertPEM == pin else { throw StreamError.pairingRejected }
++        _ = try PEM.certificateKey(pin, context: "paired PC certificate")
++        server = verified
++        return verified
++    }
++
+--- a/GlimmerEngine/Network/NetworkClient+Endpoints.swift
++++ b/GlimmerEngine/Network/NetworkClient+Endpoints.swift
+@@ -49 +49 @@
+-                    if let probe = try? await rawRequest(path: "serverinfo",
++                    let probe = try? await rawRequest(path: "serverinfo",
+@@ -53 +53,3 @@
+-                                                  timeout: 3),
++                                                  timeout: 3)
++                    try Task.checkCancellation()
++                    if let probe,
+@@ -277,12 +279,2 @@
+-        let gcmKey: Data
+-        if let hex = xml.string(forChild: "gcmkey"), let bytes = Self.hexDecode(hex) {
+-            gcmKey = bytes
+-        } else {
+-            gcmKey = riKey
+-        }
+-        let gcmKeyId: Data
+-        if let hex = xml.string(forChild: "gcmkeyid"), let bytes = Self.hexDecode(hex) {
+-            gcmKeyId = bytes
+-        } else {
+-            gcmKeyId = riKeyIV
+-        }
++        let gcmKey = try Self.sessionKeyField(xml.string(forChild: "gcmkey"), fallback: riKey)
++        let gcmKeyId = try Self.sessionKeyField(xml.string(forChild: "gcmkeyid"), fallback: riKeyIV)
+@@ -292,0 +285,11 @@
++    }
++
++    /// Absent legacy fields use the input key; present malformed material must never
++    /// silently select a different key than the host returned. AES key and IV are 128 bits.
++    static func sessionKeyField(_ value: String?, fallback: Data) throws -> Data {
++        guard let value else {
++            guard fallback.count == 16 else { throw StreamConnection.Failure.invalidSessionKey }
++            return fallback
++        }
++        guard let bytes = hexDecode(value), bytes.count == 16 else { throw StreamConnection.Failure.invalidSessionKey }
++        return bytes
+--- a/GlimmerEngine/Network/NetworkClient+Request.swift
++++ b/GlimmerEngine/Network/NetworkClient+Request.swift
+@@ -98 +98 @@
+-            // Preserve /launch's reply for ownership and late-success cleanup.
++            // Preserve launch-like replies for ownership and late-success cleanup.
+@@ -100 +100 @@
+-            if path == "launch" {
++            if path == "launch" || path == "resume" {
+--- a/GlimmerEngine/Network/Pairing.swift
++++ b/GlimmerEngine/Network/Pairing.swift
+@@ -31,8 +31,9 @@
+-        _ = try await runPairingFlow(pin: pin)
+-        let verified = try await network.fetchServerInfo(requiredUniqueId: expectedUniqueId)
+-        try Task.checkCancellation()
+-        return verified
+-    }
+-
+-    /// The Mac shell checks cancellation between the handshake and its pinned identity request.
+-    /// It must verify /serverinfo before persisting this provisional result.
++        let initial = server
++        return try await network.confirmPairing { candidate in
++            let pairing = PairingClient(network: candidate, server: initial)
++            _ = try await pairing.runPairingFlow(pin: pin)
++            return try await candidate.fetchServerInfo(requiredUniqueId: expectedUniqueId)
++        }
++    }
++
++    /// Package callers use the same identity check and atomic trust publication as the public API.
+@@ -40 +41 @@
+-        try await runPairingFlow(pin: pin)
++        try await pair(pin: pin, expectedUniqueId: server.uniqueId)
+--- a/GlimmerEngine/Network/RtspClient.swift
++++ b/GlimmerEngine/Network/RtspClient.swift
+@@ -113,0 +114,3 @@
++    /// Host-originated counter is independent of encryptionSeq and may skip after a retry.
++    /// Commit only an authenticated response bound to the current request. Never reset within this instance.
++    private(set) var lastHostEncryptionSeq: UInt32?
+@@ -155 +158 @@
+-        self.encryptedRtspEnabled = rtspTargetUrl.lowercased().contains("rtspenc://")
++        self.encryptedRtspEnabled = URLComponents(string: rtspTargetUrl)?.scheme?.lowercased() == "rtspenc"
+@@ -187,0 +191,2 @@
++        // Reject a malformed local transaction before opening its transport.
++        _ = try Self.transactionCSeq(request)
+@@ -191,2 +196,24 @@
+-        let responseBytes = encryptedRtspEnabled ? try unsealRtsp(responseData) : responseData
+-        guard let response = RtspMessage.parseResponse(responseBytes) else {
++        return try decodeResponse(responseData, for: request)
++    }
++
++    /// Validate the actual transaction without network side effects. Sequence state is committed only after
++    /// both AEAD authentication and CSeq binding succeed, so a malformed response cannot consume it.
++    func decodeResponse(_ responseData: Data, for request: RtspMessage) throws -> RtspMessage {
++        let expectedCSeq = try Self.transactionCSeq(request)
++        let responseBytes: Data
++        let hostSequence: UInt32?
++        if encryptedRtspEnabled {
++            let opened = try unsealRtsp(responseData)
++            responseBytes = opened.plaintext
++            hostSequence = opened.sequence
++            if let previous = lastHostEncryptionSeq, opened.sequence <= previous {
++                throw RtspError.badResponse("replayed or older encrypted RTSP response")
++            }
++        } else {
++            responseBytes = responseData
++            hostSequence = nil
++        }
++        guard responseBytes.starts(with: Data("RTSP/1.0 ".utf8)),
++              responseBytes.range(of: Data("\r\n\r\n".utf8)) != nil,
++              let response = RtspMessage.parseResponse(responseBytes),
++              (100...999).contains(response.statusCode) else {
+@@ -194,0 +222,4 @@
++        guard try Self.transactionCSeq(response) == expectedCSeq else {
++            throw RtspError.badResponse("RTSP response CSeq does not match request")
++        }
++        if let hostSequence { lastHostEncryptionSeq = hostSequence }
+@@ -195,0 +227,13 @@
++    }
++
++    /// RTSP field names are case-insensitive. Require one unsigned decimal CSeq; tolerate legal surrounding
++    /// horizontal whitespace and leading zeroes, but never signs, duplicate fields or embedded whitespace.
++    private static func transactionCSeq(_ message: RtspMessage) throws -> UInt64 {
++        let values = message.headers.filter { $0.0.lowercased() == "cseq" }.map(\.1)
++        guard values.count == 1 else { throw RtspError.badResponse("missing or duplicate RTSP CSeq") }
++        let value = values[0].trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
++        guard !value.isEmpty, value.utf8.allSatisfy({ (0x30...0x39).contains($0) }),
++              let sequence = UInt64(value), sequence > 0 else {
++            throw RtspError.badResponse("malformed RTSP CSeq")
++        }
++        return sequence
+@@ -224,3 +268,3 @@
+-    /// Parse + decrypt an encrypted RTSP response. Rejects unencrypted or
+-    /// partial/excess frames exactly like unsealRtspMessage.
+-    func unsealRtsp(_ raw: Data) throws -> Data {
++    /// Authenticate an encrypted frame before its sequence can influence state. The caller binds CSeq and
++    /// commits the independent host counter. Reject unencrypted or partial/excess frames.
++    private func unsealRtsp(_ raw: Data) throws -> (plaintext: Data, sequence: UInt32) {
+@@ -252 +296 @@
+-        return try AES.GCM.open(box, using: key)
++        return (try AES.GCM.open(box, using: key), seq)
+@@ -391,0 +436,2 @@
++        // DeskBridge: reject plaintext signalling before the first socket transaction.
++        try StreamSecurityPolicy.validateSignalling(url: rtspTargetUrl)
+@@ -422,3 +468,3 @@
+-        result.encryptionFeaturesEnabled = Self.computeEncryptionEnabled(
+-            supported: result.encryptionFeaturesSupported,
+-            requested: SdpScan.attributeUInt(sdp, "x-ss-general.encryptionRequested") ?? 0)
++        // DeskBridge requires every channel even when the host makes encryption optional.
++        result.encryptionFeaturesEnabled = try StreamSecurityPolicy.negotiatedFeatures(
++            supported: result.encryptionFeaturesSupported)
+--- /dev/null
++++ b/GlimmerEngine/Protocol/StreamSecurityPolicy.swift
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: GPL-3.0-only
++// DeskBridge additions to Glimmer rc.12. No plaintext streaming fallback.
++import Foundation
++
++public enum StreamSecurityPolicy {
++    public static let requiredFeatures: UInt32 = 0x07 // control V2, video GCM, audio CBC
++    public enum Failure: Error, LocalizedError {
++        case plaintextSignalling, missingEncryption(UInt32)
++        public var errorDescription: String? {
++            switch self {
++            case .plaintextSignalling: "The PC did not offer encrypted streaming signalling. Update Sunshine and enable encryption."
++            case .missingEncryption: "The PC does not support all required stream encryption channels. Update Sunshine."
++            }
++        }
++    }
++    public static func validateSignalling(url: String) throws {
++        guard URLComponents(string: url)?.scheme?.lowercased() == "rtspenc" else {
++            throw Failure.plaintextSignalling
++        }
++    }
++    public static func negotiatedFeatures(supported: UInt32) throws -> UInt32 {
++        let missing = requiredFeatures & ~supported
++        guard missing == 0 else { throw Failure.missingEncryption(missing) }
++        return requiredFeatures
++    }
++}
+--- a/GlimmerEngine/Session/NativeBackend+Input.swift
++++ b/GlimmerEngine/Session/NativeBackend+Input.swift
+@@ -67,0 +68,5 @@
++    func enableDesktopInputOrdering() { withState { desktopInputOrdering = true } }
++    private func inputChannel(_ kind: DesktopInputWire.Kind) -> UInt8 {
++        DesktopInputWire.channel(for: kind, desktopOrdering: withState { desktopInputOrdering })
++    }
++
+@@ -72 +77 @@
+-            channel: Enet.ctrlChannelKeyboard)
++            channel: inputChannel(.keyboard))
+@@ -79 +84 @@
+-        return batcher.accumulateMouseMove(dx: dx, dy: dy)
++        return batcher.accumulateMouseMove(dx: dx, dy: dy, channel: inputChannel(.mouse))
+@@ -83 +88,2 @@
+-        // Merged: latest-only per tick.
++        // Coalesce obsolete positions even in desktop mode. The pending slot keeps
++        // the shared reliable channel, and key/button/text barriers drain it first.
+@@ -85 +91 @@
+-        return batcher.setAbsMouse(x: x, y: y, refW: refW, refH: refH)
++        return batcher.setAbsMouse(x: x, y: y, refW: refW, refH: refH, channel: inputChannel(.mouse))
+@@ -91 +97 @@
+-            channel: Enet.ctrlChannelMouse)
++            channel: inputChannel(.mouse))
+@@ -95 +101 @@
+-        dispatchInput(InputEncoder.scroll(amount), channel: Enet.ctrlChannelMouse)
++        dispatchInput(InputEncoder.scroll(amount), channel: inputChannel(.mouse))
+@@ -101 +107 @@
+-        dispatchInput(InputEncoder.hscroll(amount), channel: Enet.ctrlChannelMouse)
++        dispatchInput(InputEncoder.hscroll(amount), channel: inputChannel(.mouse))
+@@ -154 +160 @@
+-        return batcher.passThroughText(text)
++        return batcher.passThroughText(text, channel: inputChannel(.text))
+--- a/GlimmerEngine/Session/NativeBackend.swift
++++ b/GlimmerEngine/Session/NativeBackend.swift
+@@ -32,0 +33,2 @@
++    // DeskBridge desktop edits share one reliable channel; game/controller defaults remain unchanged.
++    var desktopInputOrdering = false
+--- a/GlimmerEngine/Session/StreamConnection+Configuration.swift
++++ b/GlimmerEngine/Session/StreamConnection+Configuration.swift
+@@ -38 +38 @@
+-                colorSpace: request.colorSpace.cValue, colorRange: request.colorRange.cValue, encryptionFlags: 0,
++                colorSpace: request.colorSpace.cValue, colorRange: request.colorRange.cValue, encryptionFlags: Int32(StreamSecurityPolicy.requiredFeatures),
+--- a/GlimmerEngine/Session/StreamSession+Connect.swift
++++ b/GlimmerEngine/Session/StreamSession+Connect.swift
+@@ -107 +107 @@
+-            encryptionFlags: 0,
++            encryptionFlags: Int32(StreamSecurityPolicy.requiredFeatures),
+--- a/GlimmerEngine/Session/StreamSession+Public.swift
++++ b/GlimmerEngine/Session/StreamSession+Public.swift
+@@ -6,0 +7,21 @@
++    /// The embedding client supplies native power/wake operations; engine lifecycle owns their balance.
++    public struct Lifecycle: Sendable {
++        let beginActivity: @Sendable () -> Void
++        let endActivity: @Sendable () -> Void
++        let refreshActivity: @Sendable (Bool) -> Void
++        let armWake: @Sendable (@escaping @Sendable () -> Void) -> Void
++        let stopWake: @Sendable () -> Void
++
++        public init(beginActivity: @escaping @Sendable () -> Void = {},
++                    endActivity: @escaping @Sendable () -> Void = {},
++                    refreshActivity: @escaping @Sendable (Bool) -> Void = { _ in },
++                    armWake: @escaping @Sendable (@escaping @Sendable () -> Void) -> Void = { _ in },
++                    stopWake: @escaping @Sendable () -> Void = {}) {
++            self.beginActivity = beginActivity
++            self.endActivity = endActivity
++            self.refreshActivity = refreshActivity
++            self.armWake = armWake
++            self.stopWake = stopWake
++        }
++    }
++
+@@ -52 +73 @@
+-                                       diagnosticsDirectory: URL? = nil)
++                                       diagnosticsDirectory: URL? = nil, lifecycle: Lifecycle = Lifecycle())
+@@ -56,0 +78,6 @@
++        var services = SessionServices.recording(directory: diagnosticsDirectory)
++        services.beginActivity = lifecycle.beginActivity
++        services.endActivity = lifecycle.endActivity
++        services.refreshActivity = lifecycle.refreshActivity
++        services.armWake = lifecycle.armWake
++        services.stopWake = lifecycle.stopWake
+@@ -58 +85 @@
+-            services: .recording(directory: diagnosticsDirectory), backend: NativeBackend(),
++            services: services, backend: NativeBackend(),
+--- a/GlimmerEngine/Video/VideoDecoder+Decode.swift
++++ b/GlimmerEngine/Video/VideoDecoder+Decode.swift
+@@ -70,0 +71,3 @@
++        // In-place reconnect reuses this decoder after stop/cleanup. Rearm on
++        // its serial queue before accepting frames for the new transport.
++        decodeQueue.sync { self.didFireFirstDecodedFrame = false }

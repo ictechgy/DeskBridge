@@ -1,0 +1,11 @@
+.build/
+build/
+Build/
+dist/
+evidence/
+.DS_Store
+__pycache__/
+*.xcuserstate
+.omx/artifacts/
+.omc/
+

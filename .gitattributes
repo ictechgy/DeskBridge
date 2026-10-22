@@ -1,0 +1,2 @@
+# Preserve exact upstream source/license bytes across Windows checkouts.
+/Vendor/** -text

@@ -1,0 +1,130 @@
+# Design
+
+## Source of truth
+- Status: Active
+- Last refreshed: 2026-10-22
+- Primary product surfaces: native macOS host connection, fullscreen desktop, SFTP file browser, Mac sharing setup, Windows sharing/client role chooser, drag-to-Applications Mac package.
+- Evidence reviewed: conversation requirements; pinned GlimmerEngine source; .omx/plans/deskbridge-v0.1.md; user-approved Concept A (Quiet Sidebar), selected 2026-10-19.
+- Approved visual references: ../design-concepts/previews/a-{desktop,files,setup}-window.png in the local deliverable; immutable copies under .omx/artifacts/visual-ralph/quiet-sidebar. Reproduce native synthetic snapshots with scripts/render_visual_fixture.py. No Local Media UI or existing user settings inspected.
+
+## Brand
+- Personality: calm, practical work tool.
+- Trust signals: explicit pairing, independent SSH host key, truthful connection/error status.
+- Avoid: gaming jargon, fake performance/security badges, gradients/decorative dashboards.
+
+## Product goals
+- Goals: Windows as one normal fullscreen Mac Space; Windows opening a logged-in Mac desktop; keyboard-first work; direct encrypted connection; explicit both-way files in the existing Mac-to-Windows file workflow.
+- Non-goals: cloud broker, account signup, games/controllers, automatic clipboard sync, telemetry, auto updater.
+- Success signals: connect → pair → select Desktop → fullscreen; connect files → browse → send/receive with progress.
+
+## Personas and jobs
+- Primary persona: Korean-speaking developer using Mac + Windows11 Home on one monitor.
+- Jobs: switch OS context with Mission Control; use editor/terminal; transfer chosen files.
+- Context: private Wi-Fi or existing Tailscale, first host setup required.
+
+## Information architecture
+- Primary navigation: Mac sidebar Windows desktop / Linux desktop / Files / Share this Mac / Setup. Windows explicitly chooses sharing Windows, opening Mac, or opening Linux.
+- Core screens: host address and PIN pairing; paired application list; file credentials/browser/transfers; honest setup instructions.
+- Hierarchy: branded sidebar and saved-PC footer; page heading; host card with Windows 열기; grouped screen settings; collapsed connection details. Files use a path/action toolbar, full-width remote list and a separate SSH disclosure. Setup uses three numbered panels.
+
+## Design principles
+- Native macOS behavior: real fullscreen Space and native controls.
+- Explicit trust: never silently accept changed certificates or SSH host keys.
+- Low friction after setup: office defaults, no global shortcut hijacking.
+- Tradeoff: Windows setup helper wraps maintained OpenSSH with explicit UAC consent; existing SSH deployments still require manual integration.
+
+## Visual language
+- Color: macOS semantic system backgrounds/text, accent blue.
+- Typography: system font, monospaced PIN/path/fingerprint only.
+- Spacing: 8/12/16/24pt rhythm with 24–30pt page insets; sidebar min180/ideal220/max260pt, min window 880x620, default1200x760.
+- Shape/elevation: 10pt grouped-panel corners, thin semantic separator, native controls and confirmation sheets. No decorative shadows.
+- Motion: system transitions, respect reduced motion.
+- Iconography: SF Symbols, no external assets.
+
+## Components
+- Reuse: NavigationSplitView, Form, List, TextField, secure file pickers, buttons, progress indicators.
+- Native components: QuietStyle semantic colors/radius, QuietPageHeader, QuietBadge (text plus symbol), QuietHelp, StatusPanel. DesktopPage, FilesPage and SetupPage own their screen-specific layouts; navigation and entrypoint are separate files.
+- Desktop: one primary Windows 열기 action when a verified Desktop exists. Other Sunshine apps remain selectable; multiple apps without Desktop require an explicit choice. First run accepts an address and checks the PC before PIN pairing; a stored certificate alone is not a live connection or readiness claim.
+- Connection entry: first-run production launch searches Bonjour `_nvstream._tcp` / `_nvstream-tcp._tcp` on the local network for 10 seconds. Show discovered PC names/addresses as unverified candidates with explicit PC 확인. DNS-SD resolves metadata only, with at most16 service objects,32 rows and8 IPv4 hints per service; it never scans subnets or opens host TCP probes. New model/visual fixtures never start discovery. Saved-PC address changes remain behind connection details and preserve its certificate pin.
+- QR/link entry: Windows creates an offline, address-only connection QR and copyable `deskbridge://connect` link. Mac offers a QR image picker, explicit camera scan, link input and a registered deep link. A preview names the PC and lets the user choose LAN/Tailscale address before the existing verification/PIN flow. Screen/files busy states reject target changes at model level. No QR credential, auto-pairing, SSH setup, trust reset or external QR service is added. Manual address entry stays in a disclosure.
+- Camera starts only after the user opens the scan sheet and grants permission. It adds video input only, retains no pictures, and stops when the sheet closes. One physical monitor can use the QR-image or link route. Imported images are capped at8MB/16 megapixels and ambiguous/malformed codes are rejected.
+- Files: native selectable remote list with name/size (no invented dates), explicit individual-file send/receive, native OS pickers and progress. SSH credentials and setup exchange stay behind disclosures; edits lock during file connections/operations.
+- Installation: Mac DMG with Applications shortcut; non-elevated Windows native setup window. Install Sunshine only after a user action and pinned SHA256 validation. Request elevation only for SFTP configuration/revocation. Keep shared files during uninstall.
+- Windows onboarding: open a single quick-setup EXE without extracting a ZIP or entering a shell command. Screen-first hierarchy is Sunshine install → initial browser configuration → Mac address/PIN. Optional file setup is collapsed by default. Never claim settings or connectivity were verified just because an installer completed or an address was found. Sunshine account/encryption configuration still needs the user's explicit browser steps.
+- Keep Windows progress and the SSH host fingerprint in a fixed footer outside the scrolling instructions, including when optional files are expanded. Manual script files stay behind the advanced Mac disclosure and are labeled as manual setup.
+- Quick setup extracts an explicit hashed payload into a fresh protected user-only temporary directory and keeps it until the GUI exits; no persistent launcher install or automatic login is added. The separate Inno installer handles shortcuts/removal. Both preserve original non-elevated user identity and existing SSH policies.
+- The distributed Windows EXE begins with a native bootstrap before CLR startup. It validates its embedded managed helper, uses a restricted environment and fixed stage, and preserves the original EXE as the sole primary UAC broker. Administrator work uses a protected Program Files stage; source-folder manual scripts remain explicitly labeled. Do not imply EXE signing individually signs the unchanged PowerShell scripts; AllSigned needs an approved separately signed workflow.
+- Automatic Mac address suggestions omit link-local APIPA, deduplicate and cap at eight; manual link-local entry remains an advanced exception. Explain omitted addresses rather than exporting an invalid oversized setup file. Bonjour/QR confirmation actions say PC 확인 because they immediately start normal certificate/PIN verification.
+- Verifying the current PC may coexist with an idle file connection bound to that same canonical address. Changing the target remains blocked while files are connected. Manual desktop address edits use a draft and commit on explicit verification, preserving focus while typing.
+- Keyboard mode may change during a stream through the existing input-release path; resolution/frame-rate changes still require disconnecting. Mac input mode preserves Option-generated Mac symbols. Use physical mode for Windows Alt shortcuts and configure the Windows language/IME switch there. No untested Hangul/Windows-key mapping is implied.
+- SSH failures show fixed guidance for host-key verification, client-key authentication, refused ports or unreachable networks. Keep raw stderr and private endpoint/path details out of the diagnostic UI. A failed local file operation must not unnecessarily discard an otherwise valid file connection.
+- Brand icon: name-independent two nearby work panes with an open passage, ink/ivory/teal. Master and native containers live in Assets/Brand; exact built-in imagegen prompts are in docs/branding/LOGO.md. Naming recommendations are provisional in docs/branding/NAMING.md. Keep bundle IDs, trust stores and key locations stable while a final name is undecided.
+- Setup exchange: save public Mac setup JSON, import on Windows, save Windows reply, compare displayed host-key fingerprint before the Mac fills its connection settings. Never export a private key or connect automatically on import.
+- States: disconnected, working, paired, streaming, failed/cancelled; never label unverified connection secure.
+- Ownership: app SwiftUI views use this contract; streaming lane owns native window/input.
+- Keyboard mode belongs to the persistent desktop model, not a page-local picker.
+- In Mac input mode, Option-Left/Right and Option-Backspace/Forward Delete send Windows Control word-editing commands; Command-arrows send Home/End or Control-Home/End, preserving Shift selection. IME marked text is never remapped. Control-Up/Down/Left/Right stay with macOS Mission Control/Spaces. Other Option symbols remain text input.
+- Invitation/QR/draft input errors appear separately from verified-host status. Downloads choose a folder, preserve the original filename and reject collisions without a Replace prompt; transferred files receive macOS quarantine metadata before their final name is published. Failure to apply this metadata aborts the download and removes its partial file. A transfer committed before a refresh failure remains reported complete.
+- Saved-host trust reset stays reachable in connection information after a failed connection, names the saved host and requires explicit confirmation; a new error expands the details, while streaming/busy reset remains disabled. Reset does not alter SSH keys.
+- Windows shared-file access is limited to the selected original local desktop user plus the dedicated transfer account. UAC's alternate administrator identity does not silently become the selected user.
+
+## Accessibility
+- Native VoiceOver labels for icon controls; explicit button text.
+- Keyboard focus follows standard controls; Escape dismisses sheets; Control-Up/Left/Right remain OS-owned.
+- Semantic text colors; do not communicate status by color alone.
+- No forced motion or tiny monospace body text.
+
+## Responsive behavior
+- Minimum 880x620, split sidebar/detail; streaming window fits selected remote resolution with letterboxing.
+- Native fullscreen Primary only, no all-Spaces borderless window.
+- The fullscreen window shows a small top-center, semantic-color text card while connecting, waiting for video or reconnecting. Reconnecting identifies the frozen picture as the last frame; a recovered transport still waits for a fresh frame. The card exposes readable accessibility text, uses no animation and never takes keyboard or pointer focus. First frame/finished recovery clears it; termination and teardown remove it.
+- Pointer default free/absolute, native scroll.
+
+## Interaction states
+- Loading: progress and descriptive phase, prevent duplicate operation.
+- Empty: one actionable instruction.
+- Error: readable error; no raw keys/tokens/protocol dumps.
+- Success: confirmed operation and destination.
+- Disabled: show setup prerequisite.
+- Offline: explicit retry, no silent authentication downgrade.
+
+## Content voice
+- Korean practical interface text with familiar Windows/Sunshine/OpenSSH terms.
+- Files and desktop pairing are separate trust relationships; explain during setup.
+- No unsupported claims of Chrome superiority.
+
+## Implementation constraints
+- SwiftUI/AppKit + vendored GPLv3 GlimmerEngine, macOS26+.
+- System OpenSSH SFTP transport, no shell string interpolation.
+- Control/video/audio encryption mandatory.
+- Reverse desktop uses an explicitly started, independently signed/pinned Sunshine Mac host and an unmodified, pinned Moonlight Windows engine. The Mac host always passes LAN/WAN encryption=2, disables UPnP, and restricts the administrative web UI to the same computer. An incompatible encryption negotiation must fail on that host; do not describe the Windows backend as inheriting Glimmer's additional client checks.
+- The existing Windows EXE retains its host setup and adds a native Mac client through a role chooser. The engine is downloaded only after a user action, from an immutable official asset with exact byte count/hash. The complete runtime inventory is verified before execution. Keep executable code and private portable engine settings separate; never adopt global Moonlight settings or silently trust a QR/Bonjour hint.
+- Mac sharing is off until the user starts it. Use a new app-owned configuration and terminate only the owned host process group. Never mutate an existing Sunshine deployment, grant TCC permissions, enable Remote Login, or add a broad file-sharing service. Screen Recording/Accessibility approval remains an explicit macOS step. A stopped launcher or failed host is never labelled as a running share.
+- Windows client defaults to direct/absolute pointer input, a conservative office streaming profile, no remote quit command, and local system-key ownership. An explicit fullscreen option sends Windows keys as Mac Command; it warns that other Windows system shortcuts may then be captured too. Ctrl+Alt+Shift+K toggles system-key capture, Ctrl+Alt+Shift+Q closes the local stream, and local desktop switching follows release. Explain Command/Windows keyboard differences; no automatic Ctrl/Command swap. Pairing is separate from entering an address; a started client process is not proof a video session is connected.
+- Reverse file transfer, login/FileVault screens, headless display creation, and automatic clipboard sync are not implemented by this reverse-screen feature. Keep the existing Mac-to-Windows files page working and label its direction clearly. Do not imply a restricted SFTP share limits full desktop control.
+- Native Windows discovery performs bounded mDNS metadata queries only; Tailscale uses the same QR/link/manual-address flow, without a peer-list or subnet scan. Windows QR import is offline, explicitly user selected, bounded to 8MB/16 megapixels, and rejects ambiguous results.
+- Moonlight's own compatibility/controller-maintenance requests are upstream behavior. Disclose them rather than promising zero external network traffic. Disable optional rich presence and connection-testing preferences in the dedicated portable profile; no DeskBridge broker, telemetry or auto-updater is added.
+- New reverse-direction checks use only newly generated inert source/packet/image/process fixtures. Agents do not launch the production capture host/client, inspect a real desktop, request permissions, or read user preferences/keys/logs. Native pixels, TCC, input, audio and LAN/Tailscale performance remain device acceptance gates.
+- No clipboard reading, telemetry, user data in agent tests.
+- Visual checks use a separate synthetic NSHostingController executable, isolated temporary SettingsStore and a unique identity preferences suite. It never runs production App.main or invokes network/file-picker actions. Only newly created fixture windows are captured by their exact window ID; full desktop/other applications are never captured. These snapshots do not validate real Windows, IME, audio or network behavior.
+- Test/screenshot command: python3 scripts/render_visual_fixture.py --output evidence/quiet-sidebar/<iteration>. Requires an optimized module build and working OS Screen Recording access; it does not request permissions or capture unrelated windows. --interactive desktop (or files/setup/first-run/certificate-error/compact/files-compact/dark) opens only a fresh fixture window for manual inspection. Failed captures never imply visual approval.
+- Current visual verification limitation: cached view rendering and PDF export failed to composite SwiftUI materials; own-window OS capture failed; native CUA startup was unavailable. Therefore the native A implementation has no final visual-verdict pass or pixel-diff acceptance yet. Keep this separate from build/check and source-review results; manual native visual acceptance remains required.
+- Distribution: distinguish unsigned development packages from Developer ID/notarized Mac releases and Authenticode-signed Windows releases. CI packages artifacts; it does not publish releases automatically.
+- Build: optimized release is the default, with a separate optional debug configuration. Packaging requires unchanged complete source and completed app snapshots.
+
+## Open questions
+- [ ] User's actual Mac minimum OS/architecture beyond this build host.
+- [ ] Windows Sunshine/OpenSSH setup and actual device acceptance (user hardware).
+- [ ] Product name before public distribution.
+
+
+Windows 설정·QR 창은 DPI에 맞춰 확대되고 현재 작업 영역 안으로 크기를 조절한다. 설명은 스크롤 본문 안에서 줄바꿈하고, 고정 하단에는 선택 가능한 상태·SSH 지문을 표시한다. Sunshine 다운로드는 바이트 기준 진행률·취소를 제공하며 60초 동안 수신이 없으면 중단한다. 자동 주소 제안에서 vEthernet은 제외하고 Tailscale은 유지한다. 연결 파일 저장 취소·실패는 완료된 파일 설정을 되돌리지 않으며, 지문과 다시 저장하는 안내를 유지한다.
+
+## Linux host extension (2026-10-22)
+- First target: Ubuntu 24.04 LTS amd64 with a logged-in X11 desktop. Wayland, login screens, headless capture, Linux client and Linux files remain outside this release.
+- Native GTK setup application distributed as a .deb. Download the pinned official Sunshine package only on user action, validate bytes/hash, then let the user open the system installer. Never provide a custom privileged broker, input-group grants or service autostart.
+- Share only while the helper owns its private Sunshine child. Force X11, LAN/WAN encryption, local administrative UI, no UPnP and no controllers; suppress file-capability elevation using no_new_privs. Process liveness is not capture readiness.
+- Mac Linux tab has a separate immutable target context and private identity/settings. Existing Windows pins are untouched. Linux has no file/setup exchange capability. Both screen contexts share a model-level single-stream exclusion.
+- Windows Linux role keeps the existing per-address engine trust store. Mac Command mapping is unavailable in the Linux role.
+- Linux emits v2 address-only invitations with platform=linux. v1 stays backward-compatible for Windows/Mac roles. Platform is an untrusted UI hint; a wrong-role invitation is rejected and every connection requires ordinary certificate/PIN checks.
+- Linux installer, hardware capture/input/audio and LAN/Tailscale latency require actual Ubuntu acceptance. Synthetic process/package tests never claim those results.

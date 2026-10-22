@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "version": "6.2.0",
+  "url": "https://github.com/moonlight-stream/moonlight-qt/releases/download/v6.2.0/MoonlightPortable-x64-6.2.0.zip",
+  "sha256": "6f91d268b41ed5ca8066d9d7578dc403b8db190991ff48f00b1700465f8f7ebf",
+  "bytes": 37242232,
+  "releaseCommit": "de2467e433821664cdd2224aad8c89a625be1ad9",
+  "release": "https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0",
+  "source": {
+    "url": "https://github.com/moonlight-stream/moonlight-qt/releases/download/v6.2.0/MoonlightSrc-6.2.0.tar.gz",
+    "sha256": "217afac54e4f8734f3d97b32cb8c8b46b677e87f25b77c945343dd06f359e189",
+    "bytes": 2059493,
+    "note": "Official source archive plus submodule revisions/build-dependency scripts; runtime is downloaded directly from upstream by the user, not redistributed inside DeskBridge."
+  },
+  "provenance": "Official GitHub release asset digest verified2026-10-22 against downloaded zip; unmodified Windowsx64 portable engine; no automatic download/execute by agents.",
+  "runtimeManifest": "MoonlightFiles.json",
+  "separatePrivatePortableState": true,
+  "upstreamNetworkCaveat": "Unmodified engine may request upstream controller/compatibility metadata. No DeskBridge relay or automatic updater is added.",
+  "security": "Our Mac host enforces LAN/WAN media encryption. Moonlight does not inherit Glimmer client-specific gates; incompatible negotiation must fail on host."
+}

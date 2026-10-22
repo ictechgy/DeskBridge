@@ -1,0 +1,259 @@
+﻿#Requires -Version 5.1
+# SPDX-License-Identifier: GPL-3.0-only
+# Pure synthetic checks only. Never install software, touch accounts/services/firewall or open the UI.
+$ErrorActionPreference='Stop'
+Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'SetupContract.psm1') -Force
+$count=0
+function Expect([bool] $Condition,[string] $Message) { if (-not $Condition) { throw $Message }; $script:count++ }
+function Reject([scriptblock] $Body) { $rejected=$false; try { & $Body | Out-Null } catch { $rejected=$true }; Expect $rejected 'Invalid input accepted' }
+function Expect-SourceOrder([string] $Source,[string] $Before,[string] $After,[string] $Message) {
+ $first=$Source.IndexOf($Before); $second=$Source.IndexOf($After)
+ Expect ($first -ge 0 -and $second -ge 0 -and $first -lt $second) $Message
+}
+function Test-ElevationGuardOrder([string] $Source) {
+ $tokens=$null; $errors=$null
+ $ast=[Management.Automation.Language.Parser]::ParseInput($Source,[ref]$tokens,[ref]$errors)
+ $guards=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-DesktopSetupToken'},$true))
+ $forms=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'New-Object' -and $node.CommandElements.Count -gt 1 -and $node.CommandElements[1].Extent.Text -eq 'Windows.Forms.Form'},$true))
+ return $errors.Count -eq 0 -and $guards.Count -eq 1 -and $forms.Count -eq 1 -and $guards[0].Extent.StartOffset -lt $forms[0].Extent.StartOffset
+}
+$prefix=[byte[]](0,0,0,11,115,115,104,45,101,100,50,53,53,49,57,0,0,0,32)
+$key='ssh-ed25519 ' + [Convert]::ToBase64String([byte[]]($prefix + ([byte[]](1)*32)))
+Expect ((Get-CanonicalPublicKey ($key + ' synthetic')) -ceq $key) 'Key canonicalization'
+Expect ((Get-KeyFingerprint $key) -like 'SHA256:*') 'Fingerprint'
+foreach ($ip in @('10.0.0.1','172.16.0.1','172.31.0.1','192.168.1.10','100.64.0.1','100.127.1.1','169.254.1.2')) { Expect ((Get-PrivateIPv4 $ip) -ceq $ip) 'Private address' }
+foreach ($ip in @('8.8.8.8','127.0.0.1','0.0.0.0','192.168.01.1','100.128.1.1','172.32.0.1','::1','192.168.1.1/24','192.168.1.1 --arg')) { Reject { Get-PrivateIPv4 $ip } }
+foreach ($bad in @('ssh-rsa AAAA','ssh-ed25519 AAAA',($key + "`nInjected"))) { Reject { Get-CanonicalPublicKey $bad } }
+$request=@{kind='deskbridge.mac-setup';version=1;requestID='11111111-1111-4111-8111-111111111111';clientPublicKey=$key;allowedClientAddresses=@('192.168.1.10','100.80.1.2')}
+$result=ConvertFrom-MacSetup ($request | ConvertTo-Json)
+Expect ($result.allowedClientAddresses.Count -eq 2 -and $result.clientPublicKey -ceq $key) 'Request roundtrip'
+foreach ($entry in @(@('version',2),@('kind','other'),@('requestID','invalid'),@('command','whoami'),@('allowedClientAddresses',@('8.8.8.8')),@('allowedClientAddresses',@('10.0.0.1','10.0.0.1')))) {
+ $invalid=$request.Clone(); $invalid[$entry[0]]=$entry[1]; Reject { ConvertFrom-MacSetup ($invalid | ConvertTo-Json) }
+}
+Reject { ConvertFrom-MacSetup (' '*16385) }
+foreach ($version in @([int]1,[long]1)) {
+ $parsed=$request.Clone(); $parsed.version=$version
+ Expect ((ConvertFrom-MacSetup ($parsed | ConvertTo-Json)).version -eq 1) 'Integral version representation'
+}
+foreach ($version in @($true,'1',1.5)) {
+ $invalid=$request.Clone(); $invalid.version=$version
+ Reject {ConvertFrom-MacSetup ($invalid | ConvertTo-Json)}
+}
+Expect ((Get-ManagedDeploymentAction $true $true $true $true $true $true) -eq 'Reuse') 'Active unchanged deployment'
+Expect ((Get-ManagedDeploymentAction $false $false $false $false $true $true) -eq 'Reactivate') 'Revoked retained deployment'
+Expect ((Get-ManagedDeploymentAction $false $false $false $false $false $false) -eq 'Reactivate') 'Revoked deployment can change key/addresses'
+Expect ((Get-ManagedDeploymentAction $true $true $false $false $true $true) -eq 'Reactivate') 'Stopped partial managed configuration'
+Reject {Get-ManagedDeploymentAction $true $false $false $false $true $true}
+Reject {Get-ManagedDeploymentAction $true $true $true $true $false $true}
+Reject {Get-ManagedDeploymentAction $false $false $true $false $true $true}
+Expect ((Get-ManagedDeploymentAction $false $false $false $false $true $true $false) -eq 'Reactivate') 'Prepared failed setup must validate on reactivation'
+Reject {Get-ManagedDeploymentAction $true $true $true $true $true $true $false}
+# SID shapes for broad groups/services and Entra users must not fall back to a local ACL grant.
+foreach ($sid in @('S-1-1-0','S-1-5-32-545','S-1-5-18','S-1-12-1-1-2-3-4','invalid')) { Reject {Resolve-DesktopUser $sid} }
+$expectedSSHD='C:\Windows\System32\OpenSSH\sshd.exe'
+foreach ($path in @($expectedSSHD,('"' + $expectedSSHD + '"'),$expectedSSHD.ToLowerInvariant())) {
+ Assert-OpenSSHServicePath ([pscustomobject]@{PathName=$path}) $expectedSSHD
+ Expect $true 'Exact Windows OpenSSH service path accepted'
+}
+Reject {Assert-OpenSSHServicePath $null $expectedSSHD}
+foreach ($path in @('C:\Other\sshd.exe',($expectedSSHD + ' -f C:\other.conf'),('"' + $expectedSSHD + '" -D'),('""' + $expectedSSHD + '""'),'')) {
+ Reject {Assert-OpenSSHServicePath ([pscustomobject]@{PathName=$path}) $expectedSSHD}
+}
+# All lookups below are injected synthetic objects; never inspect a local account/token.
+$retained=[pscustomobject]@{UserName='deskbridge-transfer';UserSid='S-1-5-21-111-222-333-1001'}
+$matched=Resolve-ManagedTransferUser $retained {
+ param($sid)
+ if ($sid -cne 'S-1-5-21-111-222-333-1001') {throw 'Lookup must use the recorded SID'}
+ [pscustomobject]@{Name='deskbridge-transfer';SID=[pscustomobject]@{Value=$sid};Enabled=$true}
+}
+Expect ($matched.SID.Value -ceq $retained.UserSid) 'Recorded name and SID resolve together'
+$disabled=Resolve-ManagedTransferUser $retained {param($sid) [pscustomobject]@{Name='deskbridge-transfer';SID=[pscustomobject]@{Value=$sid};Enabled=$false}}
+Expect (-not $disabled.Enabled -and $disabled.SID.Value -ceq $retained.UserSid) 'A disabled account with the retained SID remains a valid lifecycle identity'
+# Deleted account, reused name/replacement SID, and renamed original account must all fail.
+Reject {Resolve-ManagedTransferUser $retained {param($sid) throw 'Synthetic account not found'}}
+Reject {Resolve-ManagedTransferUser $retained {param($sid) $null}}
+Reject {Resolve-ManagedTransferUser $retained {param($sid) [pscustomobject]@{Name='deskbridge-transfer';SID=[pscustomobject]@{Value='S-1-5-21-111-222-333-1002'}}}}
+Reject {Resolve-ManagedTransferUser $retained {param($sid) [pscustomobject]@{Name='renamed-transfer';SID=[pscustomobject]@{Value=$sid}}}}
+$invalidIdentity=[pscustomobject]@{UserName='deskbridge-transfer';UserSid='S-1-5-18'}
+$script:lookupTouched=$false
+Reject {Resolve-ManagedTransferUser $invalidIdentity {$script:lookupTouched=$true; throw 'Unexpected lookup'}}
+Expect (-not $script:lookupTouched) 'Invalid identity rejected before account lookup'
+Assert-DesktopSetupToken { $false }
+Expect $true 'Standard or filtered administrator token allowed'
+Reject {Assert-DesktopSetupToken { $true }}
+# Pure validation-scope fixtures: these paths and SDDL labels are never opened.
+$directoryRecord=[pscustomobject]@{StateSDDL='synthetic-state-acl';ShareRoot='synthetic-share';ShareRootSDDL='synthetic-root-acl';FilesSDDL='synthetic-files-acl'}
+$activation=@(Get-ManagedDirectoryRecords 'synthetic-state' $directoryRecord)
+Expect ($activation.Count -eq 3 -and $activation[1].Path -ceq 'synthetic-share' -and $activation[2].Sddl -ceq 'synthetic-files-acl') 'Activation retains all recorded share directory checks'
+$revocation=@(Get-ManagedDirectoryRecords 'synthetic-state' $directoryRecord -Revoke)
+Expect ($revocation.Count -eq 1 -and $revocation[0].Path -ceq 'synthetic-state' -and $revocation[0].Sddl -ceq 'synthetic-state-acl') 'Revocation validates state without opening mutable shared directories'
+$missingShare=[pscustomobject]@{StateSDDL='synthetic-state-acl'}
+Expect (@(Get-ManagedDirectoryRecords 'synthetic-state' $missingShare -Revoke).Count -eq 1) 'Revocation directory selection never reads missing share fields'
+# These static heuristics compare named guard/mutator offsets and account parameters.
+# They do not prove full control flow or real Windows ACL/service behavior.
+$root=Split-Path $PSScriptRoot -Parent
+foreach ($entry in @(@('Disable-DeskBridgeSFTP.ps1','Stop-Service'),@('Resume-DeskBridgeSFTP.ps1','Disable-LocalUser'),@('Invoke-DeskBridgeSetup.ps1','Initialize-ConnectionExportDirectory'))) {
+ $tokens=$null; $errors=$null
+ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root $entry[0]),[ref]$tokens,[ref]$errors)
+ $preflight=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Get-ManagedDeployment'},$true))
+ $isRevoke=@($preflight[0].CommandElements | Where-Object {$_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'Revoke'}).Count -ne 0
+ Expect ($isRevoke -eq ($entry[0] -eq 'Disable-DeskBridgeSFTP.ps1')) ('Only revocation selects its narrower preflight: ' + $entry[0])
+ $mutations=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq $entry[1]},$true))
+ Expect ($preflight.Count -eq 1 -and $mutations.Count -gt 0 -and $preflight[0].Extent.StartOffset -lt $mutations[0].Extent.StartOffset) ('Lifecycle preflight precedes mutation: ' + $entry[0])
+ foreach ($command in $ast.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('Enable-LocalUser','Disable-LocalUser')},$true)) {
+  $parameters=@($command.CommandElements | Where-Object {$_ -is [Management.Automation.Language.CommandParameterAst]} | ForEach-Object {$_.ParameterName})
+  Expect ('SID' -in $parameters -and 'Name' -notin $parameters) ('Lifecycle account mutation uses SID: ' + $entry[0])
+ }
+}
+$disableSource=[IO.File]::ReadAllText((Join-Path $root 'Disable-DeskBridgeSFTP.ps1'))
+Expect-SourceOrder $disableSource 'Stop-ManagedSessionWorkers' 'DeskBridge access is already disabled.' 'Repeated revocation worker cleanup precedes its success message in source'
+Expect-SourceOrder $disableSource 'Set-Service -Name sshd -StartupType $record.StartupBefore' 'DeskBridge access is already disabled.' 'Repeated revocation startup restore precedes its success message in source'
+$enableSource=[IO.File]::ReadAllText((Join-Path $root 'Enable-DeskBridgeSFTP.ps1'))
+Expect-SourceOrder $enableSource 'Assert-ProtectedDirectory $sshDirectory' 'Get-WindowsCapability' 'Existing SSH directory check precedes optional-feature operations in source'
+Expect-SourceOrder $enableSource 'Assert-ProtectedFile $keygen -WindowsBinary' '& $keygen -l' 'Key generator check precedes execution in source'
+Expect-SourceOrder $enableSource 'Assert-ProtectedFile $sshd -WindowsBinary' '& $sshd -t' 'Server binary check precedes execution in source'
+Expect-SourceOrder $enableSource 'Set-ManagedConfigAcl $config' '& $sshd -t' 'Published config protection precedes server validation in source'
+Expect-SourceOrder $enableSource 'Assert-PrivateHostKey' 'Start-Service sshd' 'Host key permission checks precede activation in source'
+$resumeSource=[IO.File]::ReadAllText((Join-Path $root 'Resume-DeskBridgeSFTP.ps1'))
+Expect-SourceOrder $resumeSource 'Start-Service sshd' 'Set-Service -Name sshd -StartupType Automatic' 'Automatic startup follows successful reactivation in source'
+Expect-SourceOrder $resumeSource 'Set-Service -Name sshd -StartupType $record.StartupBefore' "'sshd_config.failed-'" 'Failed reactivation restores startup before config archive in source'
+Expect-SourceOrder $resumeSource 'Set-ManagedConfigAcl $config' '& $sshd -t' 'Restored config protection precedes server validation in source'
+$gui=[IO.File]::ReadAllText((Join-Path $root 'Setup-DeskBridge.ps1'))
+Expect (Test-ElevationGuardOrder $gui) 'Actual elevation guard command precedes the form creation command'
+Expect (Test-ElevationGuardOrder ('Assert-DesktopSetupToken' + "`n" + '$form=New-Object Windows.Forms.Form')) 'Positive synthetic guard-order parser fixture'
+foreach ($negative in @('$form=New-Object Windows.Forms.Form',('# Assert-DesktopSetupToken' + "`n" + '$form=New-Object Windows.Forms.Form'),('$form=New-Object Windows.Forms.Form' + "`n" + 'Assert-DesktopSetupToken'))) {
+ Expect (-not (Test-ElevationGuardOrder $negative)) 'Missing, commented or late elevation guard rejected by parser fixture'
+}
+Expect-SourceOrder $gui '$expected=Read-MacSetup $requestPath' '$process=Start-Process -FilePath $elevatedExecutable -Verb RunAs' 'Request captured before native broker elevation in source'
+Expect ($gui.Contains('$control -is [Windows.Forms.ComboBox]') -and $gui.Contains('$reply.address -cne $selectedAddress')) 'Busy controls and result comparison use the captured selection'
+Expect ([regex]::Matches($gui,'\$null=\$process\.Handle').Count -eq 2 -and [regex]::Matches($gui,'\$null -eq \$process\.ExitCode').Count -eq 2) 'Both child process paths cache handles and reject missing exit codes'
+if ($PSVersionTable.PSEdition -ne 'Desktop') {
+ $coreRejected=$false
+ try { Initialize-ConnectionExportDirectory 'C:\SyntheticExportNeverCreated' }
+ catch { $coreRejected=$_.Exception.Message -like '*Windows PowerShell 5.1 (Desktop)*' }
+ Expect $coreRejected 'Core rejects export initialization at the explicit Desktop boundary before filesystem access'
+}
+# Exercise the actual metadata policy using projected ACL rules; no Windows ACL APIs.
+function Synthetic-Ace([string] $Sid,[int] $Rights,[int] $Flags=0) {
+ return [pscustomobject]@{IdentityReference=[pscustomobject]@{Value=$Sid};FileSystemRights=$Rights;PropagationFlags=$Flags;AccessControlType='Allow'}
+}
+$adminAce=Synthetic-Ace 'S-1-5-32-544' 2032127
+$creatorOwner=Synthetic-Ace 'S-1-3-0' 0x10000000 2
+$creatorGroup=Synthetic-Ace 'S-1-3-1' 0x10000000 2
+Expect (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,$creatorOwner)) 'Creator owner inherit-only generic-all is safe under protected child creation'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,$creatorGroup))) 'Creator group inherit-only generic-all remains forbidden because the primary group may be untrusted'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,(Synthetic-Ace 'S-1-1-0' 2 2)))) 'Untrusted inherit-only concrete write ACE remains forbidden'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,(Synthetic-Ace 'S-1-1-0' 0x10000000)))) 'Effective untrusted generic-all remains forbidden'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,(Synthetic-Ace 'S-1-1-0' 0x40000000)))) 'Effective untrusted generic-write remains forbidden'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,$creatorOwner,(Synthetic-Ace 'S-1-1-0' 2)))) 'Creator placeholder never permits effective untrusted child creation'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-32-544' @($adminAce,(Synthetic-Ace 'S-1-3-0' 0x10000000)))) 'Effective creator generic-all is not skipped'
+Expect (-not (Test-ManagedMetadataAcl 'S-1-5-21-1-2-3-1001' @($adminAce,$creatorOwner))) 'Untrusted metadata owner remains forbidden'
+$setupAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Invoke-DeskBridgeSetup.ps1'),[ref]$tokens,[ref]$errors)
+$successExits=@($setupAst.FindAll({param($node) $node -is [Management.Automation.Language.ExitStatementAst] -and $node.Pipeline.Extent.Text -ceq '0'},$true))
+Expect ($successExits.Count -eq 3) 'All completed setup/no-op/revocation exits are enumerated'
+foreach ($exit in $successExits) {
+ $before=@($exit.Parent.Statements | Where-Object {$_.Extent.EndOffset -le $exit.Extent.StartOffset})
+ Expect ($before.Count -gt 0 -and $before[-1].Extent.Text -ceq 'Write-SetupSuccessReceipt') 'Every success exit immediately follows fixed completion receipt creation'
+}
+$catchReceipt=@($setupAst.FindAll({param($node) $node -is [Management.Automation.Language.CatchClauseAst] -and $node.Extent.Text.Contains('Write-SetupSuccessReceipt')},$true))
+Expect ($catchReceipt.Count -eq 0) 'Error handling never publishes a success receipt'
+$guiAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Setup-DeskBridge.ps1'),[ref]$tokens,[ref]$errors)
+$manualGuard=@($guiAst.FindAll({param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -ceq '-not $LauncherPath'},$true))
+Expect ($manualGuard.Count -eq 1 -and $manualGuard[0].Clauses[0].Item2.Statements[-1] -is [Management.Automation.Language.ReturnStatementAst]) 'Manual GUI completion is explicitly unverified and returns'
+Expect-SourceOrder $gui 'if (-not $LauncherPath)' '$replyPath=Join-Path' 'Manual GUI returns before reading or saving a potentially stale connection reply'
+# These AST checks lock the export boundary without invoking any elevated script.
+$moduleAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'SetupContract.psm1'),[ref]$tokens,[ref]$errors)
+$initializer=@($moduleAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Initialize-ConnectionExportDirectory'},$true))[0]
+$creates=@($initializer.FindAll({param($node) $node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $node.Member.Value -eq 'CreateDirectory'},$true))
+Expect ($creates.Count -eq 1 -and $creates[0].Arguments.Count -eq 2) 'Export creation passes its final ACL to Framework CreateDirectory'
+$repairs=@($initializer.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in @('New-Item','Set-Acl')},$true))
+Expect ($repairs.Count -eq 0) 'Export initialization never creates then repairs or re-ACLs existing output'
+$protectedChecks=@($initializer.FindAll({param($node) $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Assert-ProtectedDirectory'},$true))
+Expect ($protectedChecks.Count -eq 2 -and $protectedChecks[0].Extent.StartOffset -lt $creates[0].Extent.StartOffset -and $protectedChecks[1].Extent.StartOffset -gt $creates[0].Extent.StartOffset) 'Existing and raced-new export directories both require protected validation'
+$exportSource=[IO.File]::ReadAllText((Join-Path $root 'Invoke-DeskBridgeSetup.ps1'))
+Expect-SourceOrder $exportSource 'Initialize-ConnectionExportDirectory $output' '[IO.File]::WriteAllText($staging' 'Export directory/old connection validation precedes staging write'
+Expect ($initializer.Extent.Text.Contains('Assert-ProtectedFile $target') -and $initializer.Extent.Text.Contains('DeleteSubdirectoriesAndFiles') -and $initializer.Extent.Text.Contains('Assert-NoReparsePath $parent.FullName')) 'Export target and ancestor rename/reparse guards remain active'
+# Source guards complement actual synthetic firewall cleanup tests; never run privileged setup.
+Expect-SourceOrder $exportSource "'Disable-DeskBridgeSFTP.ps1') -Apply" 'File access inactivity could not be verified after revocation.' 'Actual revocation must re-inspect inactivity before attesting completion'
+$revocationTail=$exportSource.Substring($exportSource.IndexOf("'Disable-DeskBridgeSFTP.ps1') -Apply"))
+Expect-SourceOrder $revocationTail 'File access inactivity could not be verified after revocation.' 'Write-SetupSuccessReceipt' 'Failed post-revocation inspection must precede its completion receipt'
+$enableAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Enable-DeskBridgeSFTP.ps1'),[ref]$tokens,[ref]$errors)
+$moduleAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'SetupContract.psm1'),[ref]$tokens,[ref]$errors)
+$protectedCompiler=@($moduleAst.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-ProtectedCompilation'},$true))[0]
+$compilerSource=$protectedCompiler.Extent.Text
+$compiles=@($moduleAst.FindAll({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Type'},$true))
+Expect ($compiles.Count -eq 1 -and $compiles[0].Extent.Text.StartsWith('Add-Type -CompilerParameters $compilerOptions -TypeDefinition')) 'All privileged compilation uses one protected compiler helper'
+Expect-SourceOrder $compilerSource '[IO.Directory]::CreateDirectory($compilerDirectory,$compilerAcl)' 'Add-Type -CompilerParameters' 'Compiler scratch final ACL precedes compilation'
+Expect-SourceOrder $compilerSource "SetEnvironmentVariable('TEMP',`$compilerDirectory,'Process')" 'Add-Type -CompilerParameters' 'Compiler child TEMP uses only the private directory'
+Expect ($compilerSource.Contains('TempFiles=New-Object CodeDom.Compiler.TempFileCollection($compilerDirectory,$false)') -and $compilerSource.Contains("SetEnvironmentVariable('TEMP',`$priorTemp,'Process')") -and $compilerSource.Contains("SetEnvironmentVariable('TMP',`$priorTmp,'Process')") -and $compilerSource.Contains('[IO.Directory]::Delete($compilerDirectory,$false)')) 'Compiler tracks private scratch, restores environment, cleans only owned files'
+Expect ($enableSource.Contains('Invoke-ProtectedCompilation -TypeDefinition')) 'Share helper reuses the protected compiler boundary'
+# Parse every shipped PowerShell file, without running the GUI or elevated backend.
+foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.Extension -in @('.ps1','.psm1') }) {
+ $tokens=$null;$errors=$null
+ [void][Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
+ Expect ($errors.Count -eq 0) ('PowerShell parse: ' + $file.Name)
+}
+@{status='passed';checks=$count;scope='pure synthetic contract and syntax checks, no Windows configuration or GUI'} | ConvertTo-Json
+
+# Inert inventories and termination callbacks exercise revocation without any OS inventory.
+$script:stopCalls=0; $script:inventoryCalls=0
+$worker=[pscustomobject]@{Name='sshd-session.exe';ExecutablePath='C:\Windows\System32\OpenSSH\sshd-session.exe';ProcessId=[uint32]1234}
+Stop-ManagedSessionWorkers -WindowsDirectory 'C:\Windows' -Inventory {
+    $script:inventoryCalls++; if ($script:inventoryCalls -eq 1) { $worker }
+} -Terminate {param($item) $script:stopCalls++}
+Expect ($script:stopCalls -eq 1 -and $script:inventoryCalls -eq 2) 'Worker stop requires post-inventory'
+foreach ($invalid in @(
+    [pscustomobject]@{Name='sshd-session.exe';ExecutablePath=$null;ProcessId=[uint32]1234},
+    [pscustomobject]@{Name='sshd.exe';ExecutablePath='C:\Other\sshd.exe';ProcessId=[uint32]1234},
+    [pscustomobject]@{Name='sshd.exe';ExecutablePath='C:\Windows\System32\OpenSSH\sshd.exe';ProcessId=0}
+)) {
+    $before=$script:stopCalls
+    Reject {Stop-ManagedSessionWorkers -WindowsDirectory 'C:\Windows' -Inventory { $invalid } -Terminate {param($item) $script:stopCalls++}}
+    Expect ($script:stopCalls -eq $before) 'Unknown worker must be rejected before termination'
+}
+Reject {Stop-ManagedSessionWorkers -WindowsDirectory 'C:\Windows' -Inventory {$worker} -Terminate {param($item)}}
+Reject {Stop-ManagedSessionWorkers -WindowsDirectory 'C:\Windows' -Inventory {throw 'synthetic inventory denied'} -Terminate {param($item)}}
+Write-Output ('Worker-stop synthetic checks completed; total checks: ' + $count)
+
+# Query only the managed rule; classify provider-generated absence, never access/store errors.
+$script:firewallMode='present'; $script:queriedName=''
+function global:Get-NetFirewallRule {
+    param($Name,$PolicyStore,$ErrorAction)
+    $script:queriedName=$Name
+    if ($script:firewallMode -eq 'missing') {
+        $errorRecord=New-Object Management.Automation.ErrorRecord((New-Object Exception('synthetic absent')),'CmdletizationQuery_NotFound_Name,Get-NetFirewallRule','ObjectNotFound',$null)
+        throw $errorRecord
+    }
+    if ($script:firewallMode -eq 'denied') { throw 'synthetic access denied' }
+    [pscustomobject]@{Name='DeskBridge-SFTP-In-TCP'}
+}
+Expect (@(Get-NamedManagedFirewallRules PersistentStore).Count -eq 1 -and $script:queriedName -eq 'DeskBridge-SFTP-In-TCP') 'Firewall lookup is named, not a whole-store enumeration'
+$script:firewallMode='missing'
+Expect (@(Get-NamedManagedFirewallRules ActiveStore).Count -eq 0) 'Named absent rule returns no rules'
+$script:firewallMode='denied'
+Reject {Get-NamedManagedFirewallRules ActiveStore}
+Remove-Item Function:global:Get-NetFirewallRule
+Write-Output ('Final synthetic contract checks: ' + $count)
+
+# Actual local-export helper with inert dialogs and only fresh synthetic files.
+$exportFixture=Join-Path ([IO.Path]::GetTempPath()) ('deskbridge-export-check-'+[Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($exportFixture) | Out-Null
+try {
+    foreach ($mode in @('save','cancel','failure')) {
+        $target=Join-Path $exportFixture ($mode+'.json')
+        if ($mode -eq 'failure') {
+            $blocker=Join-Path $exportFixture 'synthetic-file-not-folder'
+            [IO.File]::WriteAllText($blocker,'synthetic blocker')
+            $target=Join-Path $blocker 'reply.json'
+        }
+        $dialog=[pscustomobject]@{FileName=$target;Result=$(if ($mode -eq 'cancel') {'Cancel'} else {'OK'});Disposed=$false}
+        $dialog | Add-Member ScriptMethod ShowDialog {return $this.Result}
+        $dialog | Add-Member ScriptMethod Dispose {$this.Disposed=$true}
+        $outcome=Save-DeskBridgeConnectionReply -Reply ([pscustomobject]@{kind='synthetic-public-reply'}) -Dialog $dialog
+        $expected=if ($mode -eq 'save') {'Saved'} elseif ($mode -eq 'cancel') {'Cancelled'} else {'Failed'}
+        Expect ($outcome -ceq $expected -and $dialog.Disposed) 'Export distinguishes save/cancel/local write failure and always disposes'
+        if ($mode -eq 'save') { Expect (([IO.File]::ReadAllText($target) | ConvertFrom-Json).kind -ceq 'synthetic-public-reply') 'Actual export helper wrote synthetic reply' }
+        else { Expect (-not [IO.File]::Exists($target)) 'Cancel/failure did not publish a local export' }
+    }
+} finally { [IO.Directory]::Delete($exportFixture,$true) }
+Write-Output ('Final export + contract checks: ' + $count)

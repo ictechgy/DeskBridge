@@ -1,0 +1,12 @@
+{
+  "version": "2026.914.233613",
+  "releaseCommit": "63d35f702ee9e362e43263742981836ec0710384",
+  "bundleIdentifier": "dev.lizardbyte.app.Sunshine",
+  "executable": "Contents/MacOS/Sunshine",
+  "signingTeam": "F8XQ7XCN2R",
+  "assets": [
+    {"architecture":"arm64","url":"https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine-macOS-arm64.dmg","sha256":"795f03a389c5726f9a7b15f501dc1ddf204b442cae565859ac83aae027a9e07c","bytes":40375035},
+    {"architecture":"x86_64","url":"https://github.com/LizardByte/Sunshine/releases/download/v2026.914.233613/Sunshine-macOS-x86_64.dmg","sha256":"764b11674babac0cd838c2883359207a481c462f355ccbfd1ec91f6d44672101","bytes":43417393}
+  ],
+  "provenance": "Official GitHub release API asset digests and byte counts retrieved 2026-10-22. The arm64 official DMG was downloaded into a fresh temporary directory, SHA256/size verified, mounted read-only without launching, and its bundle verified with codesign --verify --deep --strict. Developer ID Application: LizardByte LLC (F8XQ7XCN2R). x86_64 digest/size comes from the same official release API; bundle launch/signature needs target-device acceptance."
+}

@@ -1,0 +1,210 @@
+name: Build install packages
+on:
+  workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: "Use configured Developer ID certificate and Apple notarization secrets"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: packages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  mac:
+    if: github.event_name != 'workflow_dispatch' || !inputs.sign_macos
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check version on tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
+      - name: Build real app and offline checks
+        run: python3 scripts/build.py --configuration release
+      - name: Create preview packages
+        run: python3 scripts/package_release.py --mode preview
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: mac-and-source-packages
+          path: dist/release/
+          if-no-files-found: error
+  mac_signed:
+    if: github.event_name == 'workflow_dispatch' && inputs.sign_macos && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: macos-signing
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build trusted default-branch source
+        run: python3 scripts/build.py --configuration release
+      - name: Set up ephemeral signing keychain
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          test -n "$CERTIFICATE"
+          test -n "$APPLE_ID"
+          task_keychain="$RUNNER_TEMP/deskbridge-signing.keychain-db"
+          task_password="$(openssl rand -hex 32)"
+          echo "::add-mask::$task_password"
+          printf '%s' "$CERTIFICATE" | base64 -D > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$task_password" "$task_keychain"
+          security set-keychain-settings -lut 21600 "$task_keychain"
+          security unlock-keychain -p "$task_password" "$task_keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$task_keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "$task_password" "$task_keychain"
+          security list-keychains -d user -s "$task_keychain"
+          security default-keychain -d user -s "$task_keychain"
+          xcrun notarytool store-credentials DeskBridgeCI --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$task_keychain"
+          rm "$RUNNER_TEMP/certificate.p12"
+      - name: Create signed and notarized Mac packages
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_NOTARY_PROFILE: DeskBridgeCI
+        run: python3 scripts/package_release.py --mode release
+      - name: Remove ephemeral signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security delete-keychain "$RUNNER_TEMP/deskbridge-signing.keychain-db" || true
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: signed-mac-and-source-packages
+          path: dist/release/
+          if-no-files-found: error
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install native GTK build/check dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-3.0 python3-qrcode python3-pil
+      - name: Build Debian package without privilege or Sunshine
+        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/build_linux_host.py --output build/linux/DeskBridge-Linux.deb
+      - name: Check package and inert synthetic fixtures (no real desktop or network)
+        run: PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 scripts/test_linux_host.py --package build/linux/DeskBridge-Linux.deb
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: linux-host-preview
+          path: build/linux/
+          if-no-files-found: error
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check Windows version on tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: powershell
+        run: |
+          $version = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'VERSION')).Trim()
+          if ($env:GITHUB_REF_NAME.Substring(1) -cne $version) { throw 'Tag and VERSION differ' }
+      - name: Validate syntax and pure setup contracts
+        shell: powershell
+        run: .\host\windows\tests\Test-SetupContract.ps1
+      - name: Validate JSON integer compatibility in PowerShell 7
+        shell: pwsh
+        run: .\host\windows\tests\Test-SetupContract.ps1
+      - name: Validate actual setup failure handler in Windows PowerShell
+        shell: powershell
+        run: .\host\windows\tests\Test-SetupFailureExit.ps1
+      - name: Validate actual setup failure handler in PowerShell 7
+        shell: pwsh
+        run: .\host\windows\tests\Test-SetupFailureExit.ps1
+      - name: Validate runtime notice provenance fixtures
+        shell: powershell
+        run: |
+          python -m unittest discover -s scripts/tests -p test_windows_build_provenance.py
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime notice provenance checks failed' }
+      - name: Validate pure firewall policy in Windows PowerShell
+        shell: powershell
+        run: .\host\windows\tests\Test-FirewallPolicy.ps1
+      - name: Validate pure firewall policy in PowerShell 7
+        shell: pwsh
+        run: .\host\windows\tests\Test-FirewallPolicy.ps1
+      - name: Validate inactive-access decision in Windows PowerShell
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -File .\host\windows\tests\Test-InactiveAccess.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell inactive-access checks failed' }
+      - name: Validate inactive-access decision in PowerShell 7
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File .\host\windows\tests\Test-InactiveAccess.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 inactive-access checks failed' }
+      - name: Validate mocked installer/signing contract in Windows PowerShell
+        shell: powershell
+        run: .\scripts\tests\test_installer_contract.ps1
+      - name: Validate mocked installer/signing contract in PowerShell 7
+        shell: pwsh
+        run: .\scripts\tests\test_installer_contract.ps1
+      - name: Validate address-only QR/link contract in Windows PowerShell
+        shell: powershell
+        run: |
+          powershell.exe -NoLogo -NoProfile -File .\host\windows\tests\Test-ConnectionInvitation.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell invitation checks failed' }
+      - name: Validate address-only QR/link contract in PowerShell 7
+        shell: pwsh
+        run: |
+          pwsh -NoLogo -NoProfile -File .\host\windows\tests\Test-ConnectionInvitation.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 invitation checks failed' }
+      - name: Validate temporary record replacement and safe deletion in Windows PowerShell
+        shell: powershell
+        run: .\host\windows\tests\Test-SetupFilesystem.ps1
+      - name: Validate temporary filesystem contracts in PowerShell 7
+        shell: pwsh
+        run: .\host\windows\tests\Test-SetupFilesystem.ps1
+      - name: Extract hash-pinned native compiler into runner temporary directory
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = Get-Content -LiteralPath .\packaging\windows\ZigDependency.json -Raw | ConvertFrom-Json
+          $platform = $pin.platforms.'x86_64-windows'
+          if ($pin.version -cne '0.17.0' -or $platform.tarball -cne 'https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip') { throw 'Unexpected native compiler pin' }
+          $download = Join-Path $env:RUNNER_TEMP 'deskbridge-zig-0.17.0.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri $platform.tarball -OutFile $download
+          if ((Get-Item -LiteralPath $download).Length -ne [long]$platform.size -or (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant() -cne $platform.shasum) { throw 'Native compiler size or SHA256 mismatch' }
+          $directory = Join-Path $env:RUNNER_TEMP 'DeskBridgeZig-0.17.0'
+          Expand-Archive -LiteralPath $download -DestinationPath $directory
+          $compiler = Join-Path $directory 'zig-x86_64-windows-0.17.0\zig.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Native compiler missing from pinned archive' }
+          "DESKBRIDGE_NATIVE_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Install pinned official Inno Setup compiler
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $download = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' -OutFile $download
+          if ((Get-FileHash $download -Algorithm SHA256).Hash.ToLowerInvariant() -cne '0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f') { throw 'Compiler digest mismatch' }
+          $install = Join-Path $env:RUNNER_TEMP 'DeskBridgeInno'
+          $process = Start-Process $download -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="' + $install + '"')) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Compiler installation failed' }
+          "INNO_COMPILER=$install\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build Windows installer
+        shell: powershell
+        run: .\packaging\windows\Build-Installer.ps1 -Compiler $env:INNO_COMPILER -NativeCompiler $env:DESKBRIDGE_NATIVE_COMPILER
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-installer-preview
+          path: dist/release/
+          if-no-files-found: error
+# Artifacts only: no release publication, credentials on pull requests, or remote machine configuration.

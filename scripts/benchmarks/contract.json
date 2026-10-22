@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "23f7ebb9fe138c41b6f844b4ef12d03ac250a6a6",
+  "purpose": "Measure existing production slices before selecting optimizations; synthetic results cannot rank remote desktop products",
+  "sftp": {
+    "sizesMiB": [1, 8], "injectedReplyDelayMs": [0, 5, 30], "directions": ["upload", "download"], "chunkBytes": 65536,
+    "defaultRepetitions": 5, "warmupsExcluded": 2,
+    "timing": "Monotonic wall time around the complete transfer call, excluding connect, generation and post-transfer hash verification",
+    "safetyGate": ["byte equality and SHA256", "monotonic final progress", "local download destination no overwrite only; remote upload collision NOT_EXERCISED", "cancel interrupts held READ receive with witnessed local partial", "no local partial files"],
+    "maximumOutstandingRequests": 1,
+    "referenceTimerSlackMs": 10,
+    "timerSlackPolicy": "Label excess observed timer delay without discarding trials or treating nominal delay as real RTT",
+    "cancelCompletionBudgetMs": 2000,
+    "diagnostic": "Request counts and maximum outstanding responses; no SSH, network, peer disk or bandwidth emulator",
+    "futurePipelineComparison": "NOT_SUPPORTED_BY_THIS_PEER: add calibrated bandwidth/serialization and out-of-order response modes before pipeline A/B; nominal timer delays alone cannot support a speedup claim",
+    "report": "Raw repetitions and median/min/max; no p95/p99 from 5 transfers",
+    "optimizationDecision": "A delay-sensitive plateau with one outstanding request justifies a bounded pipeline prototype; same OpenSSH real-host control and video fairness remain required before default enablement"
+  },
+  "input": {
+    "profiles": [
+      {"name": "keyboard-100Hz", "submitted": 300, "intervalNs": 10000000, "producerJitterNs": 0},
+      {"name": "motion-1000Hz", "submitted": 2000, "intervalNs": 1000000, "producerJitterNs": 150000},
+      {"name": "motion-burst", "submitted": 10000, "intervalNs": 0, "producerJitterNs": 0}
+    ],
+    "defaultRepetitions": 5, "warmupsExcluded": 2,
+    "timing": "Pre-submit benchmark timestamp to in-memory peer acceptance; report latest and oldest pending separately",
+    "backpressureExercised": false,
+    "backendInstance": "Inert fixture storage, production NativeBackend input extension/batcher/sender; not the actual app object",
+    "schedulePolicy": "Profile names are target grids; report inter-arrival distribution and label lateness over20percent; do not discard slow/merged samples",
+    "safetyGate": ["no failures", "no duplicate accepted packets", "keyboard packet count", "barrier accepted exactly once and last, after final motion"],
+    "report": "Raw per-packet samples; per-run p95 only with at least100 packets; show merging and producer scheduling lateness",
+    "exclusions": ["OS input/IME", "ENet/encryption", "network", "Windows processing", "decode/display", "input-to-visible latency"]
+  },
+  "realHost": {
+    "status": "NOT_RUN_REQUIRES_EXPLICIT_TARGET",
+    "screenControl": "DeskBridge and Moonlight sequentially on the same Sunshine/configuration",
+    "fileControl": "DeskBridge and Cyberduck on the same OpenSSH account and new synthetic folder",
+    "record": ["client/host versions", "GPU/driver", "resolution/scaling/refresh", "actual codec/chroma/bitrate", "LAN or observed Tailscale route", "single-monitor input-switch state"],
+    "unknownPolicy": "Unavailable metrics remain UNKNOWN; no100.x direct-route inference",
+    "privacy": "No existing user files, clipboard, private UI, raw service logs or preferences"
+  }
+}

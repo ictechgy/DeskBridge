@@ -1,0 +1,10 @@
+Moonlight PC 6.2.0, Moonlight contributors.
+https://github.com/moonlight-stream/moonlight-qt
+GPL-3.0. See Moonlight-LICENSE.txt and the upstream portable distribution for its bundled third-party notices.
+The unmodified native engine is downloaded directly from the official pinned release only after user action. It is not included in the DeskBridge EXE.
+Source: https://github.com/moonlight-stream/moonlight-qt/releases/download/v6.2.0/MoonlightSrc-6.2.0.tar.gz
+Source archive SHA256: 217afac54e4f8734f3d97b32cb8c8b46b677e87f25b77c945343dd06f359e189
+Release commit: de2467e433821664cdd2224aad8c89a625be1ad9
+
+The upstream client can contact its controller/compatibility metadata services.
+The reverse Mac host is experimental upstream. Actual Windows/Mac permission, input, video, audio and network acceptance remains pending.

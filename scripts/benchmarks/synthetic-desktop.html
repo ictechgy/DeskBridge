@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>DeskBridge synthetic desktop fixture</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f5f8;color:#17212f;font:16px system-ui,sans-serif}main{max-width:1500px;margin:auto;padding:24px}h1{font-size:24px;margin:0 0 8px}p{line-height:1.5}section{background:white;border:1px solid #ccd4de;border-radius:10px;padding:18px;margin:16px 0}pre,textarea{font:16px/1.6 ui-monospace,Consolas,monospace}pre{overflow:auto;background:#f9fafb;padding:12px}.red{color:#d40025}.blue{color:#123cdb}.green{color:#08783a}textarea{width:100%;min-height:180px;padding:10px;border:2px solid #95a6bf}button{font:inherit;padding:8px 16px;cursor:pointer}#indicator{height:38px;background:#152b43;color:white;padding:8px}#track{height:40px;overflow:hidden;background:repeating-linear-gradient(90deg,#ddd 0 1px,#fff 1px 2px)}#marker{width:30px;height:40px;background:#d40025;will-change:transform}.small{font-size:12px}.large{font-size:20px}#events{font-variant-numeric:tabular-nums;line-height:1.8}label{display:block;margin:12px 0}
+</style>
+<main>
+<h1>합성 업무 화면 / Synthetic work fixture v1</h1>
+<p>실제 문서 대신 이 화면만 사용합니다. 네트워크·저장·클립보드·키 내용 기록 기능이 없습니다. 화면 반응은 외부 계측으로 비교하세요. 아래 카운터는 호스트 브라우저 이벤트 수이며 원격 지연/FPS 측정값이 아닙니다.</p>
+<section><button id="toggle">애니메이션 시작 / 정지</button> <button id="reset">카운터 초기화</button>
+<div id="track"><div id="marker"></div></div><div id="indicator">합성 입력 변화 표시 · 0</div><div id="events" aria-live="off">입력 0 · keydown 0 · composition 시작 0 / 끝 0 · focus 0 / blur 0</div></section>
+<section><h2>한글 · 코드 · 색 경계</h2><label>브라우저 확대는 100%로 고정하고 원격 해상도·Windows 배율·모니터 입력 상태를 기록하세요.</label>
+<pre><span class="red">const error = "빨강 Red |Il1! 0123456789";</span>
+<span class="blue">func 연결(호스트: String) async throws → 세션 {</span>
+  <span class="green">// 한글 조합, 받침, 삭제, 숫자와 괄호를 확인합니다.</span>
+  let result = try await connect(host: "synthetic.invalid")
+  return result // 가각간갇갈감갑값 · 뷁 · 흙 · 닭
+}
+<span class="small red">12px: |Il1! /\ [ ] { } ; : 0O oO 한글 가나다라</span>
+<span class="blue">16px: |Il1! /\ [ ] { } ; : 0O oO 한글 가나다라</span>
+<span class="large green">20px: |Il1! /\ [ ] { } ; : 0O oO 한글 가나다라</span></pre>
+<label for="typing">아래에는 합성 문장만 입력하세요. 예: “한글 조합 삭제 123 abc”. Ctrl/Alt/Win·Mac Space 왕복 후 키 고착/중복도 확인합니다.</label>
+<textarea id="typing" spellcheck="false" autocomplete="off" autocapitalize="off">한글 조합 삭제 123 abc
+const sample = "가나다라";</textarea></section>
+<section><h2>스크롤 합성 데이터</h2><pre id="code"></pre></section>
+</main>
+<script>
+'use strict';
+const byId=id=>document.getElementById(id);
+let counters={},running=false,start=0;
+function render(){byId('events').textContent=`입력 ${counters.input||0} · keydown ${counters.keydown||0} · composition 시작 ${counters.compositionstart||0} / 끝 ${counters.compositionend||0} · focus ${counters.focus||0} / blur ${counters.blur||0}`;byId('indicator').textContent=`합성 입력 변화 표시 · ${counters.input||0}`;byId('indicator').style.background=(counters.input||0)%2?'#136a38':'#152b43';}
+for(const type of ['input','keydown','compositionstart','compositionend','focus','blur'])byId('typing').addEventListener(type,()=>{counters[type]=(counters[type]||0)+1;render();});
+byId('reset').onclick=()=>{counters={};render();};
+function animate(time){if(!running)return;const width=Math.max(1,byId('track').clientWidth-30);byId('marker').style.transform=`translateX(${((time-start)*0.25)%width}px)`;requestAnimationFrame(animate);}
+byId('toggle').onclick=()=>{running=!running;if(running){start=performance.now();requestAnimationFrame(animate);}};
+byId('code').textContent=Array.from({length:250},(_,i)=>`${String(i+1).padStart(3,'0')}  const 항목_${i} = { id: ${i}, text: "합성 데이터 |Il1 0O", active: true };`).join('\n');
+render();
+</script></html>

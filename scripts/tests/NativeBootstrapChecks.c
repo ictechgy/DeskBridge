@@ -1,0 +1,80 @@
+/* SPDX-License-Identifier: GPL-3.0-only
+ * Host-only pure checks. No Windows headers, process starts, ACLs or network. */
+#include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
+#include "../../packaging/windows/NativeArguments.h"
+static unsigned count;
+static void expect(int value,const char *message) { if (!value) { fprintf(stderr,"%s\n",message); exit(1); } ++count; }
+int main(void) {
+    const wchar_t *good_ip[]={L"10.0.0.1",L"172.16.0.1",L"192.168.1.20",L"100.64.0.1",L"169.254.1.2"};
+    const wchar_t *bad_ip[]={L"8.8.8.8",L"127.0.0.1",L"localhost",L"::1",L"192.168.01.1",L"10.0.0.1/24",L"10.0.0.1 --arg",L"100.128.0.1",L"10.256.0.1",L"10.1.1"};
+    const wchar_t *bad_paths[]={L"relative.msi",L"\\\\host\\share\\x.msi",L"C:\\x.msi:evil",L"C:\\..\\x.msi",L"C:\\a\\.\\x.msi",L"C:\\a\\\\x.msi",L"C:\\a.\\x.msi",L"C:/x.msi",L"C:\\x.msi\" --arg",L"C:\\x.exe"};
+    const wchar_t *bad_b64[]={L"",L"YQ",L"YQ===",L" YQ==",L"YR==",L"YQ==YQ==",L"AA==",L"//8=",L"wIA=",L"7aCA",L"9JCAgA==",L"8J+A",L"Zg=\n"};
+    size_t i; wchar_t quoted[1024]; size_t used;
+    for (i=0;i<sizeof(good_ip)/sizeof(*good_ip);++i) expect(db_private_ip(good_ip[i]),"private IP rejected");
+    for (i=0;i<sizeof(bad_ip)/sizeof(*bad_ip);++i) expect(!db_private_ip(bad_ip[i]),"unsafe IP accepted");
+    for (i=0;i<sizeof(bad_paths)/sizeof(*bad_paths);++i) expect(!db_local_file(bad_paths[i],L".msi"),"unsafe MSI path accepted");
+    expect(db_local_file(L"C:\\새 폴더\\Sunshine.MSI",L".msi"),"literal local MSI rejected");
+    expect(db_desktop_sid(L"S-1-5-21-1-2-3-1001"),"desktop SID rejected");
+    expect(!db_desktop_sid(L"S-1-5-32-544"),"admin group SID accepted");
+    expect(!db_desktop_sid(L"S-1-5-21-01-2-3-1001"),"noncanonical SID accepted");
+    expect(!db_desktop_sid(L"S-1-5-21-1-2-3-4294967296"),"overflow SID accepted");
+    for (i=0;i<sizeof(bad_b64)/sizeof(*bad_b64);++i) expect(!db_request_base64(bad_b64[i]),"invalid/unsafe public request accepted");
+    expect(db_request_base64(L"e30="),"public JSON snapshot rejected");
+    expect(db_request_base64(L"7ZWc6riA"),"valid UTF8 snapshot rejected");
+    expect(db_request_base64(L"8J+agA=="),"valid supplementary UTF8 snapshot rejected");
+    {
+        wchar_t *large=calloc(21849,sizeof(wchar_t)); size_t at=0;
+        expect(large!=NULL,"request boundary allocation failed");
+        for (i=0;i<5461;++i) { large[at++]=L'Y'; large[at++]=L'W'; large[at++]=L'F'; large[at++]=L'h'; }
+        wcscpy(large+at,L"YQ=="); expect(db_request_base64(large),"16384-byte request rejected");
+        wcscpy(large+at,L"YWE="); expect(!db_request_base64(large),"16385-byte request accepted"); free(large);
+    }
+    {
+        const wchar_t *disable[]={L"--elevated-operation",L"DisableFiles"};
+        const wchar_t *disable_silent[]={L"--elevated-operation",L"DisableFiles",L"--silent"};
+        const wchar_t *disable_invalid[]={L"--elevated-operation",L"DisableFiles",L"--silent",L"extra"};
+        const wchar_t *export_silent[]={L"--elevated-operation",L"Export",L"--request-base64",L"e30=",L"--windows-address",L"192.168.1.20",L"--silent"};
+        const wchar_t *install[]={L"--elevated-operation",L"InstallSunshine",L"--msi-path",L"C:\\Sunshine.msi"};
+        const wchar_t *export_args[]={L"--elevated-operation",L"Export",L"--request-base64",L"e30=",L"--windows-address",L"192.168.1.20"};
+        const wchar_t *enable[]={L"--elevated-operation",L"EnableFiles",L"--request-base64",L"e30=",L"--windows-address",L"100.80.1.20",L"--desktop-user-sid",L"S-1-5-21-1-2-3-1001"};
+        const wchar_t *unknown[]={L"--elevated-operation",L"RunScript"};
+        const wchar_t *override[]={L"--elevated-operation",L"DisableFiles",L"--script-path",L"C:\\evil.ps1"};
+        const wchar_t *bootstrap[]={L"--bootstrap-path",L"C:\\fake.exe"};
+        expect(db_dispatch(0,NULL)==DB_NORMAL,"normal entry rejected");
+        expect(db_dispatch(2,disable)==DB_DISABLE,"fixed disable rejected");
+        expect(!db_silent_disable(2,disable),"ordinary disable must retain visible failure guidance");
+        expect(db_dispatch(3,disable_silent)==DB_DISABLE && db_silent_disable(3,disable_silent),"strict silent uninstall revocation rejected");
+        expect(db_dispatch(4,disable_invalid)==DB_INVALID && !db_silent_disable(4,disable_invalid),"extra silent revocation arguments accepted");
+        expect(db_dispatch(7,export_silent)==DB_INVALID && !db_silent_disable(7,export_silent),"silent must be restricted to revocation");
+        expect(db_dispatch(4,install)==DB_INSTALL,"fixed installation rejected");
+        expect(db_dispatch(6,export_args)==DB_EXPORT,"fixed export rejected");
+        expect(db_dispatch(8,enable)==DB_ENABLE,"fixed enable rejected");
+        expect(db_dispatch(2,unknown)==DB_INVALID,"unknown operation accepted");
+        expect(db_dispatch(4,override)==DB_INVALID,"script override accepted");
+        expect(db_dispatch(2,bootstrap)==DB_INVALID,"caller managed handoff accepted by outer");
+        expect(db_dispatch(7,enable)==DB_INVALID,"missing SID accepted");
+    }
+    {
+        const wchar_t *inputs[]={L"",L"plain",L"two words",L"C:\\tail\\",L"a\\\"b",L"a\"b",L"한국어"};
+        const wchar_t *outputs[]={L"\"\"",L"\"plain\"",L"\"two words\"",L"\"C:\\tail\\\\\"",L"\"a\\\\\\\"b\"",L"\"a\\\"b\"",L"\"한국어\""};
+        for (i=0;i<sizeof(inputs)/sizeof(*inputs);++i) { used=0; quoted[0]=0; expect(db_quote(quoted,1024,&used,inputs[i]) && wcscmp(quoted,outputs[i])==0,"CRT quote mismatch"); }
+        used=0; expect(!db_quote(quoted,3,&used,L"long"),"quote overflow accepted");
+    }
+    expect(!db_show_failure(0,0),"successful child must not show error");
+    expect(db_show_failure(1,0),"unhandled bootstrap failure must show guidance");
+    expect(!db_show_failure(2,0),"managed handled error must not be shown twice");
+    expect(!db_show_failure(3010,0),"MSI reboot-required is a status, not a bootstrap failure");
+    expect(!db_show_failure(1602,0),"MSI cancellation is a status, not a bootstrap error dialog");
+    {
+        const wchar_t *keep[]={L"USERPROFILE=C:\\Users\\Synthetic",L"APPDATA=C:\\Users\\Synthetic\\AppData\\Roaming",L"LOCALAPPDATA=C:\\Users\\Synthetic\\AppData\\Local",L"PATH=C:\\Tools",L"DEVPATH_EXTRA=ordinary"};
+        const wchar_t *drop[]={L"COR_ENABLE_PROFILING=1",L"coreclr_profiler_path=C:\\bad.dll",L"complus_Version=bad",L"DOTNET_STARTUP_HOOKS=bad",L"APPDOMAIN_MANAGER_ASM=bad",L"DevPath=C:\\bad",L"psmodulepath=C:\\bad",L"PSExecutionPolicyPreference=Bypass",L"TEMP=C:\\ambient",L"TMP=C:\\ambient",L"SystemRoot=C:\\bad",L"__COMPAT_LAYER=RunAsInvoker",L"=C:=C:\\ambient"};
+        for (i=0;i<sizeof(keep)/sizeof(*keep);++i) expect(db_keep_normal_env(keep[i]),"normal user environment unexpectedly discarded");
+        for (i=0;i<sizeof(drop)/sizeof(*drop);++i) expect(!db_keep_normal_env(drop[i]),"ambient loader/temp/system override retained");
+        expect(db_env_name(L"PaTh=C:\\Tools",L"PATH",0),"normal PATH detection must be case insensitive");
+    }
+    expect(!db_show_failure(1,1) && !db_show_failure(2,1),"silent uninstall must not show either failure path");
+    printf("{\"status\":\"passed\",\"checks\":%u,\"scope\":\"pure native bootstrap dispatch, UTF8 public request bounds and Windows CRT quoting; no Windows operations\"}\n",count);
+    return 0;
+}

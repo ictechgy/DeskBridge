@@ -1,0 +1,482 @@
+# SPDX-License-Identifier: GPL-3.0-only
+"""Explicit host actions; tests inject fresh paths and inert children, never run Sunshine."""
+import contextlib
+import ctypes
+import fcntl
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path
+import platform
+import signal
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.request
+from policy import Failure, allowed_download_url, arguments, child_environment, select_addresses, validate_session, web_credentials, validate_web_credentials
+
+
+@contextlib.contextmanager
+def ordinary_read(path, maximum, uid=None, private=False):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        s = os.fstat(fd)
+        if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1 or s.st_size > maximum or (uid is not None and s.st_uid != uid):
+            raise Failure('storage')
+        if private and s.st_mode & 0o077:
+            raise Failure('storage')
+        with os.fdopen(os.dup(fd), 'rb') as stream:
+            yield stream
+    finally:
+        os.close(fd)
+
+
+def digest_file(path, maximum, uid=None, private=False):
+    with ordinary_read(path, maximum, uid, private) as f:
+        h, count = hashlib.sha256(), 0
+        while data := f.read(65536):
+            count += len(data)
+            if count > maximum:
+                raise Failure('storage')
+            h.update(data)
+        return count, h.hexdigest()
+
+
+def trusted_program(path):
+    """System symlinks are accepted only when every link/target is root-controlled."""
+    p = Path(path)
+    # resolve() could cross a writable symlink directory: inspect both lexical and resolved ancestors.
+    try:
+        for leaf in (p, p.resolve(strict=True)):
+            for item in (leaf, *leaf.parents):
+                s = item.lstat()
+                if s.st_uid != 0 or (not stat.S_ISLNK(s.st_mode) and s.st_mode & 0o022):
+                    raise Failure('install')
+    except OSError:
+        raise Failure('install') from None
+    if not p.is_file() or not os.access(p, os.X_OK):
+        raise Failure('install')
+    return str(p)
+
+
+class Store:
+    MARKER = b'DeskBridge Linux host private storage v1\n'
+    def __init__(self, root):
+        self.root, self.lock = Path(root), None
+        self.root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for p in (self.root.parent, *self.root.parent.parents):
+            s = p.lstat()
+            # System-owned ancestors and the user's home are allowed; writable shared paths are not.
+            if stat.S_ISLNK(s.st_mode) or not stat.S_ISDIR(s.st_mode) or s.st_uid not in (0, os.getuid()) or (s.st_mode & 0o022 and not (s.st_uid == 0 and s.st_mode & stat.S_ISVTX)):
+                raise Failure('storage')
+        new = False
+        try:
+            self.root.mkdir(mode=0o700); new = True
+        except FileExistsError:
+            pass
+        self._directory(self.root)
+        if new:
+            self.write_new(self.root / '.owner', self.MARKER)
+        try:
+            with ordinary_read(self.root / '.owner', 128, os.getuid(), True) as f:
+                if f.read(129) != self.MARKER:
+                    raise Failure('storage')
+        except OSError:
+            raise Failure('storage') from None
+        fd = os.open(self.root / '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
+        try:
+            s = os.fstat(fd)
+            if not stat.S_ISREG(s.st_mode) or s.st_uid != os.getuid() or s.st_nlink != 1 or s.st_mode & 0o077:
+                raise Failure('storage')
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BaseException:
+            os.close(fd); raise Failure('storage') from None
+        self.lock = fd
+        try:
+            for name in ('credentials', 'xdg', 'downloads'):
+                p = self.root / name
+                p.mkdir(mode=0o700, exist_ok=True); self._directory(p)
+            self.validate()
+        except BaseException:
+            self.close(); raise
+
+    @staticmethod
+    def _directory(p):
+        s = p.lstat()
+        if not stat.S_ISDIR(s.st_mode) or s.st_uid != os.getuid() or s.st_mode & 0o077:
+            raise Failure('storage')
+
+    def validate(self):
+        count = 0
+        for directory, dirs, files in os.walk(self.root, followlinks=False):
+            self._directory(Path(directory))
+            for name in dirs:
+                self._directory(Path(directory) / name)
+            for name in files:
+                count += 1
+                if count > 256:
+                    raise Failure('storage')
+                if Path(directory) / name == self.root / 'credentials/cacert.pem':
+                    self._tighten_certificate(Path(directory) / name)
+                with ordinary_read(Path(directory) / name, 16 * 1024 * 1024, os.getuid(), True):
+                    pass
+
+    @staticmethod
+    def _tighten_certificate(path):
+        # Pinned upstream chmods its public certificate to0644. Only this known
+        # owned regular inode may be tightened, never arbitrary files/keys/links.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            value = os.fstat(fd)
+            if not stat.S_ISREG(value.st_mode) or value.st_uid != os.getuid() or value.st_nlink != 1 or stat.S_IMODE(value.st_mode) not in (0o600, 0o644):
+                raise Failure('storage')
+            os.fchmod(fd, 0o600)
+        finally: os.close(fd)
+
+    @staticmethod
+    def write_new(path, data):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data); f.flush(); os.fsync(f.fileno())
+
+    def prepare(self):
+        self.validate()
+        config = self.root / 'sunshine.conf'
+        if not config.exists():
+            self.write_new(config, b'# DeskBridge private host configuration\n')
+        apps = self.root / 'apps.json'
+        data = b'{"env":{},"apps":[{"name":"Desktop","cmd":""}]}\n'
+        fd, temporary = tempfile.mkstemp(prefix='.apps-', dir=self.root)
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(data); f.flush(); os.fsync(f.fileno())
+            os.replace(temporary, apps)
+        finally:
+            if os.path.lexists(temporary): os.unlink(temporary)
+        self.validate()
+
+    def close(self):
+        if self.lock is not None:
+            os.close(self.lock); self.lock = None
+
+    def prepare_web_credentials(self, username, password):
+        path = self.root / 'web-credentials.json'
+        if os.path.lexists(path):
+            with ordinary_read(path, 8192, os.getuid(), True) as source:
+                validate_web_credentials(source.read(8193))
+            return  # Never overwrite or silently reset an existing administrator.
+        data = web_credentials(username, password)
+        fd, temporary = tempfile.mkstemp(prefix='.web-credentials-', dir=self.root)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data); stream.flush(); os.fsync(stream.fileno())
+            publish_new(temporary, path)
+        finally:
+            if os.path.lexists(temporary): os.unlink(temporary)
+
+
+class StrictRedirect(urllib.request.HTTPRedirectHandler):
+    max_redirections = 5
+    max_repeats = 2
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not allowed_download_url(newurl):
+            raise Failure('download')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def publish_new(source, destination):
+    """Atomic no-replace rename; a crash never leaves a two-link private inode."""
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == 'linux':
+        function = library.renameat2
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        args = (-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+    elif sys.platform == 'darwin':  # Offline source fixtures on the development Mac.
+        function = library.renamex_np
+        function.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        args = (os.fsencode(source), os.fsencode(destination), 4)
+    else:
+        raise Failure('storage')
+    function.restype = ctypes.c_int
+    if function(*args) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+class TransferControl:
+    """Interrupt active TLS I/O on cancel/deadline, including slow-drip headers/body."""
+    def __init__(self, cancel, seconds=600):
+        self.cancel, self.deadline = cancel, time.monotonic() + seconds
+        self.done, self.lock, self.sockets = threading.Event(), threading.Lock(), []
+        self.aborted = None
+        self.worker = threading.Thread(target=self._watch, daemon=True)
+        self.worker.start()
+
+    def attach(self, sock):
+        with self.lock:
+            self.sockets.append(sock)
+            aborted = self.aborted
+        if aborted:
+            self._shutdown(sock)
+            raise Failure(aborted)
+
+    @staticmethod
+    def _shutdown(sock):
+        with contextlib.suppress(OSError): sock.shutdown(socket.SHUT_RDWR)
+
+    def _watch(self):
+        while not self.done.wait(0.05):
+            reason = 'cancel' if self.cancel.is_set() else 'download' if time.monotonic() >= self.deadline else None
+            if reason:
+                with self.lock:
+                    self.aborted = reason
+                    sockets = list(self.sockets)
+                for sock in sockets: self._shutdown(sock)
+                return
+
+    def check(self):
+        if self.cancel.is_set(): raise Failure('cancel')
+        if self.aborted or time.monotonic() >= self.deadline: raise Failure(self.aborted or 'download')
+
+    def close(self):
+        self.done.set(); self.worker.join(timeout=1)
+
+    def handler(self):
+        control = self
+        class Connection(http.client.HTTPSConnection):
+            def connect(self):
+                control.check()
+                super().connect()
+                control.attach(self.sock)
+        class Handler(urllib.request.HTTPSHandler):
+            def https_open(self, request):
+                return self.do_open(Connection, request, context=self._context)
+        return Handler()
+
+
+def download(pin, store, cancel, progress=lambda value: None, opener=None, control=None):
+    if not allowed_download_url(pin['url']):
+        raise Failure('download')
+    store.validate()
+    destination = store.root / 'downloads' / ('sunshine-' + pin['version'] + '-ubuntu24.04-amd64.deb')
+    if os.path.lexists(destination):
+        try:
+            if digest_file(destination, pin['bytes'], os.getuid(), True) == (pin['bytes'], pin['sha256']):
+                return destination
+        except (OSError, Failure): pass
+        raise Failure('download_collision')
+    fd, temporary = tempfile.mkstemp(prefix='.download-', dir=store.root / 'downloads')
+    request = urllib.request.Request(pin['url'], headers={'User-Agent': 'DeskBridge-Linux/1', 'Accept': 'application/octet-stream'})
+    control = control or TransferControl(cancel)
+    opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), StrictRedirect(), control.handler())
+    received, h = 0, hashlib.sha256()
+    try:
+        with os.fdopen(fd, 'wb') as out, opener.open(request, timeout=20) as response:
+            if response.status != 200 or not allowed_download_url(response.url):
+                raise Failure('download')
+            length = response.headers.get('Content-Length')
+            if length is not None and int(length) != pin['bytes']:
+                raise Failure('download')
+            while True:
+                control.check()
+                data = response.read1(65536)
+                if not data: break
+                received += len(data)
+                if received > pin['bytes']: raise Failure('download')
+                out.write(data); h.update(data); progress(received / pin['bytes'])
+            control.check()
+            if received != pin['bytes'] or h.hexdigest() != pin['sha256']:
+                raise Failure('download')
+            out.flush(); os.fsync(out.fileno())
+        publish_new(temporary, destination)
+        return destination
+    except Failure:
+        raise
+    except Exception:
+        control.check()
+        raise Failure('download') from None
+    finally:
+        control.close()
+        if os.path.lexists(temporary): os.unlink(temporary)
+
+
+def metadata_command(argv):
+    trusted_program(argv[0])
+    # Small metadata commands only. No service logs or existing Sunshine configuration.
+    with tempfile.TemporaryFile() as output:
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.DEVNULL,
+                                 env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}, close_fds=True)
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            try: child.wait(timeout=1)
+            except subprocess.TimeoutExpired: pass
+            raise Failure('operation') from None
+        if child.returncode != 0 or output.tell() > 262144:
+            raise Failure('operation')
+        output.seek(0); return output.read(262145)
+
+
+def addresses():
+    return select_addresses(metadata_command(['/usr/sbin/ip', '-json', '-4', 'address', 'show']))
+
+
+def preflight(pin, env=None):
+    env = dict(os.environ if env is None else env)
+    validate_session(platform.freedesktop_os_release(), platform.machine(), os.getuid(), env)
+    program = trusted_program(pin['binary'])
+    try:
+        installed_digest = digest_file(program, 64 * 1024 * 1024, 0)[1]
+    except (OSError, Failure):
+        raise Failure('install') from None
+    if installed_digest != pin['binarySHA256']:
+        raise Failure('install')
+    version = metadata_command(['/usr/bin/dpkg-query', '-W', '-f=${Version}', 'sunshine']).decode('ascii')
+    if version != pin['packageVersion']:
+        raise Failure('install')
+    if not os.access('/dev/uinput', os.R_OK | os.W_OK):
+        raise Failure('input')
+    trusted_program('/usr/bin/setpriv')
+    # Detect any existing Sunshine without reading argv/environment/logs/configuration.
+    for index, entry in enumerate(Path('/proc').iterdir()):
+        if index > 32768: raise Failure('existing')
+        if entry.name.isdecimal():
+            try:
+                with (entry / 'comm').open('rb') as f:
+                    if f.read(128).strip() == b'sunshine': raise Failure('existing')
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                pass
+    ports = []
+    try:
+        for kind, values in ((socket.SOCK_STREAM, (47984, 47989, 47990, 48010)),
+                             (socket.SOCK_DGRAM, (47998, 47999, 48000, 48002, 48010))):
+            for port in values:
+                s = socket.socket(socket.AF_INET, kind); ports.append(s)
+                # Sunshine's TCP servers use reuse_address. Still reject every live
+                # listener; UDP deliberately stays exclusive (reuse would hide it).
+                if kind == socket.SOCK_STREAM: s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(('0.0.0.0', port))
+    except OSError:
+        raise Failure('existing') from None
+    finally:
+        for s in ports: s.close()
+    return env
+
+
+class OwnedHost:
+    """Hold the unreaped original PID while signaling its group; never signal after reap."""
+    def __init__(self):
+        self.child, self.lock = None, threading.RLock()
+        self.lifetime_writer = None
+
+    def start(self, pin, store, name, username='', password=''):
+        with self.lock:
+            if self.child is not None: raise Failure('existing')
+            env = preflight(pin)
+            store.prepare()
+            store.prepare_web_credentials(username, password)
+            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', pin['binary']] + arguments(store.root, name)
+            self._spawn(argv, child_environment(env, store.root))
+
+    def _spawn(self, argv, env):
+        reader, writer = os.pipe2(os.O_CLOEXEC)
+        try:
+            supervisor = str(Path(__file__).with_name('lifetime.py'))
+            self.child = subprocess.Popen(['/usr/bin/python3', '-I', supervisor, str(reader), *argv], env=env,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=True, pass_fds=(reader,), umask=0o077)
+            self.lifetime_writer = writer
+        except BaseException:
+            os.close(writer); raise
+        finally:
+            os.close(reader)
+
+    def _close_lifetime(self):
+        if self.lifetime_writer is not None:
+            os.close(self.lifetime_writer); self.lifetime_writer = None
+
+    def _exited(self):
+        # WNOWAIT observes without reaping, retaining the PID's group identity.
+        try:
+            return os.waitid(os.P_PID, self.child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        except ChildProcessError:
+            self.child = None
+            self._close_lifetime()
+            raise Failure('exit') from None
+
+    def alive(self):
+        with self.lock:
+            if self.child is None: return False
+            if not self._exited(): return True
+            self._finish(); return False
+
+    def _signal(self, sig):
+        self._exited()  # Reaped elsewhere means ownership was lost: never signal a reused PID.
+        try: os.killpg(self.child.pid, sig)
+        except ProcessLookupError: pass
+
+    def _finish(self):
+        self._signal(signal.SIGKILL)
+        self.child.wait(timeout=1)  # On timeout retain ownership and the window for retry.
+        self.child = None
+        self._close_lifetime()
+
+    def stop(self):
+        with self.lock:
+            if self.child is None: return
+            self._signal(signal.SIGTERM)
+            deadline = time.monotonic() + 3
+            while not self._exited() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self._finish()
+
+
+def open_installer(pin, package):
+    if digest_file(package, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
+        raise Failure('download')
+    trusted_program('/usr/bin/gio')
+    # Explicit user action opens the standard desktop package handler. It owns authentication.
+    subprocess.run(['/usr/bin/gio', 'open', str(package)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=10, check=True, close_fds=True)
+
+
+def save_package(pin, package, destination):
+    """Export a verified copy; never overwrite, follow a leaf link, or run a shell."""
+    if digest_file(package, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
+        raise Failure('download')
+    destination = Path(destination)
+    fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
+    try:
+        with os.fdopen(fd, 'wb') as out, ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
+            while data := source.read(65536): out.write(data)
+            out.flush(); os.fsync(out.fileno())
+        if digest_file(temporary, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
+            raise Failure('download')
+        publish_new(temporary, destination)
+        return destination
+    except FileExistsError:
+        raise Failure('collision') from None
+    finally:
+        if os.path.lexists(temporary): os.unlink(temporary)
+
+
+def cleanup_owned(host, store, finished, failed):
+    """Quit after confirmed stop/ownership loss; retain the window on other errors."""
+    try:
+        host.stop()
+    except Failure as error:
+        if error.key != 'exit' or host.child is not None:
+            failed(); return
+        # waitid confirmed a lost child and revoked ownership before raising.
+    except Exception:
+        failed(); return  # Keep the owned child/store/window available for explicit retry.
+    try:
+        if store: store.close()
+    finally:
+        finished()

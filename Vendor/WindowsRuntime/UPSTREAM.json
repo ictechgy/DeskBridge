@@ -1,0 +1,9 @@
+{
+  "toolchain": "Zig",
+  "version": "0.17.0",
+  "source": "https://ziglang.org/download/index.json",
+  "files": {
+    "Zig-LICENSE": "5c537d6853e005298a285d508cff9ac7192cea23576c840d485b2b586a7ff177",
+    "Mingw-COPYING": "99a69660981156c21336fdb5661f89341b013c94e4bf9e1c7467b4745718397f"
+  }
+}
