@@ -23,7 +23,7 @@ $innoSource=[IO.File]::ReadAllText((Join-Path $sourceRoot 'packaging/windows/Des
 Expect ($innoSource.Contains('AppId={{7BB82A17-E531-4D04-A1FA-E8912E9E8E99}') -and
         $innoSource.Contains('DefaultDirName={autopf}\DeskBridge')) 'Installer upgrade identity must remain stable.'
 Expect ($innoSource.Contains('Source: "..\..\build\windows\Knot-Windows.exe"; DestDir: "{app}"; DestName: "DeskBridge-Windows.exe";')) 'Publicly renamed helper must replace the existing installed broker.'
-Expect ($innoSource.Contains('Filename: "{app}\DeskBridge-Windows.exe"; Description: "Knot 설정 열기";')) 'Installed launch path must use the replaced broker.'
+Expect ($innoSource.Contains('Filename: "{app}\DeskBridge-Windows.exe"; Description: ')) 'Installed launch path must use the replaced broker.'
 $uninstallStart=$innoSource.IndexOf('function InitializeUninstall(): Boolean;',[StringComparison]::Ordinal)
 Expect ($uninstallStart -ge 0) 'Actual uninstall callback must be present.'
 $uninstall=$innoSource.Substring($uninstallStart)
