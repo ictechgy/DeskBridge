@@ -26,6 +26,7 @@ $status.BackColor=[Drawing.SystemColors]::Control; $status.ForeColor=[Drawing.Sy
 $status.Dock='Fill'; $status.Margin=New-Object Windows.Forms.Padding(20,8,20,8); $layout.Controls.Add($status,0,1)
 $script:headlessBusy=$false; $script:cancelHeadlessDownload=$false; $script:scan=$null
 $script:canInstall=$false; $script:canRemove=$false
+$script:installHoldText='외부 드라이버의 보안 검토가 끝날 때까지 가상 화면 자동 설치를 보류했습니다. 모니터 또는 HDMI 더미 플러그로 기존 화면 연결을 이용하세요.'
 function Add-HeadlessText([string] $Text) {
     $label=New-Object Windows.Forms.Label; $label.Text=$Text; $label.AutoSize=$true
     $label.MaximumSize=New-Object Drawing.Size(660,0); $label.Margin=New-Object Windows.Forms.Padding(3,4,3,12)
@@ -62,7 +63,7 @@ function Update-HeadlessState {
         while (-not $script:scan.IsCompleted -and $timer.Elapsed.TotalSeconds -lt 15) {
             [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 80
         }
-        if (-not $script:scan.IsCompleted) { $status.Text='장치 확인이 지연되고 있습니다. 잠시 뒤 상태 새로고침을 누르세요.'; return }
+        if (-not $script:scan.IsCompleted) { $status.Text=$script:installHoldText+' 장치 확인이 지연되고 있습니다. 잠시 뒤 상태 새로고침을 누르세요.'; return }
         try { $inventory=$script:scan.GetAwaiter().GetResult() } finally { $script:scan=$null }
         $state=Get-KnotHeadlessState
         $foreign=@($inventory.Devices | Where-Object { $_.InstanceId -ine $state.InstanceId })
@@ -83,8 +84,8 @@ function Update-HeadlessState {
         if ($devices.Count -ne 1) { $status.Text='설치 기록은 있지만 장치를 확인하지 못했습니다. 재시작 후에도 같으면 Knot 가상 화면을 제거한 뒤 다시 설치하세요.'; return }
         $active=@($screens | Where-Object { $_.Active })
         if ($active.Count -gt 0) {
-            $names=($active | ForEach-Object { $_.Name+' ('+$_.DisplayName+')' }) -join ', '
-            $status.Text='가상 화면 활성: '+$names+'. Sunshine의 화면 ID 설정과 실제 원격 연결을 확인하세요.'
+            $names=($active | ForEach-Object { 'name: '+$_.Name+', display_name: '+$_.DisplayName }) -join '; '
+            $status.Text='가상 화면 활성 (진단용 이름, Sunshine ID 아님): '+$names+'. Sunshine의 device_id와 실제 원격 연결을 확인하세요.'
         } else { $status.Text='가상 디스플레이 장치는 설치되어 있지만 활성 화면을 확인하지 못했습니다. Windows 디스플레이 설정에서 화면을 확장하거나 재시작한 뒤 다시 확인하세요.' }
         if ($state.RebootRequired) { $status.Text+=' 설치 때 재시작이 요청되었습니다. 아직 재시작하지 않았다면 먼저 재시작하세요.' }
     } catch { $script:scan=$null; Show-HeadlessFailure $_ }
@@ -105,8 +106,14 @@ $title=Add-HeadlessText '모니터를 연결하지 않아도 Windows 화면 사�
 $title.Font=New-Object Drawing.Font('Segoe UI',16,[Drawing.FontStyle]::Bold)
 $null=Add-HeadlessText 'Windows 11 x64용 선택 기능입니다. 처음 설정할 때는 모니터 또는 다른 원격 접속 수단이 필요합니다. PC가 켜져 있고 Windows에 로그인되어 있어야 하며, 잠자기·로그인 해제 기능은 포함하지 않습니다.'
 $null=Add-HeadlessText '1  가상 화면 하나 설치 · 드라이버 검토로 현재 보류'
-$null=Add-HeadlessText '공식 Virtual Display Driver를 내려받아 설치합니다. 연결을 끊어도 화면은 유지됩니다. 1080p·QHD·4K, 60Hz를 지원하며 다른 모니터 설정은 바꾸지 않습니다. 처음에는 1080p로 연결하세요.'
+$null=Add-HeadlessText $script:installHoldText
+$null=Add-HeadlessText '이 버전은 드라이버를 설치하지 않습니다. 아래 화면 지정 안내는 이미 사용할 수 있는 화면이 있는 경우에 적용됩니다. Knot 설치 기록이 있는 가상 화면의 상태 확인과 제거는 별도로 사용할 수 있습니다.'
 $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
+    # Refresh policy before any confirmation, network activity, or elevation.
+    try { $availability=Get-KnotHeadlessAvailability } catch { $availability=$null }
+    if (-not $availability -or -not $availability.Enabled) {
+        $script:canInstall=$false; Set-HeadlessBusy $false; $status.Text=$script:installHoldText; return
+    }
     if ([Windows.Forms.MessageBox]::Show('가상 디스플레이 드라이버와 화면 하나를 설치합니다. 화면은 제거할 때까지 유지되며 관리자 확인이 필요합니다. 계속할까요?','Knot','OKCancel','Information') -ne 'OK') { return }
     Set-HeadlessBusy $true; $folder=$null; $download=$null; $locked=$null
     try {

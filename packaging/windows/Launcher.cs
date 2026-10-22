@@ -237,6 +237,7 @@ internal static class Launcher
     {
         if (request.Operation == "InstallVirtualDisplay")
         {
+            AssertVirtualDisplayInstallAllowed();
             SunshinePin pin = ParseSunshinePin(File.ReadAllText(Path.Combine(directory, "VirtualDisplayDependency.json")));
             if (new DriveInfo(Path.GetPathRoot(request.ZipPath)).DriveType == DriveType.Network)
                 throw new InvalidDataException("드라이버 설치 파일을 로컬 드라이브로 복사하세요.");
@@ -267,6 +268,14 @@ internal static class Launcher
         start.WorkingDirectory = directory;
         int result = RunAndWait(start);
         return InterpretHeadlessResult(result, HasSetupSuccessReceipt(directory), HasZeroLengthReceipt(directory, "reboot-required"));
+    }
+
+    internal static void AssertVirtualDisplayInstallAllowed()
+    {
+        // No accepted candidate exists in this release. This compiled gate denies
+        // installation before reading/copying the ZIP or starting PowerShell,
+        // independently of mutable UI metadata. Removal remains available.
+        throw new InvalidOperationException("외부 드라이버의 보안 검토가 끝날 때까지 가상 화면 설치를 보류했습니다.");
     }
 
     internal static int InterpretHeadlessResult(int result, bool completed, bool rebootRequired)

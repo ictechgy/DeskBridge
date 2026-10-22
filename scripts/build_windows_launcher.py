@@ -55,6 +55,12 @@ def verify_virtual_display_inputs(root):
     folder = Path(root) / 'host/windows'
     pin = json.loads((folder / 'VirtualDisplayDependency.json').read_text())
     files = json.loads((folder / 'VirtualDisplayFiles.json').read_text())
+    # This candidate has not cleared the upstream IPC review. Changing JSON alone
+    # must not silently enable a release; broker and policy need a reviewed change.
+    if (pin.get('installEnabled') is not False or
+            pin.get('driverSafetyReviewStatus') != 'blocked' or
+            pin.get('installBlockedReason') != 'upstream-ipc-review'):
+        raise ValueError('Virtual display candidate must remain blocked pending driver safety review')
     if (pin.get('schema') != 1 or pin.get('bytes') != 132118 or
             pin.get('sha256') != 'e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a' or
             pin.get('url') != 'https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip' or

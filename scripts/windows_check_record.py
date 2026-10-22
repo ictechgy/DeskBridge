@@ -4,7 +4,7 @@ import re
 
 REQUIRED_WINDOWS_SUITES = ['native-pe', 'managed-payload', 'native-arguments',
                           'reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup']
-MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 241, 'native-arguments': 154,
+MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 242, 'native-arguments': 154,
                         'reverse-client': 124, 'reverse-discovery': 195, 'reverse-qr': 65,
                         'headless-native': 226, 'headless-setup': 184}
 HEADLESS_SOURCE_PATHS = ['host/windows/HeadlessNative.cs', 'host/windows/HeadlessSetup.psm1',

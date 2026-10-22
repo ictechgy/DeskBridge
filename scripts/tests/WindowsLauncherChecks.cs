@@ -155,6 +155,14 @@ internal static class Checks
         var broker = launcher.GetMethod("ParseBrokerArguments", BindingFlags.Static | BindingFlags.NonPublic)!;
         var msiPath = launcher.GetMethod("ValidateMsiPath", BindingFlags.Static | BindingFlags.NonPublic)!;
         var sunshinePin = launcher.GetMethod("ParseSunshinePin", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var headlessOperation = launcher.GetMethod("RunHeadlessOperation", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var blockedInstall = broker.Invoke(null, new object[] { new[] { "--elevated-operation", "InstallVirtualDisplay", "--zip-path", @"C:\synthetic-driver.zip" } })!;
+        bool installBlockedBeforeIo = false;
+        // Null paths/list are deliberate: reaching staging/receipts/PowerShell
+        // instead of the compiled deny gate must fail this pure fixture.
+        try { headlessOperation.Invoke(null, new object?[] { blockedInstall, null, null }); }
+        catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException) { installBlockedBeforeIo = true; }
+        Expect(installBlockedBeforeIo, "Blocked driver must be refused before ZIP or process operations");
         Expect(broker.Invoke(null, new object[] { Array.Empty<string>() }) == null, "Ordinary launch must remain non-elevated GUI mode");
         var requestJson = "{\"kind\":\"deskbridge.mac-setup\",\"version\":1,\"requestID\":\"11111111-1111-4111-8111-111111111111\",\"clientPublicKey\":\"synthetic public key\",\"allowedClientAddresses\":[\"192.168.1.10\"]}";
         var encodedRequest = Convert.ToBase64String(Encoding.UTF8.GetBytes(requestJson));
