@@ -43,13 +43,16 @@ function Set-HeadlessBusy([bool] $Busy) {
     $remove.Enabled=(-not $Busy -and $script:canRemove -and [bool]$LauncherPath)
     $cancel.Enabled=($Busy -and $cancel.Visible)
 }
-function Show-HeadlessFailure($Record) {
+function Show-HeadlessFailure($Record,[switch] $StatusProbe) {
     $cause=$Record.Exception
     while ($cause) {
         if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -eq 1223) {
             $status.Text='관리자 확인을 취소했습니다. 필요할 때 다시 시작하세요.'; return
         }
         $cause=$cause.InnerException
+    }
+    if ($StatusProbe) {
+        $status.Text='가상 화면 상태를 확인하지 못했습니다. Knot을 다시 실행하고 Windows 보안 정책에서 상태 확인을 허용하는지 확인하세요. 기존 복구 기록과 설정은 보존했습니다.'; return
     }
     $status.Text='완료하지 못했습니다. 네트워크와 관리자 권한을 확인한 뒤 상태를 다시 확인하세요. 기존 드라이버나 변경된 설정은 자동으로 덮어쓰지 않습니다.'
 }
@@ -67,7 +70,10 @@ function Update-HeadlessState {
         try { $inventory=$script:scan.GetAwaiter().GetResult() } finally { $script:scan=$null }
         $state=Get-KnotHeadlessState
         $foreign=@($inventory.Devices | Where-Object { $_.InstanceId -ine $state.InstanceId })
-        if ($state.Status -eq 'Conflict' -or $foreign.Count -gt 0) {
+        if ($state.Status -eq 'Conflict') {
+            $status.Text='Knot 복구 기록이나 설정을 안전하게 확인하지 못했습니다. 기존 상태는 보존했습니다. 파일을 직접 삭제하거나 재설치하지 말고 Windows 관리자에게 복구 기록 점검을 요청하세요.'; return
+        }
+        if ($foreign.Count -gt 0) {
             $status.Text='기존 가상 디스플레이 또는 변경된 설정이 있습니다. Knot이 설치하거나 제거하지 않습니다. 기존 드라이버의 관리 도구를 사용하세요.'; return
         }
         if ($state.Status -eq 'Absent') {
@@ -88,7 +94,7 @@ function Update-HeadlessState {
             $status.Text='가상 화면 활성 (진단용 이름, Sunshine ID 아님): '+$names+'. Sunshine의 device_id와 실제 원격 연결을 확인하세요.'
         } else { $status.Text='가상 디스플레이 장치는 설치되어 있지만 활성 화면을 확인하지 못했습니다. Windows 디스플레이 설정에서 화면을 확장하거나 재시작한 뒤 다시 확인하세요.' }
         if ($state.RebootRequired) { $status.Text+=' 설치 때 재시작이 요청되었습니다. 아직 재시작하지 않았다면 먼저 재시작하세요.' }
-    } catch { $script:scan=$null; Show-HeadlessFailure $_ }
+    } catch { $script:scan=$null; Show-HeadlessFailure $_ -StatusProbe }
     finally { Set-HeadlessBusy $script:headlessBusy }
 }
 function Invoke-HeadlessBroker([string] $Operation,[string] $Archive) {
@@ -181,10 +187,11 @@ $remove=Add-HeadlessButton 'Knot 가상 화면 제거…' {
 }
 if (-not $LauncherPath) { $null=Add-HeadlessText '설치와 제거는 배포용 Knot EXE에서만 사용할 수 있습니다. 이 개발자 폴더에서는 상태만 확인합니다.' }
 $window.Add_Resize({
-    $width=[Math]::Max(220,$content.ClientSize.Width-60)
+    $scale=[Math]::Max(1.0,[double]$window.DeviceDpi/96.0)
+    $width=[Math]::Max([int][Math]::Round(220*$scale),$content.ClientSize.Width-[int][Math]::Round(60*$scale))
     foreach ($control in $content.Controls) {
         if ($control -is [Windows.Forms.Label]) { $control.MaximumSize=New-Object Drawing.Size($width,0) }
-        elseif ($control -is [Windows.Forms.Button]) { $control.Width=[Math]::Min(340,$width) }
+        elseif ($control -is [Windows.Forms.Button]) { $control.Width=[Math]::Min([int][Math]::Round(340*$scale),$width) }
     }
 })
 $window.Add_FormClosing({ param($sender,$eventArgs) if ($script:headlessBusy) { $eventArgs.Cancel=$true } })

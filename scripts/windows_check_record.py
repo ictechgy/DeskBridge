@@ -121,3 +121,5 @@ def validate_windows_check_record(checks, build):
     if image_runtime and (native_qr.get('freshSyntheticOnly') is not True or
                           type(native_qr.get('checks')) is not int or native_qr['checks'] < 20):
         raise ValueError(message)
+    if image_runtime and headless['headless-native']['frameworkCompiler'] is not True:
+        raise ValueError(message)

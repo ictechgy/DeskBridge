@@ -38,6 +38,8 @@ def run_headless_checks(powershell, invoke, snapshot):
             raise ValueError(label + ' checker returned incomplete or unsafe results')
         if label == 'headless-native' and type(result.get('frameworkCompiler')) is not bool:
             raise ValueError('Headless native fixture did not identify its compiler path')
+        if label == 'headless-native' and os.name == 'nt' and result['frameworkCompiler'] is not True:
+            raise ValueError('Windows headless checks require the protected Framework compiler boundary')
         results[label] = result
     return results
 

@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
 from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
+from test_windows_launcher import run_headless_checks
 
 
 class WindowsPayloadCheckRecordTests(unittest.TestCase):
@@ -158,7 +159,31 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
         changed['windowsImageCodecRuntimeTested'] = True
         changed['reverseQRWindows'].update(status='PASS', windowsImageCodecTested=True, freshSyntheticOnly=True,
                                            embeddedDecoderBindingTested=True, checks=23)
+        changed['headless']['headless-native']['frameworkCompiler'] = True
         validate_windows_check_record(changed, self.build)
+
+    def test_windows_record_cannot_replace_framework_proof_with_portable_check(self):
+        changed = copy.deepcopy(self.checks)
+        changed['windowsImageCodecRuntimeTested'] = True
+        changed['reverseQRWindows'].update(status='PASS', windowsImageCodecTested=True, freshSyntheticOnly=True,
+                                           embeddedDecoderBindingTested=True, checks=23)
+        with self.assertRaises(ValueError):
+            validate_windows_check_record(changed, self.build)
+
+    def test_runner_requires_framework_only_on_windows(self):
+        fixtures = copy.deepcopy(self.checks['headless'])
+        def invoke(label, argv):
+            return {'stdout': json.dumps(fixtures[label.removesuffix('-synthetic-checks')])}
+        for host, framework, accepted in (('posix', False, True), ('nt', False, False), ('nt', True, True)):
+            fixtures['headless-native']['frameworkCompiler'] = framework
+            with self.subTest(host=host, framework=framework), patch('test_windows_launcher.os') as platform:
+                platform.name = host
+                if accepted:
+                    result = run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'])
+                    self.assertIs(result['headless-native']['frameworkCompiler'], framework)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'Framework compiler boundary'):
+                        run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'])
 
     def test_embedded_binding_and_identity_proofs_are_required(self):
         for key in ('embeddedDecoderBindingTested', 'decoderResolverIdentityTested', 'decoderInitializationIdempotent'):
