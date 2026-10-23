@@ -57,7 +57,7 @@ The native helper's Authenticode signature, when explicitly applied, covers its 
 
 Generated SSH keys and the upstream streaming identity are owner-only local files. They are not protected against a process already running as the same macOS user, root, or an unlocked compromised session. Passphrase-protected explicit SSH identities can use an already-unlocked local agent. The app is not App Sandbox-isolated.
 
-Generated SSH keys are created only after validating the app-owned base and a fresh private generation directory. A folder with inherited ACL entries is refused before key generation; the app does not remove ACLs from an existing directory to make it usable. Private streaming PEM files are limited to 64 KiB each and client IDs to 4 KiB. Missing files and unsafe or malformed existing identities have distinct outcomes. Keep existing credentials when investigating a storage refusal; verify the app folder's owner, permissions and sharing settings before retrying.
+Generated SSH keys are created only after validating the app-owned base and a fresh private generation directory. A folder with inherited ACL entries is refused before key generation; the app does not remove ACLs from an existing directory to make it usable. Private streaming PEM files are limited to 64 KiB each and client IDs to 4 KiB. An initialized streaming identity requires all three persisted components, even if every file later disappears; it is never silently replaced. An uninitialized legacy PEM pair may complete migration with a generated client ID. Keep existing credentials when investigating a storage refusal; verify the app folder's owner, permissions and sharing settings before retrying.
 
 ## Validation still required
 

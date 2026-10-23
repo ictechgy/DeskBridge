@@ -458,22 +458,29 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 @@ -15 +15 @@
 -        _ = try storageRoot()
 +        try FileIdentityStore.validateStorage(base: storageRoot())
-@@ -19,0 +20,8 @@
-+        if let identity = try loadFromFileStore() {
+@@ -20,8 +20,8 @@
+-        if defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion {
+-            if let identity = try loadFromFileStore() {
+-                cached = identity
+-                log.info("Loaded identity from file store")
+-                return identity
+-            }
+-            // A missing file store regenerates as before; an actual read failure must throw.
+-            log.error("identityFileStorageVersion flag set but file store is empty - regenerating")
++        let established = defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion
++        if let identity = try loadFromFileStore(requireComplete: established) {
 +            // Complete an interrupted migration without replacing the valid file identity.
 +            wipeUserDefaultsPlaintext(defaults: defaults)
 +            defaults.set(Self.fileStorageVersion, forKey: Self.fileStorageFlag)
 +            cached = identity
 +            log.info("Loaded identity from file store")
 +            return identity
-+        }
-@@ -21,5 +28,0 @@
--            if let identity = try loadFromFileStore() {
--                cached = identity
--                log.info("Loaded identity from file store")
--                return identity
--            }
-@@ -110,10 +113,8 @@
+@@ -28,0 +29,2 @@
++        // An established identity disappearing is a recovery error, not a new install.
++        guard !established else { throw IdentityStorageError.unsafeStorage }
+@@ -108,12 +110,11 @@
+-    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
+-    func loadFromFileStore() throws -> Identity? {
 -        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
 -              let certPEM = String(data: certData, encoding: .utf8),
 -              !certPEM.isEmpty else {
@@ -484,6 +491,9 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 -              !keyPEM.isEmpty else {
 -            return nil
 -        }
++    /// Only an unflagged first install/migration may fall through or synthesize a missing ID.
++    /// Once published, all three identity components must remain present.
++    func loadFromFileStore(requireComplete: Bool) throws -> Identity? {
 +        let certificate = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot())
 +        let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
 +        let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
@@ -500,7 +510,11 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +        if let uidData = uniqueID {
 +            guard let stored = String(data: uidData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
 +                  !stored.isEmpty else { throw IdentityStorageError.unsafeStorage }
-@@ -140,0 +141 @@
+@@ -128 +128,2 @@
+-            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
++            guard !requireComplete else { throw IdentityStorageError.unsafeStorage }
++            // Complete an unpublished legacy migration without replacing its valid PEM pair.
+@@ -140,0 +142 @@
 +        try FileIdentityStore.validateStorage(base: storageRoot())
 diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identity.swift
 --- a/GlimmerEngine/Network/Identity.swift

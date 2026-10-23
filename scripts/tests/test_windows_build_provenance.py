@@ -133,12 +133,12 @@ class VirtualDisplayPolicy(unittest.TestCase):
                  ('Show-HeadlessSetup.ps1', self.pin['url'], 'https://example.invalid/driver.zip')]
         for name, old, new in cases:
             path = self.folder / name
-            original = path.read_text()
+            original = path.read_text(encoding='utf-8-sig')
             self.assertIn(old, original)
-            path.write_text(original.replace(old, new))
+            path.write_text(original.replace(old, new), encoding='utf-8-sig')
             with self.subTest(name=name, old=old), self.assertRaisesRegex(ValueError, 'PowerShell virtual display verification pin'):
                 verify_virtual_display_inputs(self.root)
-            path.write_text(original)
+            path.write_text(original, encoding='utf-8-sig')
 
     def test_missing_policy_field_is_rejected(self):
         for key in ('installEnabled', 'driverSafetyReviewStatus', 'installBlockedReason'):

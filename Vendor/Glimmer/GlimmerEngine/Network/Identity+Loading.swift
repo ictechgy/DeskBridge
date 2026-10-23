@@ -17,7 +17,8 @@ extension IdentityManager {
         // -----------------------------------------------------------------
         // Step 1 - file-store fast path.
         // -----------------------------------------------------------------
-        if let identity = try loadFromFileStore() {
+        let established = defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion
+        if let identity = try loadFromFileStore(requireComplete: established) {
             // Complete an interrupted migration without replacing the valid file identity.
             wipeUserDefaultsPlaintext(defaults: defaults)
             defaults.set(Self.fileStorageVersion, forKey: Self.fileStorageFlag)
@@ -25,10 +26,8 @@ extension IdentityManager {
             log.info("Loaded identity from file store")
             return identity
         }
-        if defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion {
-            // A missing file store regenerates as before; an actual read failure must throw.
-            log.error("identityFileStorageVersion flag set but file store is empty - regenerating")
-        }
+        // An established identity disappearing is a recovery error, not a new install.
+        guard !established else { throw IdentityStorageError.unsafeStorage }
 
         // The keychain-era flag means the earliest plaintext defaults were already wiped.
         let legacyKeychainOnly = defaults.integer(forKey: Self.legacyKeychainOnlyFlag) >= 1
@@ -108,8 +107,9 @@ extension IdentityManager {
 
     // MARK: File store (current backend)
 
-    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
-    func loadFromFileStore() throws -> Identity? {
+    /// Only an unflagged first install/migration may fall through or synthesize a missing ID.
+    /// Once published, all three identity components must remain present.
+    func loadFromFileStore(requireComplete: Bool) throws -> Identity? {
         let certificate = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot())
         let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
         let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
@@ -125,7 +125,8 @@ extension IdentityManager {
                   !stored.isEmpty else { throw IdentityStorageError.unsafeStorage }
             uid = stored
         } else {
-            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
+            guard !requireComplete else { throw IdentityStorageError.unsafeStorage }
+            // Complete an unpublished legacy migration without replacing its valid PEM pair.
             uid = try generateUniqueID()
             let uidBytes = Data(uid.utf8)
             try FileIdentityStore.write(uidBytes, account: Self.accountUID, base: storageRoot())

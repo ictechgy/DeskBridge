@@ -46,8 +46,9 @@ final class IdentityManager {
     var cached: Identity?
     let log = FixtureLog()
     var generations = 0
+    var uidGenerations = 0
     init(_ root: URL) { storageRoot = { root } }
-    func generateUniqueID() throws -> String { "0123456789abcdef0123456789abcdef" }
+    func generateUniqueID() throws -> String { uidGenerations += 1; return "0123456789abcdef0123456789abcdef" }
     func generateKeyPairAndCert() throws -> (String, String) { generations += 1; return ("CERT", "KEY") }
 }
 enum IdentityStorageError: Error { case unavailable, defaultsUnavailable, unsafeStorage }
@@ -250,6 +251,34 @@ try refused("UID-only partial identity") { _ = try onlyUIDManager.load() }
 try expect(onlyUIDManager.generations == 0, "UID-only partial identity not regenerated")
 let freshIdentity = IdentityManager(fixture.appendingPathComponent("fresh-generation"))
 _ = try freshIdentity.load(); try expect(freshIdentity.generations == 1, "genuine absence permits generation")
+// A published identity must never become a fresh install, even if every file is gone.
+for hasPEMs in [false, true] {
+    let base = try fresh("published-missing-\(hasPEMs)")
+    if hasPEMs {
+        try FileIdentityStore.write(Data("CERT".utf8), account: IdentityManager.accountCert, base: base)
+        try FileIdentityStore.write(Data("KEY".utf8), account: IdentityManager.accountKey, base: base)
+    }
+    let manager = IdentityManager(base)
+    manager.defaults!.set(IdentityManager.fileStorageVersion, forKey: IdentityManager.fileStorageFlag)
+    manager.defaults!.set("LEGACY-CERT", forKey: IdentityKey.certificate)
+    manager.defaults!.set("LEGACY-KEY", forKey: IdentityKey.privateKey)
+    try refused("published identity missing components") { _ = try manager.load() }
+    try expect(manager.generations == 0 && manager.uidGenerations == 0 && manager.cached == nil,
+               "published identity regenerated or cached replacement material")
+    try expect(manager.defaults!.string(forKey: IdentityKey.privateKey) == "LEGACY-KEY" &&
+               manager.defaults!.integer(forKey: IdentityManager.fileStorageFlag) == IdentityManager.fileStorageVersion,
+               "refusal changed recovery defaults or initialized flag")
+    try expect(try FileIdentityStore.read(account: IdentityManager.accountUID, base: base) == nil,
+               "refusal wrote a replacement UID")
+    try expect(try FileIdentityStore.read(account: IdentityManager.accountKey, base: base) == (hasPEMs ? Data("KEY".utf8) : nil),
+               "refusal changed existing or absent key bytes")
+}
+let legacyPEMs = try fresh("unpublished-pems")
+try FileIdentityStore.write(Data("CERT".utf8), account: IdentityManager.accountCert, base: legacyPEMs)
+try FileIdentityStore.write(Data("KEY".utf8), account: IdentityManager.accountKey, base: legacyPEMs)
+let legacyManager = IdentityManager(legacyPEMs)
+try expect(try legacyManager.load().certPEM == "CERT" && legacyManager.generations == 0 && legacyManager.uidGenerations == 1,
+           "unpublished migration no longer preserves its valid PEM pair")
 try noKeygen("all refusal tests precede real keygen")
 let sshBase = try fresh("ssh-success"), generated = try SSHKeyManager.generate(in: sshBase)
 try expect(generated.publicKey.hasPrefix("ssh-ed25519 "), "fresh SSH key success")
