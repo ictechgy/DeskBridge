@@ -10,7 +10,7 @@ Mac에서 Windows 화면을 전체 화면 Space로 열고, Windows에서 Mac을 
 
 [English](README.md) · 한국어
 
-> **개발 프리뷰 · 0.2.0-preview.15**
+> **개발 프리뷰**
 >
 > 실제 기기의 설치·화면·입력·오디오·연결 성능은 검증이 남아 있습니다. Mac 패키지는 ad-hoc 서명·미공증, Windows 실행 파일은 미서명 프리뷰입니다. 다른 원격 데스크톱보다 빠르거나 안전하다는 비교 결과는 없습니다.
 
@@ -42,15 +42,23 @@ Knot 자체의 클라우드 계정이나 중계 서버는 없습니다. Tailscal
 
 ## 설치 파일과 시작하기
 
-현재는 소스를 공개한 개발 프리뷰이며, GitHub Releases에 설치 파일을 게시하지 않았습니다. 소스에서 빌드하거나 저장소를 포크하고 Actions를 활성화한 뒤 **Actions → Build install packages → Run workflow**로 프리뷰 패키지 빌드를 요청할 수 있습니다. 수동 실행에는 해당 저장소의 [쓰기 권한](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)이 필요합니다.
+**0.2.0-preview.16** 설치 파일을 [GitHub Releases](https://github.com/ictechgy/Knot/releases/tag/v0.2.0-preview.16)에서 받으세요.
 
-[워크플로 소스](.github/workflows/packages.yml)와 [패키징 안내](docs/RELEASING.md)를 확인하세요. 아티팩트는 성공한 빌드 실행 후 생성되며 [다운로드에는 GitHub 로그인](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)이 필요합니다. 프리뷰 빌드 결과는 [Actions](https://github.com/ictechgy/Knot/actions/workflows/packages.yml)에서 확인할 수 있습니다. CI 검사만으로 실제 기기의 설치·원격 세션 동작을 검증한 것은 아닙니다.
+| 컴퓨터 | 다운로드 | 요구 사항 |
+| --- | --- | --- |
+| Mac | [DMG](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-macos-arm64-preview.dmg) | Apple Silicon, macOS 26 이상 |
+| Windows | [설치 EXE](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-windows-x64-setup.exe) | Windows 11 x64, Home 포함 |
+| Linux 호스트 | [DEB](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-ubuntu24.04-amd64-preview.deb) | Ubuntu 24.04 LTS amd64, 로그인한 X11 데스크톱 |
 
-패키지를 준비했다면 다음 순서로 연결합니다. **화면 연결에는 SSH 설정이 필요 없습니다.**
+Mac은 DMG를 열고 **Knot.app**을 **Applications**로 옮깁니다. Windows는 설치 EXE를 일반 실행해 설치 과정의 UAC 요청을 승인한 뒤 시작 메뉴의 **Knot 설정**을 여세요. 시작 메뉴와 제거 기능을 제공하며, 설치 후 도우미는 원래 사용자 권한으로 열립니다. 설치 없이 안내창만 바로 여는 quick-setup EXE도 고급 대체 경로로 릴리스에 포함합니다.
+
+릴리스에 [SHA256SUMS](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/SHA256SUMS), 대응 소스와 라이선스 고지를 함께 제공합니다. Mac은 ad-hoc 서명·미공증, Windows는 미서명인 개발 패키지입니다. CI 검사는 통과했지만 실제 기기 설치·원격 세션 검증은 남아 있습니다. 이 배포 프리뷰의 가상 화면 자동 설치는 드라이버 안전성 검토로 비활성화되어 있어 무모니터 동작을 전제로 사용하면 안 됩니다. 빌드와 서명은 [패키징 안내](docs/RELEASING.md)를 확인하세요.
+
+다음 순서로 연결합니다. **화면 연결에는 SSH 설정이 필요 없습니다.**
 
 ### Mac에서 Windows 열기
 
-1. Windows quick-setup EXE를 일반 사용자로 열고 **이 Windows 공유**를 선택합니다. 안내에 따라 Sunshine을 설치합니다.
+1. Windows 설치 EXE로 설치하고 시작 메뉴의 **Knot 설정**을 열어 **이 Windows 공유**를 선택합니다. 안내에 따라 Sunshine을 설치합니다.
 2. Sunshine 관리자 계정을 만들고, **Configuration → Network**의 LAN/WAN 암호화를 모두 **Mandatory**로 저장합니다. Sunshine 앱 목록에 Desktop이 있는지 확인합니다.
 3. Mac에 Knot를 설치하고 **Windows 화면**에서 PC를 선택합니다. 목록에 없으면 Windows 도우미의 QR·연결 링크를 가져옵니다.
 4. Mac에 표시된 PIN을 Windows의 Sunshine PIN 페이지에서 승인한 뒤 **Windows 열기**를 누릅니다.

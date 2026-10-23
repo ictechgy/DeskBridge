@@ -60,7 +60,7 @@ Push this source to your own repository and enable Actions. **Build install pack
 - Mac/source artifact: DMG, ZIP, optional Windows quick-setup EXE, Windows developer portable ZIP, source.tar.gz, INSTALLATION.md and SHA256SUMS.
 - Windows artifact: setup.exe, quick-setup EXE, WindowsRuntime-NOTICE.txt and WINDOWS-SHA256SUMS. The default EXEs are unsigned. The workflow verifies the pinned Zig Windows archive's size/SHA256 and extracts it under RUNNER_TEMP; it does not install a native compiler globally or modify PATH.
 - No contents-write permission or release-creation step is included.
-- The Mac can build the quick-setup EXE and run pure metadata/resource/argument checks. The separate Inno installer requires Windows compiler acceptance; this GitHub workflow has not been run from the Mac agent.
+- The Mac can build the quick-setup EXE and run pure metadata/resource/argument checks. The separate Inno installer requires Windows compiler acceptance; successful CI compilation does not prove actual installer or remote-session behavior.
 
 ## Mac signed distribution
 
@@ -91,15 +91,23 @@ Use an organization-approved Authenticode certificate/token and timestamping pro
 
 A signed installer does not guarantee immediate SmartScreen reputation. The outer helper's signature covers embedded payload bytes, but does not create individual Authenticode signatures on PowerShell scripts. This build embeds unsigned exact-source scripts. Corporate AllSigned policy therefore requires separately signed scripts and an organization-approved manual distribution. Those policies are not disabled. The helper requests RemoteSigned only for its own process, never sets machine/user policy and never uses Bypass.
 
-## Publish gate
+## Development prereleases
 
-Before creating a public release, run the real-device checklist in docs/VALIDATION.md plus installation coverage: clean Windows11 Home, existing SSH refusal, UAC cancellation, unsigned/signed policy behavior, Sunshine download corruption, install/reinstall, Mac drag installation, file exchange/fingerprint confirmation, upgrade, and uninstall with active SFTP sessions. Confirm rollback/revocation and retention of shared files.
+Development packages may be published as an explicitly marked **GitHub prerelease** before real-device validation is complete. Select the complete artifact set from one successful CI source snapshot, record its commit and workflow run, and keep the binaries, exact corresponding source, notices, installation guide and combined checksums together. Never relabel, rebuild or mix artifacts from different commits while presenting them as that validated build.
 
-Upload matching binaries, exact source archive, GPL and notices, installation guide and combined checksums to the release you review. Keep signing credentials and local advisor evidence out of public artifacts. Do not advertise Chrome performance/security superiority without measurements.
+State the supported OS/architecture, actual signing and notarization status, known disabled features and pending runtime checks in the release notes. Ad-hoc-signed/unnotarized Mac and unsigned Windows packages must retain the preview label; do not describe them as signed stable releases or ask users to disable system security. Preview 0.2.0-preview.16 keeps automatic virtual-display installation disabled pending driver safety review. Its public download entry point is the [development prerelease](https://github.com/ictechgy/Knot/releases/tag/v0.2.0-preview.16).
+
+Prefer the Mac DMG and Windows Inno setup EXE as the normal download paths. The Windows installer provides Start menu shortcuts and uninstall support, requests UAC for installation, and opens its helper as the original user. Keep the no-install quick-setup EXE and developer portable ZIP as optional alternatives. The workflow creates artifacts but does not publish a release automatically.
+
+## Stable release gate
+
+Before publishing a stable release, complete the real-device checklist in [VALIDATION.md](VALIDATION.md) plus installation coverage: clean Windows11 Home, existing SSH refusal, UAC cancellation, unsigned/signed policy behavior, Sunshine download corruption, install/reinstall, Mac drag installation, file exchange/fingerprint confirmation, upgrade, and uninstall with active SFTP sessions. Confirm rollback/revocation and retention of shared files. Complete the signed distribution steps above and report any remaining feature limits accurately.
+
+For both prereleases and stable releases, keep signing credentials and local advisor evidence out of public artifacts. Do not advertise Chrome performance/security superiority without measurements.
 
 Pinned build-tool provenance: [Inno Setup7.1.0 official release](https://github.com/jrsoftware/issrc/releases/tag/is-7_1_0), [GitHub runner labels](https://github.com/actions/runner-images), [Sunshine release](https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613), [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), [PowerShell execution-policy scopes](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies), [.NET SDK official release metadata](https://builds.dotnet.microsoft.com/dotnet/release-metadata/8.0/releases.json), [.NET Framework reference assemblies](https://www.nuget.org/packages/Microsoft.NETFramework.ReferenceAssemblies.net48/1.0.3). Local cross-build on 2026-10-19 used SDK8.0.426 with its published SHA512 and the reference package's SHA256 recorded in build evidence. These are build tools, not bundled app runtimes.
 
-The native compiler pin comes from [Zig's official download index](https://ziglang.org/download/index.json). Retain the checked `ZigDependency.json`, native/managed compiler argv and output hashes with the exact source snapshot. The Windows workflow and signing paths require actual Windows acceptance before a public release; documenting them is not evidence they executed successfully.
+The native compiler pin comes from [Zig's official download index](https://ziglang.org/download/index.json). Retain the checked `ZigDependency.json`, native/managed compiler argv and output hashes with the exact source snapshot. The Windows workflow and signing paths require actual Windows runtime acceptance before a stable release; documenting them is not evidence they executed successfully.
 
 Native Windows runtime notices from the pinned Zig distribution are retained under `Vendor/WindowsRuntime`, embedded in the quick-setup EXE, installed by Inno and copied beside local preview packages. These unmodified MIT/ZPL notices cover possible compiler/runtime objects conservatively; the compiler itself is not shipped.
 

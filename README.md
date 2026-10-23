@@ -10,7 +10,7 @@ A free, open-source remote desktop app for work: open Windows in a full-screen S
 
 English · [한국어](README.ko.md)
 
-> **Development preview · 0.2.0-preview.15**
+> **Development preview**
 >
 > Real-device installation, video, input, audio and connection performance still need validation. Mac packages are ad-hoc signed and not notarized; Windows executables are unsigned previews. No performance or security advantage over other remote desktop products has been established.
 
@@ -44,15 +44,23 @@ Knot operates no cloud account or relay service. Set up Tailscale separately on 
 
 ## Packages and getting started
 
-This development preview is currently published as source only; installers have not been published to GitHub Releases. Build from source, or fork the repository, enable Actions in your fork and use **Actions → Build install packages → Run workflow** to request a preview build. Manual workflow runs require [write access to that repository](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+Download **0.2.0-preview.16** from [GitHub Releases](https://github.com/ictechgy/Knot/releases/tag/v0.2.0-preview.16):
 
-See the [workflow](.github/workflows/packages.yml) and [packaging guide](docs/RELEASING.md). Artifacts are created after a successful build, and [downloading them requires a GitHub login](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts). Preview build results are available in [Actions](https://github.com/ictechgy/Knot/actions/workflows/packages.yml). CI checks do not establish real-device installation or remote-session acceptance.
+| Computer | Download | Requirements |
+| --- | --- | --- |
+| Mac | [DMG](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-macos-arm64-preview.dmg) | Apple Silicon, macOS 26 or later |
+| Windows | [Setup EXE](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-windows-x64-setup.exe) | Windows 11 x64, including Home |
+| Linux host | [DEB](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-ubuntu24.04-amd64-preview.deb) | Ubuntu 24.04 LTS amd64, logged-in X11 desktop |
 
-Once you have packages, follow the steps below. **Screen access does not require SSH setup.**
+Open the Mac DMG and drag **Knot.app** to **Applications**. On Windows, run the setup EXE normally, approve the installer's UAC request, then open **Knot 설정** from the Start menu. It includes an uninstaller and opens the helper as the original user after installation. The release also offers a quick-setup EXE for advanced users who prefer to open the helper without installing it.
+
+The release includes [SHA256SUMS](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/SHA256SUMS), matching source and license notices. These are development packages: Mac is ad-hoc signed and not notarized; Windows is unsigned. CI checks passed, but real-device installation and remote sessions still need validation. In this packaged preview, automatic virtual-display installation is disabled pending driver safety review; do not rely on monitorless operation. See the [packaging guide](docs/RELEASING.md) for builds and signing.
+
+Follow the steps below to connect. **Screen access does not require SSH setup.**
 
 ### Open Windows from Mac
 
-1. Run the Windows quick-setup EXE as a regular user and choose **이 Windows 공유** (share this Windows PC). Follow the Sunshine installation steps.
+1. Install the Windows setup EXE, open **Knot 설정** from the Start menu and choose **이 Windows 공유** (share this Windows PC). Follow the Sunshine installation steps.
 2. Create the Sunshine administrator account. Set both LAN and WAN encryption to **Mandatory** under **Configuration → Network**, and check that a Desktop app is available.
 3. Install Knot on your Mac. Choose the PC under **Windows 화면** (Windows desktop), or import the Windows helper's QR/link if discovery finds nothing.
 4. Approve the PIN shown on the Mac in Sunshine's PIN page on Windows, then choose **Windows 열기** (open Windows).
