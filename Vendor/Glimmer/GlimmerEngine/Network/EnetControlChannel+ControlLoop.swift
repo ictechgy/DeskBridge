@@ -37,16 +37,21 @@ extension EnetControlChannel {
     /// The control loop's idle tick; a recovery request wakes it sooner.
     static let controlTickMs: UInt32 = 20
 
-    /// Latch the peer dead exactly once, whichever path sees it first (socket
-    /// failure, ACK silence, host DISCONNECT or TERMINATION): logs `reason` and
-    /// fires onTerminated(code). Later reports of the same death are no-ops.
-    func declarePeerDead(code: Int32, reason: DiagMessage) {
-        let first = withState { () -> Bool in
-            let wasAlive = !disconnected
+    /// First peer-death notification wins, except a local link failure (-1) may
+    /// be upgraded once by the first authenticated PC TERMINATION. The local
+    /// callback itself can close the channel, so interrupted is not an intent gate.
+    /// Admission at the bridge still rejects an intentionally retired transport.
+    func declarePeerDead(code: Int32, reason: DiagMessage, authenticatedTermination: Bool = false) {
+        let notify = withState { () -> Bool in
+            let first = !disconnected
             disconnected = true
-            return wasAlive
+            guard first || (authenticatedTermination && code != -1 && notifiedTerminationCode == -1) else {
+                return false
+            }
+            notifiedTerminationCode = code
+            return true
         }
-        guard first else { return }
+        guard notify else { return }
         Diag.error(reason, Self.logCategory)
         onTerminated?(code)
     }

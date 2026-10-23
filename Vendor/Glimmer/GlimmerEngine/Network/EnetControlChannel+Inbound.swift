@@ -318,7 +318,7 @@ extension EnetControlChannel {
         case CtrlV2.termination:
             let code = parseTerminationCode(payload)
             declarePeerDead(code: code, reason: "ENet TERMINATION received "
-                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))")
+                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))", authenticatedTermination: true)
         case CtrlV2.hdrInfo:
             handleHdrInfo(payload)
         case CtrlV2.rumbleData:

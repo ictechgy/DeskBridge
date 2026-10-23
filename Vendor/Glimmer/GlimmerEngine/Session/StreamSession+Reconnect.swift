@@ -49,15 +49,8 @@ extension StreamSession {
             if source != nil { retainReconnectTermination(code) }
             return
         }
-        // The uplink is dead the instant the host closed - pause input so we
-        // don't spew sends at a gone backend. It re-arms on the next
-        // `.connectionEstablished` (nativeConnectionEstablished → setReady(true)).
-        publicInput?.prepareForReplacement(attempt: attemptID)
-        let inp = input
-        // FIFO main-queue hop (NOT Task{}) so this pause can't reorder ahead of the
-        // reconnect's setReady(true) - see nativeConnectionEstablished.
-        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
-
+        // The uplink is dead; the initial episode latch revokes input and fences
+        // the failed decoder exactly once before its first suspension.
         // Recoverable iff we'd already reached a live state AND the cause is one we
         // can resume from: a host terminate in the recoverable set (server restart /
         // graceful), or OUR OWN ENet dead-peer self-terminate (-1, the radio-doze /
@@ -69,12 +62,15 @@ extension StreamSession {
             || code == Self.deadPeerTerminationCode
         let recoverable = recoverableCause && reachedLiveState
         guard recoverable else {
+            publicInput?.prepareForReplacement(attempt: attemptID)
+            let inp = input
+            DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
             bridge?.emit(.connectionTerminated(errorCode: code))
             await stop(cause: code == 0 ? .hostClosedClean : .hostError)
             return
         }
 
-        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code))
+        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code), initialTermination: code)
     }
 
     /// Whether the PC ended the session on purpose: it answered and no longer
@@ -132,7 +128,8 @@ extension StreamSession {
     /// Drive a bounded reconnect episode: hold the frozen frame and retry the
     /// in-place rebuild with a short backoff, then resume (`.reconnected`) or,
     /// once the attempts or the awake-time budget run out, tear down for real.
-    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…") async {
+    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…",
+                                     initialTermination: Int32? = nil) async {
         isReconnecting = true
         // Observe the original transport through backoff and route refresh too.
         reconnectAttemptID = attemptID
@@ -143,6 +140,11 @@ extension StreamSession {
         reconnectAttempts = 0
         lastReconnectError = nil
         let budget = ReconnectBudget(seconds: Self.reconnectWindowSeconds)
+        // Fence the failed original decoder/input before the first await, then
+        // resolve PC intent before showing a recovery card for a clean PC close.
+        if let initialTermination { retainReconnectTermination(initialTermination) }
+        if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
+        guard !Task.isCancelled, isStreaming, !stopInProgress else { return }
         bridge?.emit(.reconnecting)
         // Surface the hold over the frozen frame - the launcher's phase chip is
         // occluded by the fullscreen window, so this banner is the only in-stream
@@ -253,7 +255,9 @@ extension StreamSession {
         let inp = input
         DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
         bridge?.beginAttempt(UUID())
-        bridge?.emit(.reconnecting)
+        // The initial decision precedes recovery UI. Later attempt failures must
+        // reassert it after a decoder's first frame may have hidden the card.
+        if reconnectAttempts > 0 { bridge?.emit(.reconnecting) }
     }
 
     private func observeReconnectTermination(retiringSource: Bool = false) {
@@ -324,9 +328,9 @@ extension StreamSession {
               let appID = reconnectAppID,
               let win = presentation, let inp = input, let dec = videoDecoder else { return false }
 
-        // Freeze admitted host intent before intentional teardown. Notifications
-        // from the retired source are rejected; already-admitted ones survive drain.
-        observeReconnectTermination(retiringSource: true)
+        // Observe before teardown's input await; the transport remains observed
+        // through quiesce and is retired immediately before synchronous stop.
+        observeReconnectTermination()
         if await endReconnectAfterCurrentFailure(until: deadline) { return false }
 
         // 1. Bring the dead connection fully down (idempotent - onTerminated
@@ -512,6 +516,9 @@ extension StreamSession {
         publicInput?.prepareForReplacement(attempt: attemptID)
         let prepared = input
         await MainActor.run { prepared?.quiesce(); prepared?.setReady(false) }
+        // Atomic admission cutoff immediately before intentional transport stop.
+        // Previously admitted intent survives this stop and the network drain.
+        observeReconnectTermination(retiringSource: true)
         backend.stopConnection()
         if let net = network { await net.shutdown() }
         network = nil

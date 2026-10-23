@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -799,7 +800,7 @@ attempt_tail = attempt_tail[:-1]
 # Full production consumer wiring is checked in addition to executing slices.
 assert "package var reconnectAttemptID: UUID?" in session_source
 assert "package var reconnectAttemptFailure: Int32?" in session_source
-assert "observeReconnectTermination(retiringSource: true)" in block(reconnect, "private func reconnectInPlace(")
+assert "observeReconnectTermination(retiringSource: true)" in block(reconnect, "private func teardownConnectionForReconnect(")
 assert selection.index("attemptID = UUID()") < selection.index("reconnectAttemptID = freshAttempt")
 assert "try checkReconnectAttempt(freshAttempt, deadline: deadline)" in block(reconnect, "private func reconnectInPlace(")
 assert "enqueueSessionEvent { await session.handleHostTerminate(code: code, from: backend) }" in events_source
@@ -1050,7 +1051,7 @@ actor StreamSession {
     __TEARDOWN__
     func reconnectInPlace(deadline: Date) async throws(TakeoverRequired) -> Bool {
         await refreshReconnectAsk()
-        observeReconnectTermination(retiringSource: true)
+        observeReconnectTermination()
         if await endReconnectAfterCurrentFailure(until: deadline) { return false }
         await teardownConnectionForReconnect()
         if await endReconnectAfterCurrentFailure(until: deadline) { return false }
@@ -1221,6 +1222,7 @@ public final class StreamSession: @unchecked Sendable {
     let backend = NativeBackend()
     var bridge: StreamBridgeContext?
     var isStreaming = true, stopInProgress = false, isReconnecting = true
+    var reconnectAttempts = 1
     var attemptID: UUID, reconnectAttemptID: UUID?, reconnectAttemptFailure: Int32?
     var reconnectAttemptFailureHandled = false
     var lastReconnectTerminationCode: Int32?
@@ -1589,6 +1591,7 @@ final class Terminator {
     static let logCategory = "inert-host-control"
     let lock = NSLock()
     var disconnected = false
+    var notifiedTerminationCode: Int32?
     func withState<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
 ''' + block(control_loop, "func declarePeerDead("), 1)
 intent_fixture = intent_fixture.replace("        enet.onTerminated?(code)", '''        let callback = enet.onTerminated
@@ -1665,8 +1668,11 @@ intent_fixture = intent_fixture.replace("        let index = setupCount\n", ''' 
 ''', 1)
 # Bind the inert prelude to the complete production retirement/check order.
 actual_rebuild = block(reconnect, "private func reconnectInPlace(")
-assert actual_rebuild.index("await refreshReconnectAsk()") < actual_rebuild.index("observeReconnectTermination(retiringSource: true)")
-assert actual_rebuild.index("observeReconnectTermination(retiringSource: true)") < actual_rebuild.index("await teardownConnectionForReconnect()")
+assert actual_rebuild.index("await refreshReconnectAsk()") < actual_rebuild.index("observeReconnectTermination()")
+assert actual_rebuild.index("observeReconnectTermination()") < actual_rebuild.index("await teardownConnectionForReconnect()")
+actual_teardown = block(reconnect, "private func teardownConnectionForReconnect(")
+assert actual_teardown.index("await MainActor.run") < actual_teardown.index("observeReconnectTermination(retiringSource: true)") < actual_teardown.index("backend.stopConnection()")
+assert "await " not in actual_teardown[actual_teardown.index("observeReconnectTermination(retiringSource: true)"):actual_teardown.index("backend.stopConnection()")]
 assert actual_rebuild.index("await teardownConnectionForReconnect()") < actual_rebuild.index("endReconnectAfterCurrentFailure(until: deadline)", actual_rebuild.index("await teardownConnectionForReconnect()")) < actual_rebuild.index("let fresh = makeBackend()")
 intent_fixture += r'''
 @main struct TransportIntentChecks {
@@ -1815,3 +1821,120 @@ with tempfile.TemporaryDirectory(prefix="knot-reconnect-diagnostic-", dir="/tmp"
     print(json.dumps({"reconnectDiagnosticScopeFixtureSHA256": hashlib.sha256(diagnostic_fixture.encode()).hexdigest(),
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                                  for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamBridgeContext.swift", ENGINE / "Network/StreamAttempt.swift", ENGINE / "Network/NetworkClient+Endpoints.swift", ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift")}}))
+
+# Exercise the complete LIVE consumer (not its reconnect-only prefix), including
+# its initial seed and real decoder callback. A clean PC close must not flash a
+# reconnect card; failed decoder callbacks are fenced before the first await.
+live_fixture = intent_fixture[:intent_fixture.index("@main struct TransportIntentChecks")]
+live_handler = block(reconnect, "package func handleHostTerminate(").replace("package ", "")
+live_fixture = live_fixture.replace(block(live_fixture, "func handleHostTerminate("), live_handler, 1)
+live_fixture = live_fixture.replace("    func run() async {", "\n" + block(reconnect, "package static func reconnectCause(").replace("package ", "") + "\n" + block(reconnect, "package func runSelfInitiatedReconnect(").replace("package ", "") + "\n    func run() async {", 1)
+live_fixture = live_fixture.replace("case originalBackoff,", "case livePCIdle, liveSameApp, livePCRestart, liveLocal, quiescePCStop, originalBackoff,", 1)
+live_fixture = live_fixture.replace("final class Resource:", "let decodedFrames = Locked(0)\nlet quiesceHook = Locked<(@Sendable () -> Void)?>(nil)\nfinal class Resource:", 1)
+live_fixture = live_fixture.replace("    let cleanups = Locked(0)", "    var onHDRActiveChanged: ((Bool) -> Void)?\n    var onFirstDecodedFrame: (() -> Void)?\n    let cleanups = Locked(0)", 1)
+live_fixture = live_fixture.replace("case connectionTerminated(errorCode:", "case hdrActive(Bool), firstFrame, connectionTerminated(errorCode:", 1)
+live_fixture = live_fixture.replace("    func emit(_ event: StreamEvent) {\n        values.use", "    func emit(_ event: StreamEvent, attempt: UUID? = nil) {\n        if let attempt, attempt != currentAttempt { return }\n        values.use", 1)
+live_fixture = live_fixture.replace("            case .reconnected:", "            case .hdrActive: value.append(\"hdr\")\n            case .firstFrame: value.append(\"frame\")\n            case .reconnected:", 1)
+live_fixture = live_fixture.replace("    var values = [String?]()", "    var firstFrame: () -> Void = {}\n    var values = [String?]()", 1)
+live_fixture = live_fixture.replace("    @MainActor func quiesce() {}", "    @MainActor func quiesce() { quiesceHook.use { $0 }?() }", 1)
+live_fixture = live_fixture.replace("actor StreamSession {", "struct SessionMedia { let video: Resource; let presentation: Presentation }\nactor StreamSession {", 1)
+live_fixture = live_fixture.replace("    func originalTransport()", r'''
+    var originalDecoder: Resource?
+    @MainActor __LIVE_WIRE__
+    func prepareLive() async {
+        let decoder = Resource(), win = presentation!
+        originalDecoder = decoder
+        await MainActor.run {
+            win.firstFrame = { decodedFrames.use { $0 += 1 } }
+            self.wireMediaCallbacks(setup: SessionMedia(video: decoder, presentation: win), bridge: self.bridge!, attempt: self.attemptID)
+        }
+        publicInput?.rebind(to: backend, attempt: attemptID)
+        publicInput?.activate(true, attempt: attemptID)
+    }
+    func delayedFailedFrame() async {
+        let decoder = originalDecoder
+        await MainActor.run { decoder?.onFirstDecodedFrame?() }
+        precondition(decodedFrames.use { $0 } == 0, "failed original decoder callback cannot restore live state")
+    }
+    func runLive() async {
+        await prepareLive()
+        let events = NativeConnectionEvents(bridge: bridge!, backend: backend)
+        if await schedule.mode == .liveLocal {
+            let receiver = Receiver(); backend.videoReceiver = receiver; backend.videoSink = originalDecoder
+            backend.wire(receiver: receiver, events: events); receiver.onReceiveFailed?()
+        } else {
+            backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+        }
+        await events.drain()
+    }
+    func runSelfDuringQuiesce() async {
+        await prepareLive()
+        await runSelfInitiatedReconnect(cause: "inert route change")
+    }
+    func liveInputStops() -> Int { publicInput!.state().1 }
+    func originalTransport()''', 1)
+live_fixture = live_fixture.replace("__LIVE_WIRE__", block(recovery_sources["start"], "package func wireMediaCallbacks(").replace("package ", "").replace("StreamBridgeContext", "Bridge"))
+# Capture actor-owned setup before entering the MainActor closure.
+live_fixture = live_fixture.replace("        let decoder = Resource(), win = presentation!", "        let decoder = Resource(), win = presentation!, bridge = self.bridge!, attempt = attemptID", 1)
+live_fixture = live_fixture.replace("bridge: self.bridge!, attempt: self.attemptID", "bridge: bridge, attempt: attempt", 1)
+live_fixture = live_fixture.replace("        probeCalls += 1\n", "        probeCalls += 1\n        await session?.delayedFailedFrame()\n        if mode == .livePCIdle || mode == .quiescePCStop { return 0 }\n        if mode == .livePCRestart { return nil }\n", 1)
+live_fixture = live_fixture.replace("        if setupCount == 1 { return 42 }", "        if mode == .livePCRestart { return 0 }\n        if setupCount == 1 { return 42 }", 1)
+live_fixture = live_fixture.replace("        sleepCalls += 1\n", "        sleepCalls += 1\n        if mode == .liveLocal { await session?.delayedFailedFrame() }\n", 1)
+live_fixture = live_fixture.replace("        await Task.yield() // Actual route provider suspends on MainActor.", r'''
+        await Task.yield() // Actual route provider suspends on MainActor.
+        if mode == .quiescePCStop {
+            let (backend, events, attempt) = original!, bridge = original!.1.bridge!
+            quiesceHook.use { hook in hook = {
+                quiesceHook.use { $0 = nil }
+                precondition(bridge.acceptsEvent(from: backend, attempt: attempt), "self-reconnect keeps original decoder/transport observed until quiesce")
+                backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+                precondition(bridge.terminationIntent(from: backend, attempt: attempt) == Int32(bitPattern: 0x80030023), "PC intent during actual input quiesce is admitted before retirement")
+            } }
+        }''', 1)
+live_fixture += r'''
+@main struct LiveEntryChecks {
+    static func main() async {
+        var checks = 0
+        func expect(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
+        for mode: Schedule.Mode in [.livePCIdle, .liveSameApp, .livePCRestart, .liveLocal, .quiescePCStop] {
+            inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }; quiesceHook.use { $0 = nil }
+            let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session)
+            if mode == .quiescePCStop { await session.runSelfDuringQuiesce() }
+            else { await session.runLive() }
+            let stats = await schedule.policyStats(), events = bridge.values.use { $0 }, banners = await MainActor.run { presentation.values }
+            let closes = mode == .livePCIdle || mode == .quiescePCStop
+            expect(stats.2 == (closes ? 0 : 1), "LIVE PC-ended decision or quiesce intent precedes replacement selection")
+            expect(stats.1 == (closes ? [] : [mode == .livePCRestart ? "launch" : "resume"]), "complete LIVE handler preserves restart/local policy and never launches idle PC after explicit stop")
+            expect(stats.0 == (mode == .liveLocal ? 0 : 1), "only authenticated PC closure probes once inside original budget")
+            expect(events.filter { $0 == "reconnected" }.count == (closes ? 0 : 1), "only successful LIVE recovery commits")
+            expect(await session.liveInputStops() == 1, "initial trigger revokes real input ownership exactly once")
+            expect(decodedFrames.use { $0 } == 0, "actual delayed decoder callback remains fenced at suspended initial/probe/backoff seams")
+            if mode == .livePCIdle {
+                expect(events == ["terminated"] && banners.isEmpty, "clean PC-ended LIVE path never flashes reconnect event/card")
+                expect(inputTrace.use { $0.filter { $0 == "epoch" }.count } == 1, "initial failed decoder epoch fences exactly once")
+            }
+            if mode == .quiescePCStop {
+                expect(await session.ownershipReleased(), "quiesce-time host stop relinquishes cancellation ownership")
+            }
+            await session.finalCleanup()
+            expect(await schedule.stats().1.allSatisfy { $0 == 1 }, "full LIVE closure cleans every replacement sink once")
+        }
+        print("{\"status\":\"passed\",\"completeLiveTerminationChecks\":\(checks),\"scope\":\"complete production LIVE termination consumer/episode, actual original decoder callback and input owner, actual quiesce await/retirement/drain, bounded probe/request choice; inert resources only\"}")
+    }
+}
+'''
+with tempfile.TemporaryDirectory(prefix="knot-live-termination-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"; source.write_text(live_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"completeLiveTerminationFixtureSHA256": hashlib.sha256(live_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Start.swift", ENGINE / "Session/StreamBridgeContext.swift")}}))
+
+# Compile complete ENet producers as part of the mandatory media lifecycle gate.
+subprocess.run([sys.executable, str(ROOT / "scripts/tests/test_enet_termination.py")], check=True, timeout=120)

@@ -383,7 +383,7 @@ private final class SyntheticControlIO: @unchecked Sendable {
 extension EnetControlChannel {
     static let controlTickMs: UInt32 = 20
     static func msSince(_ before: UInt32, now: UInt32) -> UInt32 { now &- before }
-    func declarePeerDead(code: Int32, reason: DiagMessage) { fatalError("synthetic peer must remain alive") }
+    func declarePeerDead(code: Int32, reason: DiagMessage, authenticatedTermination: Bool = false) { fatalError("synthetic peer must remain alive") }
     // This inert consumer tests parser routing/body isolation only. It does not
     // substitute for the production handshake's connectID/throttle validation.
     func handleVerifyConnect(_ reader: inout ByteReader) {

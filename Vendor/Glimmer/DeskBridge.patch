@@ -317,6 +317,34 @@ diff --git a/GlimmerEngine/Network/ControlTransport.swift b/GlimmerEngine/Networ
 +        let available = raw.count - sep.upperBound
 +        if let length, available < length { throw StreamError.truncatedRead("connection closed before Content-Length satisfied") }
 +        let body = Data(raw[sep.upperBound..<(sep.upperBound + (length ?? available))])
+diff --git a/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift b/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
+--- a/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
++++ b/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
+@@ -40,6 +40,7 @@
+-    /// Latch the peer dead exactly once, whichever path sees it first (socket
+-    /// failure, ACK silence, host DISCONNECT or TERMINATION): logs `reason` and
+-    /// fires onTerminated(code). Later reports of the same death are no-ops.
+-    func declarePeerDead(code: Int32, reason: DiagMessage) {
+-        let first = withState { () -> Bool in
+-            let wasAlive = !disconnected
++    /// First peer-death notification wins, except a local link failure (-1) may
++    /// be upgraded once by the first authenticated PC TERMINATION. The local
++    /// callback itself can close the channel, so interrupted is not an intent gate.
++    /// Admission at the bridge still rejects an intentionally retired transport.
++    func declarePeerDead(code: Int32, reason: DiagMessage, authenticatedTermination: Bool = false) {
++        let notify = withState { () -> Bool in
++            let first = !disconnected
+@@ -47,3 +48,7 @@
+-            return wasAlive
+-        }
+-        guard first else { return }
++            guard first || (authenticatedTermination && code != -1 && notifiedTerminationCode == -1) else {
++                return false
++            }
++            notifiedTerminationCode = code
++            return true
++        }
++        guard notify else { return }
 diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
 --- a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
 +++ b/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
@@ -450,6 +478,9 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEng
 @@ -233 +301 @@
 -            return try crypto.open(bytes)
 +            return try crypto.open(bytes, replayWindow: &inboundReplayWindow)
+@@ -253 +321 @@
+-                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))")
++                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))", authenticatedTermination: true)
 @@ -304 +372 @@
 -    /// Count an inbound control payload that failed authentication; only the
 +    /// Count an inbound control payload rejected by authentication or replay checks; only the
@@ -474,7 +505,11 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Send.swift b/GlimmerEngine
 diff --git a/GlimmerEngine/Network/EnetControlChannel.swift b/GlimmerEngine/Network/EnetControlChannel.swift
 --- a/GlimmerEngine/Network/EnetControlChannel.swift
 +++ b/GlimmerEngine/Network/EnetControlChannel.swift
-@@ -230,0 +231,8 @@
+@@ -175,0 +176,3 @@
++    /// stateLock owns notification priority separately from socket closure. A local
++    /// dead-peer callback may close the channel before authenticated PC dispatch.
++    var notifiedTerminationCode: Int32?
+@@ -230,0 +234,8 @@
 +
 +    /// Authenticated host counters are global across ENet channels. Confined to the
 +    /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
@@ -483,10 +518,17 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel.swift b/GlimmerEngine/Netw
 +    /// Exact authenticated envelopes retain duplicate-ACK liveness without ACKing
 +    /// forged/relabelled payloads. Receive-queue owned, fixed-size fingerprint history.
 +    var inboundReliableHistory = EnetAuthenticatedReliableHistory()
-@@ -433 +441 @@
+@@ -368,3 +379,3 @@
+-    /// Fired once when the peer dies (declarePeerDead): host TERMINATION or
+-    /// DISCONNECT, ACK silence, or a failed socket. Wired by NativeBackend to
+-    /// connectionTerminated + teardown.
++    /// Fired once for peer death, with at most one local -1 → authenticated PC
++    /// reason upgrade. NativeBackend routes both through source/attempt admission
++    /// and idempotent teardown; intentional transport retirement rejects late intent.
+@@ -433 +444 @@
 -    /// Inbound control payloads that failed authentication (lock-guarded): the
 +    /// Inbound control payloads rejected by authentication or replay checks (lock-guarded): the
-@@ -506 +514 @@
+@@ -506 +517 @@
 -            Diag.notice("ENet rejected \(rejected) unauthenticated inbound control payload(s) this session",
 +            Diag.notice("ENet rejected \(rejected) unauthenticated or replayed inbound control payload(s) this session",
 diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Network/Identity+Loading.swift
@@ -1791,8 +1833,17 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 @@ -36 +36 @@
 -    package func handleHostTerminate(code: Int32, from source: NativeBackend? = nil) async {
 +    package func handleHostTerminate(code receivedCode: Int32, from source: NativeBackend? = nil) async {
-@@ -38 +38,14 @@
+@@ -38,10 +38,16 @@
 -              isStreaming, !stopInProgress, !isReconnecting else { return }
+-        // The uplink is dead the instant the host closed - pause input so we
+-        // don't spew sends at a gone backend. It re-arms on the next
+-        // `.connectionEstablished` (nativeConnectionEstablished → setReady(true)).
+-        publicInput?.prepareForReplacement(attempt: attemptID)
+-        let inp = input
+-        // FIFO main-queue hop (NOT Task{}) so this pause can't reorder ahead of the
+-        // reconnect's setReady(true) - see nativeConnectionEstablished.
+-        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+-
 +              isStreaming, !stopInProgress else { return }
 +        // Read the synchronous admission rather than trusting a queued raw code.
 +        // Source-less wake requests have no host intent to contribute.
@@ -1807,7 +1858,13 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +            if source != nil { retainReconnectTermination(code) }
 +            return
 +        }
-@@ -64,14 +76,0 @@
++        // The uplink is dead; the initial episode latch revokes input and fences
++        // the failed decoder exactly once before its first suspension.
+@@ -58,0 +65,3 @@
++            publicInput?.prepareForReplacement(attempt: attemptID)
++            let inp = input
++            DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+@@ -64,15 +73 @@
 -        // Our own dead-peer (-1) says nothing about the PC. A code the PC sent may
 -        // mean it ended the session on purpose, so ask before relaunching anything.
 -        if code != Self.deadPeerTerminationCode {
@@ -1822,21 +1879,33 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 -                return
 -            }
 -        }
-@@ -99 +98 @@
+-        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code))
++        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code), initialTermination: code)
+@@ -99 +94 @@
 -    private func probeRunningAppID() async -> Int? {
 +    private func probeRunningAppID(until budgetDeadline: Date? = nil) async -> Int? {
-@@ -101 +100,3 @@
+@@ -101 +96,3 @@
 -        let deadline = Date().addingTimeInterval(Self.hostEndProbeSeconds)
 +        let probeEnd = Date().addingTimeInterval(Self.hostEndProbeSeconds)
 +        let deadline = budgetDeadline.map { min($0, probeEnd) } ?? probeEnd
 +        guard Date() < deadline else { return nil }
-@@ -135,0 +137,5 @@
+@@ -134 +131,2 @@
+-    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…") async {
++    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…",
++                                     initialTermination: Int32? = nil) async {
+@@ -135,0 +134,5 @@
 +        // Observe the original transport through backoff and route refresh too.
 +        reconnectAttemptID = attemptID
 +        reconnectAttemptFailure = nil
 +        reconnectAttemptFailureHandled = false
 +        lastReconnectTerminationCode = nil
-@@ -151,2 +157,8 @@
+@@ -139,0 +143,5 @@
++        // Fence the failed original decoder/input before the first await, then
++        // resolve PC intent before showing a recovery card for a clean PC close.
++        if let initialTermination { retainReconnectTermination(initialTermination) }
++        if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
++        guard !Task.isCancelled, isStreaming, !stopInProgress else { return }
+@@ -151,2 +159,8 @@
 -        while isStreaming, !stopInProgress,
 -              reconnectAttempts < Self.reconnectAttemptCap, let budgetEnd = budget.deadline() {
 +        while isStreaming, !stopInProgress {
@@ -1847,26 +1916,26 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +            guard !Task.isCancelled, isStreaming, !stopInProgress,
 +                  reconnectAttempts < Self.reconnectAttemptCap,
 +                  let budgetEnd = budget.deadline() else { break }
-@@ -164,0 +177,3 @@
+@@ -164,0 +179,3 @@
 +            // A terminate can arrive during the backoff too. Classify it before
 +            // reconnectInPlace retires the old attempt or makes another /launch.
 +            if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
-@@ -176,0 +192 @@
+@@ -176,0 +194 @@
 +                let resumedAttempt = attemptID
-@@ -179,0 +196,4 @@
+@@ -179,0 +198,4 @@
 +                // This is the last suspension before committing success. A fatal
 +                // callback consumed during the deadline clear OR watchdog re-arm
 +                // must leave the banner up and use the remaining bounded retries.
 +                guard reconnectAttemptIsHealthy(resumedAttempt) else { continue }
-@@ -180,0 +201 @@
+@@ -180,0 +203 @@
 +                reconnectAttemptID = nil
-@@ -201,0 +223 @@
+@@ -201,0 +225 @@
 +        reconnectAttemptID = nil
-@@ -213 +235,2 @@
+@@ -213 +237,2 @@
 -        bridge?.emit(.connectionTerminated(errorCode: code, error: lastReconnectError))
 +        bridge?.emit(.connectionTerminated(errorCode: lastReconnectTerminationCode ?? code,
 +                                           error: lastReconnectError))
-@@ -214,0 +238,65 @@
+@@ -214,0 +240,67 @@
 +    }
 +
 +    /// One actor-owned latch per observed transport. A late authenticated PC
@@ -1885,7 +1954,9 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +        let inp = input
 +        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
 +        bridge?.beginAttempt(UUID())
-+        bridge?.emit(.reconnecting)
++        // The initial decision precedes recovery UI. Later attempt failures must
++        // reassert it after a decoder's first frame may have hidden the card.
++        if reconnectAttempts > 0 { bridge?.emit(.reconnecting) }
 +    }
 +
 +    private func observeReconnectTermination(retiringSource: Bool = false) {
@@ -1932,32 +2003,32 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +        reconnectAttemptID = nil
 +        await endStreamClosedByPC()
 +        return true
-@@ -238,0 +327,5 @@
-+        // Freeze admitted host intent before intentional teardown. Notifications
-+        // from the retired source are rejected; already-admitted ones survive drain.
-+        observeReconnectTermination(retiringSource: true)
+@@ -238,0 +331,5 @@
++        // Observe before teardown's input await; the transport remains observed
++        // through quiesce and is retired immediately before synchronous stop.
++        observeReconnectTermination()
 +        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
 +
-@@ -242,0 +336 @@
+@@ -242,0 +340 @@
 +        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
-@@ -256,0 +351,4 @@
+@@ -256,0 +355,4 @@
 +        let freshAttempt = attemptID
 +        reconnectAttemptID = freshAttempt
 +        reconnectAttemptFailure = nil
 +        reconnectAttemptFailureHandled = false
-@@ -283 +381 @@
+@@ -283 +385 @@
 -            try checkAttempt(deadline: deadline)
 +            try checkReconnectAttempt(freshAttempt, deadline: deadline)
-@@ -288 +386 @@
+@@ -288 +390 @@
 -            try checkAttempt(deadline: deadline)
 +            try checkReconnectAttempt(freshAttempt, deadline: deadline)
-@@ -296 +394 @@
+@@ -296 +398 @@
 -            try checkAttempt(deadline: deadline)
 +            try checkReconnectAttempt(freshAttempt, deadline: deadline)
-@@ -309 +407 @@
+@@ -309 +411 @@
 -            try checkAttempt(deadline: deadline)
 +            try checkReconnectAttempt(freshAttempt, deadline: deadline)
-@@ -312 +410,6 @@
+@@ -312 +414,6 @@
 -            lastReconnectError = Self.reconnectAttemptError(error, pcAnswered: pcAnswered)
 +            observeReconnectTermination()
 +            if reconnectAttemptFailure == nil,
@@ -1965,20 +2036,20 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +                lastReconnectError = classified
 +                lastReconnectTerminationCode = nil
 +            }
-@@ -329,3 +432,3 @@
+@@ -329,3 +436,3 @@
 -        guard isStreaming, !stopInProgress else {
 -            Diag.notice("reconnect: stop slipped in mid-handshake - "
 -                + "interrupting the freshly-built backend to kill the zombie connection", "Stream")
 +        guard reconnectAttemptIsHealthy(freshAttempt) else {
 +            Diag.notice("reconnect: replacement ended before success - "
 +                + "interrupting the freshly-built backend", "Stream")
-@@ -337 +440,4 @@
+@@ -337 +444,4 @@
 -        guard isStreaming, !stopInProgress, !Task.isCancelled else { return false }
 +        guard reconnectAttemptIsHealthy(freshAttempt) else {
 +            await tearDownSlippedInReconnect(fresh: fresh, net: net)
 +            return false
 +        }
-@@ -344,0 +451,16 @@
+@@ -344,0 +455,16 @@
 +    }
 +
 +    /// Actor-owned attempt state closes notification-before-stop and all await
@@ -1995,6 +2066,10 @@ diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine
 +        try checkAttempt(deadline: deadline)
 +        guard reconnectAttemptID == attempt, attemptID == attempt else { throw CancellationError() }
 +        if let code = reconnectAttemptFailure { throw StreamError.sessionFailed(code) }
+@@ -392,0 +519,3 @@
++        // Atomic admission cutoff immediately before intentional transport stop.
++        // Previously admitted intent survives this stop and the network drain.
++        observeReconnectTermination(retiringSource: true)
 diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Session/StreamSession+Start.swift
 --- a/GlimmerEngine/Session/StreamSession+Start.swift
 +++ b/GlimmerEngine/Session/StreamSession+Start.swift

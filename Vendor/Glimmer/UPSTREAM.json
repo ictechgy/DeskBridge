@@ -1359,6 +1359,7 @@
     "GlimmerEngine/Input/InputText.swift",
     "GlimmerEngine/Input/StreamInput.swift",
     "GlimmerEngine/Network/ControlTransport.swift",
+    "GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift",
     "GlimmerEngine/Network/EnetControlChannel+Inbound.swift",
     "GlimmerEngine/Network/EnetControlChannel+Send.swift",
     "GlimmerEngine/Network/EnetControlChannel.swift",
