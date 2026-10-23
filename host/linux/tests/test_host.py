@@ -97,6 +97,17 @@ class HostChecks(unittest.TestCase):
         self.assertEqual(env['XDG_CONFIG_HOME'], str(self.store.root) + '/xdg')
         for key in ('LD_PRELOAD', 'PYTHONPATH', 'CONFIGURATION_DIRECTORY', 'SUNSHINE_MIGRATE_CONFIG', 'WAYLAND_DISPLAY'): self.assertNotIn(key, env)
 
+    def test_restart_preserves_configured_applications(self):
+        self.store.prepare()
+        apps = self.store.root / 'apps.json'
+        edited = b'{"env":{},"apps":[{"name":"Desktop","cmd":""},{"name":"Work","cmd":"synthetic-only"}]}\n'
+        apps.write_bytes(edited)
+        self.store.prepare()
+        self.assertEqual(apps.read_bytes(), edited)
+        apps.unlink()
+        self.store.prepare()
+        self.assertEqual(json.loads(apps.read_bytes())['apps'], [{'name': 'Desktop', 'cmd': ''}])
+
     def test_storage_no_adoption_or_overlap(self):
         other = self.base / 'unowned'; other.mkdir(mode=0o700)
         self.rejects(lambda: Store(other))

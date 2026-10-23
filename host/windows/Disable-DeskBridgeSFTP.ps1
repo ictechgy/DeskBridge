@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'SetupContract.psm1') -Force
 if (-not $Apply) { Write-Output 'Review mode: -Apply stops the dedicated sshd deployment, disables its account and firewall rule, and archives its SSH config. Shared files and host keys are retained.'; return }
 if (-not $PSCmdlet.ShouldProcess('DeskBridge SFTP deployment', 'Disable remote file access; retain shared data')) { return }
+$lifecycleLease=Enter-DeskBridgeLifecycleLease
+try {
 $deployment=Get-ManagedDeployment -Revoke
 $state=$deployment.State; $record=$deployment.Record; $config=$deployment.Config
 if (-not $deployment.ConfigExists) {
@@ -31,3 +33,5 @@ Set-Service -Name sshd -StartupType $record.StartupBefore
 if ($record.DefaultRuleEnabled -eq 'True') { Enable-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' }
 $defaultRuleNotice=if ($record.DefaultRuleEnabled -eq 'True') {'The previously enabled default OpenSSH firewall rule was re-enabled.'} else {'The default OpenSSH firewall rule was not re-enabled.'}
 Write-Output ('DeskBridge access disabled. Files, disabled account, host keys and archived configuration remain for review. OpenSSH optional feature remains installed. The service is currently stopped; restored startup type: ' + $record.StartupBefore + '. ' + $defaultRuleNotice + ' Review the retained service and firewall settings if OpenSSH is no longer needed.')
+
+} finally {$lifecycleLease.Dispose()}

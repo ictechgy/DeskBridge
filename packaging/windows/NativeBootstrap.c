@@ -399,7 +399,7 @@ done: db_free(command); db_free(env); return exit_code;
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE previous,PWSTR command_line,int show) {
     wchar_t *image=NULL,*stage=NULL,*helper=NULL; wchar_t **argv=NULL; HANDLE token=NULL,extracted=INVALID_HANDLE_VALUE;
     int argc=0,exit_code=1,elevated=0,created_stage=0,locked_stage=0,silent=0,hardened=0,acknowledged=0; db_operation operation=DB_INVALID;
-    const wchar_t *failure=L"설정 도우미를 시작하지 못했습니다. Windows 11 x64용 새 Knot 배포 파일을 OneDrive·동기화 폴더 밖의 로컬 폴더(예: Downloads)로 옮겨 실행하세요."; const BYTE *bytes=NULL; DWORD size=0,used=0;
+    const wchar_t *failure=L"설정 도우미의 실행 환경을 확인하지 못했습니다. Windows 11 x64용 Knot 배포 파일인지, 실행 파일과 사용자 임시 폴더의 접근 권한이 올바른지 확인하세요. 실행 파일은 OneDrive·동기화·링크 폴더 밖의 로컬 폴더에 저장하세요. 임시 폴더 문제는 파일을 옮기는 것만으로 해결되지 않을 수 있습니다."; const BYTE *bytes=NULL; DWORD size=0,used=0;
     TOKEN_ELEVATION elevation; USHORT process_machine=0,native_machine=0; OSVERSIONINFOW version; db_locks locks={{0},0};
     (void)instance; (void)previous; (void)command_line; (void)show; db_heap=GetProcessHeap();
     // Static dependencies are system KnownDLLs/UCRT API sets; later loads search only System32.

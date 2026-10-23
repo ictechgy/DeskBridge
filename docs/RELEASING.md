@@ -60,7 +60,7 @@ The helper also compiles the pinned Framework-compatible MIT C# QR generator fro
 Push this source to your own repository and enable Actions. **Build install packages** creates downloadable artifacts on a tag, pull request or manual run. It uses pinned action commit SHAs, a macOS26 arm64 runner and Windows2025 compiler runner. Tag names must match VERSION. A tag produces preview artifacts; it does not automatically publish or claim signing.
 
 - Mac/source artifact: DMG, ZIP, optional Windows quick-setup EXE, Windows developer portable ZIP, source.tar.gz, INSTALLATION.md and SHA256SUMS.
-- Windows artifact: setup.exe, quick-setup EXE, WindowsRuntime-NOTICE.txt and WINDOWS-SHA256SUMS. The default EXEs are unsigned. The workflow verifies the pinned Zig Windows archive's size/SHA256 and extracts it under RUNNER_TEMP; it does not install a native compiler globally or modify PATH.
+- Windows artifact: setup.exe, quick-setup EXE, WindowsRuntime-NOTICE.txt, exact Knot-Windows.build.json/checks.json records and WINDOWS-SHA256SUMS covering all five files. The default EXEs are unsigned. The build record includes the selected managed compiler and Framework reference-assembly SHA256 values. The workflow verifies the pinned Zig Windows archive's size/SHA256 and extracts it under RUNNER_TEMP; it does not install a native compiler globally or modify PATH.
 - No contents-write permission or release-creation step is included.
 - The Mac can build the quick-setup EXE and run pure metadata/resource/argument checks. The separate Inno installer requires Windows compiler acceptance; successful CI compilation does not prove actual installer or remote-session behavior.
 

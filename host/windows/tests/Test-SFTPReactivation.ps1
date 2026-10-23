@@ -16,7 +16,7 @@ Expect-Reactivation ([regex]::Matches($source,[regex]::Escape('& $keygen')).Coun
 $syntheticSource=[regex]::Replace($source,'(?m)^#Requires[^\r\n]*\r?\n','')
 $syntheticSource=[regex]::Replace($syntheticSource,'(?m)^Import-Module[^\r\n]*\r?\n','')
 $syntheticSource=$syntheticSource.Replace('& $keygen','Invoke-SyntheticKeygen').Replace('& $sshd','Invoke-SyntheticSshd')
-$mocked=@('Resolve-DesktopUser','Get-ManagedDeployment','Get-NamedManagedFirewallRules','Get-ManagedFirewallPolicy',
+$mocked=@('Enter-DeskBridgeLifecycleLease','Resolve-DesktopUser','Get-ManagedDeployment','Get-NamedManagedFirewallRules','Get-ManagedFirewallPolicy',
  'Get-NetFirewallRule','Remove-NetFirewallRule','New-NetFirewallRule','Disable-NetFirewallRule','Disable-LocalUser','Enable-LocalUser',
  'Stop-Service','Start-Service','Set-Service','Assert-ProtectedFile','Assert-PrivateHostKey','Set-ManagedConfigAcl',
  'Assert-ManagedConfig','Write-ManagedRecoveryRecord','Assert-ProtectedDirectory','Stop-ManagedSessionWorkers',
@@ -46,13 +46,19 @@ function Invoke-ReactivationFixture([hashtable] $Case) {
  $record=[pscustomobject]@{Phase='Validated';UserName='deskbridge-transfer';ShareRoot=$temp;StartupBefore='Manual';ConfigSha256=('1'*64)}
  $oldRule=[pscustomobject]@{Name='DeskBridge-SFTP-In-TCP';Token='preexisting-rule'}
  $policy=New-ReactivationPolicy
+ if ($Case.ContainsKey('Reuse')) {$policy.RemoteAddress=@('192.168.1.20')}
  if ($Case.ContainsKey('InvalidPolicy')) {$policy.Program='C:\foreign\ssh.exe'}
  if ($Case.ContainsKey('DuplicatePriorAddresses')) {$policy.RemoteAddress=@('192.168.1.10','192.168.1.10')}
  $global:KnotSyntheticReactivation=[pscustomobject]@{Case=$Case;Policy=$policy;PriorRule=$oldRule;CreatedRule=$null;Removed=@();
   NewAddresses=@();Disabled=0;Enabled=0;StopCalls=0;StartCalls=0;OwnershipCalls=0;Terminated=@();Released=0;
-  LiveState='Stopped';LivePid=[uint32]0;Foreign=$false;Succeeded=$false;Error='';
+  LiveState='Stopped';LivePid=[uint32]0;Foreign=$false;Succeeded=$false;Error='';LeaseEntered=0;LeaseDisposed=0;
   Deployment=[pscustomobject]@{State=$temp;Record=$record;User=[pscustomobject]@{SID=$sid;Enabled=$false};Bin=$temp;
    Sshd=(Join-Path $temp 'sshd.exe');Service=[pscustomobject]@{State='Stopped'};Template=$template;Config=$config;KeyPath=$keyPath;ConfigExists=$false}}
+ if ($Case.ContainsKey('Reuse')) {
+  $global:KnotSyntheticReactivation.Deployment.ConfigExists=$true
+  $global:KnotSyntheticReactivation.Deployment.Service.State='Running'
+  $global:KnotSyntheticReactivation.Deployment.User.Enabled=$true
+ }
  try {
   if ($Case.ContainsKey('EarlyKeyWriteFailure')) {(Get-Item -LiteralPath $keyPath).IsReadOnly=$true}
   & $fixture -ClientPublicKey $publicKey -AllowedClientAddress @('192.168.1.20') -DesktopUserSid $sid.Value | Out-Null
@@ -65,8 +71,18 @@ function Invoke-ReactivationFixture([hashtable] $Case) {
  return $global:KnotSyntheticReactivation
 }
 try {
+ function global:Enter-DeskBridgeLifecycleLease {
+  $global:KnotSyntheticReactivation.LeaseEntered++
+  $lease=[pscustomobject]@{Disposed=$false;Fixture=$global:KnotSyntheticReactivation}
+  $lease | Add-Member ScriptMethod Dispose {if (-not $this.Disposed) {$this.Disposed=$true;$this.Fixture.LeaseDisposed++}}
+  $lease
+ }
  function global:Resolve-DesktopUser {param($Sid) [pscustomobject]@{SID=[pscustomobject]@{Value=$Sid}}}
- function global:Get-ManagedDeployment {param([switch]$WizardDefaults,$DesktopUserSid) $global:KnotSyntheticReactivation.Deployment}
+ function global:Get-ManagedDeployment {
+  param([switch]$WizardDefaults,$DesktopUserSid)
+  if ($global:KnotSyntheticReactivation.Case.ContainsKey('InventoryFailure')) {throw 'inert deployment inventory failed'}
+  $global:KnotSyntheticReactivation.Deployment
+ }
  function global:Get-NamedManagedFirewallRules {param($PolicyStore) $global:KnotSyntheticReactivation.PriorRule}
  function global:Get-ManagedFirewallPolicy {$global:KnotSyntheticReactivation.Policy}
  function global:Get-NetFirewallRule {param($Name,$ErrorAction) if ($Name -ne 'OpenSSH-Server-In-TCP') {throw 'Unexpected synthetic rule lookup'}}
@@ -137,6 +153,12 @@ try {
    [pscustomobject]@{ProcessId=$worker.ProcessId;ParentProcessId=$worker.Parent;CreatedFileTime=$worker.Created;ExecutablePath=$worker.ExecutablePath;Alive=$true}
   } -Terminate {param($identity) $global:KnotSyntheticReactivation.Terminated+=@($identity.ProcessId)} -Release {param($identity) $global:KnotSyntheticReactivation.Released++}
  }
+ $reuse=Invoke-ReactivationFixture @{Reuse=$true}
+ Expect-Reactivation ($reuse.Succeeded -and $reuse.OwnershipCalls -eq 0 -and $reuse.StopCalls -eq 0 -and $reuse.Removed.Count -eq 0) 'Actual direct reactivation returns without mutation for its verified active deployment'
+ Expect-Reactivation ($reuse.LeaseEntered -eq 1 -and $reuse.LeaseDisposed -eq 1) 'Actual direct return releases its invocation-owned lifecycle lease'
+ $inventoryFailure=Invoke-ReactivationFixture @{InventoryFailure=$true}
+ Expect-Reactivation (-not $inventoryFailure.Succeeded -and $inventoryFailure.Error -ceq 'inert deployment inventory failed' -and $inventoryFailure.OwnershipCalls -eq 0) 'Actual direct preflight failure refuses before service or worker operations'
+ Expect-Reactivation ($inventoryFailure.LeaseEntered -eq 1 -and $inventoryFailure.LeaseDisposed -eq 1) 'Actual direct throw releases its invocation-owned lifecycle lease'
  $invalid=Invoke-ReactivationFixture @{InvalidPolicy=$true;EarlyKeyWriteFailure=$true}
  Expect-Reactivation (-not $invalid.Succeeded -and $invalid.Error -like '*retained firewall rule differs*') 'An unrelated same-name policy is rejected before reactivation reaches a configured key-write failure'
  Expect-Reactivation ($invalid.OwnershipCalls -eq 0 -and $invalid.StopCalls -eq 0 -and $invalid.Disabled -eq 0 -and $invalid.Removed.Count -eq 0) 'An altered prior rule is preserved before any service/account/rule mutation'

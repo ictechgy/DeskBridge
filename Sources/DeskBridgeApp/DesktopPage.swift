@@ -104,7 +104,7 @@ struct DesktopPage: View {
             HStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("\(model.platformName)를\n하나의 Space로.").font(.system(size: 25, weight: .bold))
-                    Text(model.streaming ? "전체 화면 Space에서 작업 중입니다." : "전체 화면으로 열고,\n익숙한 단축키로 Mac과 오가세요.")
+                    Text(model.streaming ? "화면 연결이 열려 있습니다." : "전체 화면으로 열고,\n익숙한 단축키로 Mac과 오가세요.")
                         .font(.callout).foregroundStyle(.secondary).lineSpacing(3)
                     primaryAction.padding(.top, 3)
                     if model.paired && model.apps.count > 1 {

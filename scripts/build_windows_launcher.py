@@ -6,7 +6,7 @@ Inputs are an explicit C# compiler and Framework reference directory. This scrip
 does not download/install tools, run the EXE, or change any Windows configuration.
 """
 from pathlib import Path
-import argparse, hashlib, json, os, re, subprocess, tempfile
+import argparse, hashlib, json, os, re, shutil, subprocess, tempfile
 from build_snapshot import source_snapshot
 from windows_resources import resource_file, validate_bootstrap
 from reverse_client import client_sources, generate_engine_pin, generate_qr_loader
@@ -151,6 +151,9 @@ def build(compiler, references, output, dotnet=None, native_compiler=None):
     refs = [Path(references) / (name + ".dll") for name in ("mscorlib", "System", "System.Core", "System.Windows.Forms", "System.Drawing", "System.IO.Compression", "System.IO.Compression.FileSystem")]
     if any(not p.is_file() for p in refs):
         raise ValueError("Supply the .NET Framework 4.8 reference assemblies directory")
+    compiler = Path(shutil.which(str(compiler)) or compiler).resolve(strict=True)
+    managed_compiler_sha = hashlib.sha256(compiler.read_bytes()).hexdigest()
+    reference_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in refs}
     compiler_prefix = [str(dotnet), str(compiler)] if dotnet else [str(compiler)]
     vendor = ROOT / 'Vendor/QRCodegen'
     provenance = json.loads((vendor / 'UPSTREAM.json').read_text())
@@ -229,11 +232,16 @@ def build(compiler, references, output, dotnet=None, native_compiler=None):
     if source_snapshot(ROOT) != snapshot:
         output.unlink(missing_ok=True)
         raise RuntimeError("Source changed during launcher build; rebuild")
+    if (hashlib.sha256(compiler.read_bytes()).hexdigest() != managed_compiler_sha or
+            {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in refs} != reference_hashes):
+        output.unlink(missing_ok=True)
+        raise RuntimeError("Managed compiler or reference assemblies changed during launcher build; rebuild")
     if output.read_bytes()[:2] != b"MZ":
         output.unlink(missing_ok=True)
         raise RuntimeError("Compiler did not produce a Windows executable")
     record = {"schema": 1, "version": version, "sourceManifest": snapshot,
               "compiler": str(compiler), "references": str(references), "argv": argv,
+              "managedCompilerSha256": managed_compiler_sha, "referenceAssemblySha256": reference_hashes,
               "compilerExitCode": result.returncode, "stdout": result.stdout.decode(errors="replace"),
               "stderr": result.stderr.decode(errors="replace"), "payloadSha256": hashes,
               "managedSha256": managed_sha, "nativeCompiler": str(native_compiler),

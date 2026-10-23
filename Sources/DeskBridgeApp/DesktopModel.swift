@@ -127,6 +127,9 @@ final class DesktopModel: ObservableObject {
         try assertStorageReady()
         var next = settings
         next.address = try EndpointPolicy.validatedAddress(nextAddress ?? address)
+        if next.address != (try? EndpointPolicy.validatedAddress(address)), !canChoosePC {
+            throw AppFailure("화면·파일 연결과 정리를 마친 뒤 대상 PC를 바꾸세요.")
+        }
         next.sshUsername = username; next.sshPort = port
         next.sshHostPublicKey = hostKey; next.sshIdentityPath = identityPath
         try store.save(next)
@@ -236,7 +239,8 @@ final class DesktopModel: ObservableObject {
             if invitation.platform == .macos {
                 throw AppFailure("이 QR·링크는 Windows의 Knot에서 ‘Mac 화면 열기’로 가져오세요. Mac 앱에서는 Windows·Linux 호스트의 화면에 연결할 수 있습니다.")
             }
-            throw AppFailure("연결 QR의 대상 OS가 다릅니다. 해당 PC의 탭에서 새 연결 QR을 가져오세요.")
+            let target = invitation.platform == .linux ? "Linux 화면" : "Windows 화면"
+            throw AppFailure("이 QR·링크는 ‘\(target)’ 탭에서 가져오세요. 표시된 대상 OS는 아직 확인되지 않았습니다.")
         }
         pendingInvitation = invitation
         invitationError = nil

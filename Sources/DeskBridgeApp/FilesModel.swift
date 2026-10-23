@@ -41,7 +41,8 @@ final class FilesModel: ObservableObject {
         }
         return "파일 작업을 완료하지 못했습니다. 설정 파일과 개인 키의 접근 권한을 확인한 뒤 다시 시도하세요."
     }
-    var canExchangeSetup: Bool { !shuttingDown && desktop.supportsFiles && !busy && !connected && !desktop.busy && !desktop.streaming }
+    var canExchangeSetup: Bool { !shuttingDown && desktop.supportsFiles && !busy && !connected && desktop.canChoosePC }
+    var requiresKeyReplacementConfirmation: Bool { !identityPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     static func connectionMatches(connected: Bool, connectedAddress: String?, validatedAddress: String) -> Bool {
         guard connected, let connectedAddress,
               let canonical = try? EndpointPolicy.validatedAddress(validatedAddress), canonical == validatedAddress else { return false }
@@ -146,7 +147,7 @@ final class FilesModel: ObservableObject {
         try desktop.assertFileCapability()
         guard connected, let client else { throw SFTPError.disconnected }
         guard connectedAddress == (try? EndpointPolicy.validatedAddress(desktop.address)) else {
-            throw SFTPError.connectionLost("대상 PC가 바뀌었습니다. 파일 연결을 다시 하세요.")
+            throw SFTPError.targetChanged
         }
         return client
     }
@@ -220,14 +221,20 @@ final class FilesModel: ObservableObject {
             status = "파일 연결을 끊었습니다."
         }
     }
-    func generateKey() {
-        guard !shuttingDown, desktop.supportsFiles, !connected else { return }
+    func generateKey(replacingIdentity confirmedIdentity: String? = nil) {
+        guard !shuttingDown, desktop.supportsFiles, !busy, !connected else { return }
+        let previousIdentity = identityPath
+        guard !requiresKeyReplacementConfirmation || confirmedIdentity == previousIdentity else {
+            errorMessage = "설정된 SSH 키를 바꾸려면 먼저 확인하세요. 새 공개 키는 Windows에 다시 등록해야 합니다."
+            return
+        }
         perform { [self] in
             try desktop.assertStorageReady()
             let directory = desktop.store.directory
             let result = try await Task.detached(priority: .userInitiated) { try SSHKeyManager.generate(in: directory) }.value
             try Task.checkCancellation()
             guard !connected else { throw AppFailure("파일 연결을 끊은 뒤 키를 변경하세요.") }
+            guard identityPath == previousIdentity else { throw AppFailure("설정된 SSH 키가 바뀌었습니다. 현재 키를 확인한 뒤 다시 시도하세요.") }
             try desktop.rememberFileIdentity(path: result.privateKey.path)
             identityPath = result.privateKey.path; generatedPublicKey = result.publicKey
             status = "Mac 전용 키를 만들었습니다. 아래 공개 키를 Windows 설정 도우미에 등록하세요."

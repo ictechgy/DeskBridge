@@ -11,6 +11,8 @@ struct FilesPage: View {
     @State private var exchangeExpanded = false
     @State private var manualTrustExpanded = false
     @State private var addressDraft = ""
+    @State private var confirmingKeyReplacement = false
+    @State private var identityToReplace = ""
 
     private var settingsLocked: Bool { model.busy || model.connected }
     private var targetLocked: Bool { settingsLocked || desktop.busy || desktop.streaming }
@@ -56,6 +58,12 @@ struct FilesPage: View {
         .onAppear { configurationExpanded = !model.connected; addressDraft = desktop.address }
         .onChange(of: desktop.address) { _, address in addressDraft = address }
         .onChange(of: model.connected) { _, connected in configurationExpanded = !connected }
+        .confirmationDialog("설정된 SSH 키를 바꿀까요?", isPresented: $confirmingKeyReplacement, titleVisibility: .visible) {
+            Button("새 키 만들고 연결 설정 변경", role: .destructive) { model.generateKey(replacingIdentity: identityToReplace) }
+            Button("취소", role: .cancel) {}
+        } message: {
+            Text("현재 키: \(identityToReplace)\n새 공개 키를 Windows에 다시 등록해야 파일을 연결할 수 있습니다. 기존 키 파일은 지우지 않습니다.")
+        }
     }
 
     private var connectionIntroduction: some View {
@@ -220,7 +228,12 @@ struct FilesPage: View {
                 .disabled(settingsLocked)
 
                 HStack {
-                    Button("Mac 전용 키 만들기") { model.generateKey() }
+                    Button("Mac 전용 키 만들기") {
+                        if model.requiresKeyReplacementConfirmation {
+                            identityToReplace = model.identityPath
+                            confirmingKeyReplacement = true
+                        } else { model.generateKey() }
+                    }
                         .disabled(settingsLocked)
                     Text("개인 키는 이 Mac에만 보관하세요.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)

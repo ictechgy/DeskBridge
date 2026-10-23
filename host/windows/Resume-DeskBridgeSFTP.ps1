@@ -8,6 +8,8 @@ param([Parameter(Mandatory=$true)][string] $ClientPublicKey,[Parameter(Mandatory
       [Parameter(Mandatory=$true)][string] $DesktopUserSid)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'SetupContract.psm1') -Force
+$lifecycleLease=Enter-DeskBridgeLifecycleLease
+try {
 $key=Get-CanonicalPublicKey $ClientPublicKey
 $desktopUser=Resolve-DesktopUser $DesktopUserSid
 $addresses=@($AllowedClientAddress | ForEach-Object {Get-PrivateIPv4 $_})
@@ -90,3 +92,5 @@ try {
  if (Test-Path -LiteralPath $config) {Move-Item -LiteralPath $config -Destination (Join-Path $state ('sshd_config.failed-' + [Guid]::NewGuid().ToString('N'))) }
  throw
 }
+
+} finally {$lifecycleLease.Dispose()}

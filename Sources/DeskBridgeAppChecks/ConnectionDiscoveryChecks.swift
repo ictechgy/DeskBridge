@@ -26,6 +26,13 @@ func runConnectionDiscoveryChecks(temporary: URL) async throws -> Int {
     CGImageDestinationAddImage(destination, image, nil)
     try expect(CGImageDestinationFinalize(destination), "synthetic PNG fixture generated")
     try expect(try ConnectionQRReader.decode(data: png as Data) == invitation, "actual QR image decoder roundtrip")
+    let cancelledDecode = Task { () throws -> ConnectionInvitation in
+        withUnsafeCurrentTask { $0?.cancel() }
+        return try ConnectionQRReader.decode(data: png as Data)
+    }
+    var cancellationKept = false
+    do { _ = try await cancelledDecode.value } catch is CancellationError { cancellationKept = true }
+    try expect(cancellationKept, "cancelled QR decoding must stop before parsing an image")
     for (format, accepted) in [("com.microsoft.bmp", true), ("com.compuserve.gif", false)] {
         let encoded = NSMutableData()
         let destination = CGImageDestinationCreateWithData(encoded, format as CFString, 1, nil)!

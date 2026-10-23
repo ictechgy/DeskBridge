@@ -483,3 +483,6 @@ Write-Output ('Final export + contract checks: ' + $count)
 
 # The reactivation fixture runs the actual script control flow through inert platform seams.
 & (Join-Path $PSScriptRoot 'Test-SFTPReactivation.ps1')
+
+# Global serialization is exercised only with inert factories or fresh GUID test names.
+& (Join-Path $PSScriptRoot 'Test-LifecycleLease.ps1')

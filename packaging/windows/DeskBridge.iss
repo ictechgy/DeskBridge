@@ -71,7 +71,7 @@ begin
   Result := Launched and (ExitCode = 0);
   if not Result then begin
     Log('Knot access revocation/inactivity verification failed. Retaining helper and shared data for manual recovery.');
-    if (not UninstallSilent) and ((not Launched) or (ExitCode <> 2)) then
+    if (not UninstallSilent) then
       MsgBox('파일 접속 해제나 비활성 상태 확인을 완료하지 못했습니다. 도우미를 유지합니다. 관리자가 기존 SSH 설정과 남아 있는 Knot 파일 접속을 확인한 뒤 제거하세요.', mbError, MB_OK);
   end;
 end;

@@ -81,7 +81,10 @@ namespace DeskBridge.Reverse
             if (!File.Exists(marker) || new FileInfo(marker).Length != PrivateFiles.MarkerText.Length || File.ReadAllText(marker) != PrivateFiles.MarkerText || !File.Exists(Path.Combine(path, "portable.dat")))
                 throw new ReverseUserException(ReverseFailure.ProfilePolicy);
             // Another DeskBridge instance must not edit or launch the same identity/settings while it is in use.
-            var ownership = new FileStream(Path.Combine(path, "in-use.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            FileStream ownership;
+            try { ownership = new FileStream(Path.Combine(path, "in-use.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) { throw new ReverseUserException(ReverseFailure.ProfilePolicy); }
+            catch (UnauthorizedAccessException) { throw new ReverseUserException(ReverseFailure.ProfilePolicy); }
             try
             {
                 if (ownership.Length != 0) throw new ReverseUserException(ReverseFailure.ProfilePolicy);

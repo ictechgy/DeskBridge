@@ -23,6 +23,9 @@ if (-not $Apply) {
     return
 }
 if (-not $PSCmdlet.ShouldProcess('Windows OpenSSH Server, dedicated account, NTFS share ACLs and firewall', 'Configure key-only DeskBridge SFTP')) { return }
+$lifecycleLease=Enter-DeskBridgeLifecycleLease
+try {
+Assert-NoOpenSSHWorkers
 
 $publicKey = Get-CanonicalPublicKey $ClientPublicKey
 $desktopUser = Resolve-DesktopUser $DesktopUserSid
@@ -240,6 +243,7 @@ Match User $UserName
     Assert-ManagedConfig $config $rollback.ConfigSha256
     New-NetFirewallRule -Name 'DeskBridge-SFTP-In-TCP' -DisplayName 'DeskBridge SFTP from approved Mac addresses' -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress $AllowedClientAddress -Action Allow -Profile Any | Out-Null
     $createdFirewall = $true
+    Assert-NoOpenSSHWorkers
     Set-Service -Name sshd -StartupType Automatic
     Enable-LocalUser -SID $user.SID
     Start-Service sshd; $startedService = $true
@@ -286,3 +290,5 @@ Match User $UserName
     Set-Service -Name sshd -StartupType $startupBefore -ErrorAction SilentlyContinue
     throw
 }
+
+} finally {$lifecycleLease.Dispose()}

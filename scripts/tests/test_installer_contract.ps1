@@ -38,10 +38,10 @@ $unknown=$predicate -replace '\b(UninstallSilent|Launched|ExitCode|not|and|or)\b
 Expect ($unknown.Length -eq 0 -and $predicate.Length -lt 256) 'Only the known uninstall result predicate may be evaluated.'
 $predicate=$predicate -replace '\bUninstallSilent\b','$UninstallSilent' -replace '\bLaunched\b','$Launched' -replace '\bExitCode\b','$ExitCode' -replace '\bnot\b','-not' -replace '\band\b','-and' -replace '\bor\b','-or' -replace '<>','-ne'
 $dialogCondition=[scriptblock]::Create($predicate)
-foreach ($case in @(@($false,$false,2,$true),@($false,$true,2,$false),@($false,$true,1,$true),@($true,$false,2,$false),@($false,$true,0,$true))) {
+foreach ($case in @(@($false,$false,2,$true),@($false,$true,2,$true),@($false,$true,1,$true),@($true,$false,2,$false),@($false,$true,0,$true))) {
  $UninstallSilent=$case[0];$Launched=$case[1];$ExitCode=$case[2]
  # The zero case is unreachable inside `if not Result`; test the predicate independently.
- Expect ((& $dialogCondition) -eq $case[3]) 'Actual Inno predicate must distinguish launch error 2, handled failure 2 and silent mode.'
+ Expect ((& $dialogCondition) -eq $case[3]) 'Every interactive failed uninstall must explain that the helper is retained, including an acknowledged broker failure.'
 }
 # These commands shadow signing/certificate commands only in this fresh test process.
 function Get-Item {
@@ -75,6 +75,8 @@ function python {
  [CmdletBinding()]
  param([Parameter(ValueFromRemainingArguments=$true)][string[]] $CheckArguments)
  $global:DeskBridgeInstallerFixture.PayloadCheckCalls++
+ $checkRoot=Split-Path (Split-Path $CheckArguments[0] -Parent) -Parent
+ [IO.File]::WriteAllText((Join-Path $checkRoot 'build/windows/Knot-Windows.checks.json'),'{"status":"passed","synthetic":true}')
  Expect ($CheckArguments.Count -eq 5 -and [IO.Path]::GetFileName($CheckArguments[0]) -ceq 'test_windows_launcher.py' -and
          $CheckArguments[1] -ceq '--dotnet' -and $CheckArguments[2] -ceq 'dotnet' -and
          $CheckArguments[3] -ceq '--native-compiler' -and $CheckArguments[4] -ceq 'synthetic-zig-compiler') 'Payload checker must receive the exact native compiler selection.'
@@ -185,8 +187,11 @@ try {
   Expect ([IO.File]::ReadAllText((Join-Path $output 'WindowsRuntime-NOTICE.txt')) -ceq 'synthetic pinned runtime notice') 'Runtime notice must accompany the distributed quick EXE.'
   Expect ((Hash $quick) -ceq (Hash $launcher)) 'Shipped quick EXE must match the final signed/unsigned helper.'
   $sums=@(Get-Content -LiteralPath (Join-Path $output 'WINDOWS-SHA256SUMS'))
-  Expect ($sums.Count -eq 3) 'Both distributed Windows executables and runtime notice need checksums.'
-  foreach ($file in @($installer,$quick,(Join-Path $output 'WindowsRuntime-NOTICE.txt'))) {
+  $buildRecord=Join-Path $output 'Knot-Windows.build.json'; $checkRecord=Join-Path $output 'Knot-Windows.checks.json'
+  Expect ((Hash $buildRecord) -ceq (Hash (Join-Path $root 'build/windows/Knot-Windows.build.json')) -and
+          (Hash $checkRecord) -ceq (Hash (Join-Path $root 'build/windows/Knot-Windows.checks.json'))) 'Distribution must retain exact build and check provenance bytes.'
+  Expect ($sums.Count -eq 5) 'Distributed executables, runtime notice and build/check records need checksums.'
+  foreach ($file in @($installer,$quick,(Join-Path $output 'WindowsRuntime-NOTICE.txt'),$buildRecord,$checkRecord)) {
    Expect ($sums -ccontains ((Hash $file)+'  '+[IO.Path]::GetFileName($file))) 'Published checksum does not match distributed executable.'
   }
  }

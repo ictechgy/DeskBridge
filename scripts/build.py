@@ -68,6 +68,7 @@ if not args.skip_checks:
     run("video-frame-lifecycle-checks", [sys.executable, str(ROOT / "scripts/tests/test_video_frame_lifecycle.py")])
     run("media-receive-lifecycle-checks", [sys.executable, str(ROOT / "scripts/tests/test_media_lifecycle.py")])
     run("audio-notice-power-checks", [sys.executable, str(ROOT / "scripts/tests/test_audio_notice_power.py")])
+    run("stream-launch-lifecycle-checks", [sys.executable, str(ROOT / "scripts/tests/test_stream_launch_lifecycle.py")])
     run("rtsp-replay-checks", [sys.executable, str(ROOT / "scripts/tests/test_rtsp_replay.py")])
     run("private-storage-checks", [sys.executable, str(ROOT / "scripts/check_private_storage.py")])
 compile_module("GlimmerEngine", ROOT / "Vendor/Glimmer/GlimmerEngine", "Glimmer")

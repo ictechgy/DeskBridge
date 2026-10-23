@@ -78,6 +78,18 @@ private struct ControlHardeningSyntheticChecks {
             do { try body() } catch { rejected = true }
             try require(rejected, "malformed input was accepted")
         }
+        // Complete production parser and recursive lookups, using only inert bytes.
+        let normalXML = try XMLTreeBuilder.parse(data: Data("<root><hostname>Fixture</hostname></root>".utf8))
+        try require(normalXML.string(forChild: "hostname") == "Fixture", "normal host XML must remain readable")
+        let boundedNesting = String(repeating: "<a>", count: XMLTreeBuilder.maximumDepth) + String(repeating: "</a>", count: XMLTreeBuilder.maximumDepth)
+        let boundedTree = try XMLTreeBuilder.parse(data: Data(boundedNesting.utf8))
+        try require(boundedTree.firstChild(named: "missing") == nil, "maximum supported nesting remains safe to walk")
+        for depth in [XMLTreeBuilder.maximumDepth + 1, 10_000] {
+            let nested = Data((String(repeating: "<a>", count: depth) + String(repeating: "</a>", count: depth)).utf8)
+            try rejects { _ = try XMLTreeBuilder.parse(data: nested) }
+        }
+        try rejects { _ = try XMLTreeBuilder.parse(data: Data(("<root>" + String(repeating: "<a/>", count: XMLTreeBuilder.maximumNodes) + "</root>").utf8)) }
+        try rejects { _ = try XMLTreeBuilder.parse(data: Data(repeating: 32, count: XMLTreeBuilder.maximumSourceBytes + 1)) }
         for value in ["", " ", "-1", "+1", "no", "1, 1", String(repeating: "9", count: 100)] {
             try rejects { _ = try ControlTransport.contentLengthHeader(in: Data("HTTP/1.1 200 OK\r\nContent-Length: \(value)".utf8)) }
         }

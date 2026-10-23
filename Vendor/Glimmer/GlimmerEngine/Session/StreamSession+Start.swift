@@ -23,6 +23,7 @@ extension StreamSession {
         }
         teardown = SharedTeardown()
         stopCause = nil
+        reachedLiveState = false
         ownsHostSession = false
         isStreaming = true
         // Capture launch and teardown even when Cancel prevents the backend handshake.
@@ -76,11 +77,18 @@ extension StreamSession {
         try checkAttempt()
         rttSampler?.markLaunch()
 
-        let launch = try await launchWithDeadline(network: network, appID: appID, config: config, info: serverInfo)
-        try checkAttempt()
-        takeoverAuthorized = false
+        let launch: LaunchResponse
+        do {
+            launch = try await launchWithDeadline(network: network, appID: appID, config: config, info: serverInfo)
+        } catch {
+            // The shell reuses this paired client for the next PC refresh. An
+            // expired launch budget must never poison a later retry or pairing.
+            await network.setRequestDeadline(nil)
+            throw error
+        }
         await network.setRequestDeadline(nil)
         try checkAttempt()
+        takeoverAuthorized = false
 
         if publicMedia != nil { try launch.validateSessionKey() }
 

@@ -269,11 +269,16 @@ namespace DeskBridge.Reverse
             progress.Value = 0; progress.Visible = true;
             try
             {
-                await store.InstallAsync(new Progress<int>(value => { if (!closing && !IsDisposed) progress.Value = Math.Max(0, Math.Min(100, value)); }), operation.Token);
+                await store.InstallAsync(new Progress<int>(value => {
+                    if (closing || IsDisposed) return;
+                    progress.Value = Math.Max(0, Math.Min(100, value));
+                    progress.Style = value >= 95 && value < 100 ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+                    if (value >= 95 && value < 100) SetStatus("다운로드 완료 · 화면 엔진의 압축을 풀고 모든 파일을 검증하는 중입니다.");
+                }), operation.Token);
                 SetStatus(HostText(ClientMessage.EngineReady));
             }
             catch (Exception error) { ShowFailure(error); }
-            finally { progress.Visible = false; End(); }
+            finally { progress.Visible = false; progress.Style = ProgressBarStyle.Continuous; End(); }
         }
         private async Task LaunchAsync(bool pairing)
         {
@@ -291,7 +296,8 @@ namespace DeskBridge.Reverse
             {
                 using (EngineLease lease = await Task.Run(() => store.Verify(operation.Token), operation.Token))
                 {
-                    using (ProfileLease profile = EngineProfile.Prepare(store.Root, address))
+                    SetStatus("로컬 연결 프로필과 사용 잠금을 확인하는 중입니다.");
+                    using (ProfileLease profile = await Task.Run(() => EngineProfile.Prepare(store.Root, address), operation.Token))
                     {
                     operation.Token.ThrowIfCancellationRequested();
                     using (var child = new EngineProcess())

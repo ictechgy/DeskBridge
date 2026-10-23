@@ -93,6 +93,10 @@ import Foundation
     model.acknowledged = true; model.start(); model.start()
     try await settle { model.phase == .running }
     try expect(starts == 1 && model.invitation != nil, "duplicate host start or missing running invitation")
+    let runningStatus = model.status
+    model.download(to: fixture.appendingPathComponent("running-not-created.dmg"))
+    try expect(!model.canDownload && !model.downloading && downloads == 0 && model.status == runningStatus,
+               "running host allowed a download to replace sharing guidance")
     let invitation = model.invitation!
     try expect(invitation.platform == .macos, "Mac host invitation lost its explicit OS role")
     try expect(try ConnectionInvitation(text: invitation.url.absoluteString) == invitation,
@@ -100,9 +104,63 @@ import Foundation
     guard let png = MacHostQR.png(invitation) else { throw ModelCheckFailure(message: "synthetic host QR not generated") }
     try expect(try ConnectionQRReader.decode(data: png) == invitation, "host QR not decoded by actual QR reader")
     model.stop(); try expect(child.stops == 1 && model.phase == .stopping && model.invitation == nil, "stop did not revoke published invitation")
+    model.download(to: fixture.appendingPathComponent("stopping-not-created.dmg"))
+    try expect(!model.canDownload && !model.downloading && downloads == 0, "stopping host accepted a download")
     child.finish(); try expect(model.phase == .stopped && model.errorMessage == nil, "requested host stop reported failure")
     model.download(to: fixture.appendingPathComponent("synthetic.dmg")); try await settle { !model.downloading }
     try expect(downloads == 1 && model.downloadedURL != nil && starts == 1, "download launched a host")
+
+    // Application activation reads installation presence only; no UI, preferences, or network.
+    let activationCenter = NotificationCenter()
+    let activationChild = SyntheticMacHostChild()
+    var installationPresent = false, installationReads = 0, addressReads = 0
+    let activationModel = MacHostModel(operations: .init(installed: {
+        installationReads += 1; return installationPresent
+    }, addresses: { addressReads += 1; return addresses }, start: { _, _, _ in activationChild }, download: { _ in }),
+        activationCenter: activationCenter)
+    activationModel.refresh()
+    try expect(!activationModel.installed && installationReads == 1 && addressReads == 1,
+               "synthetic installation baseline did not refresh")
+    installationPresent = true
+    activationCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+    try await settle { activationModel.installed }
+    try expect(installationReads == 2 && addressReads == 1, "activation did not refresh installation independently")
+    activationModel.acknowledged = true; activationModel.start()
+    try await settle { activationModel.phase == .running }
+    let activationStatus = activationModel.status, activationAddress = activationModel.selectedAddress
+    let activeAddressReads = addressReads
+    installationPresent = false
+    activationCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+    try await settle { !activationModel.installed }
+    try expect(activationModel.phase == .running && activationModel.status == activationStatus &&
+               activationModel.selectedAddress == activationAddress && addressReads == activeAddressReads,
+               "activation replaced running share state or refreshed its selected address")
+    let readsBeforeShutdown = installationReads
+    activationCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil) // Already queued at shutdown.
+    activationModel.beginShutdown(); activationChild.finish()
+    installationPresent = true
+    activationCenter.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+    activationModel.refresh()
+    try await Task.sleep(for: .milliseconds(20))
+    try expect(installationReads == readsBeforeShutdown && !activationModel.installed && !activationModel.canDownload,
+               "activation or refresh restarted installation work after shutdown")
+
+    var releaseDownload: CheckedContinuation<Void, Never>?
+    var downloadStarts = 0, blockedHostStarts = 0
+    let downloadingHost = MacHostModel(operations: .init(installed: { true }, addresses: { addresses },
+        start: { _, _, _ in blockedHostStarts += 1; return SyntheticMacHostChild() }, download: { _ in
+            downloadStarts += 1; await withCheckedContinuation { releaseDownload = $0 }
+        }))
+    downloadingHost.refresh(); downloadingHost.acknowledged = true
+    downloadingHost.download(to: fixture.appendingPathComponent("cancelled-not-created.dmg"))
+    try await settle { releaseDownload != nil }
+    downloadingHost.start(); downloadingHost.download(to: fixture.appendingPathComponent("duplicate-not-created.dmg"))
+    try expect(blockedHostStarts == 0 && downloadStarts == 1 && downloadingHost.phase == .stopped && !downloadingHost.canDownload,
+               "download allowed a concurrent host start or duplicate download")
+    downloadingHost.beginShutdown(); releaseDownload!.resume()
+    try await settle { !downloadingHost.downloading }
+    try expect(downloadingHost.downloadedURL == nil && blockedHostStarts == 0,
+               "cancelled download published a verified DMG after shutdown")
     let exited = SyntheticMacHostChild()
     let failed = MacHostModel(operations: .init(installed: { true }, addresses: { addresses }, start: { _, _, _ in exited }, download: { _ in }))
     failed.refresh(); failed.acknowledged = true; failed.start(); try await settle { failed.phase == .running }
@@ -144,6 +202,16 @@ import Foundation
     let windows = DesktopModel(storageDirectory: windowsRoot, identitySuite: windowsSuite)
     let linux = DesktopModel(storageDirectory: linuxRoot, identitySuite: linuxSuite, platform: .linux)
     let transfers = FilesModel(desktop: windows)
+    transfers.identityPath = windowsRoot.appendingPathComponent("not-opened-configured-key").path
+    let configuredIdentity = transfers.identityPath
+    try expect(transfers.requiresKeyReplacementConfirmation, "configured SSH identity did not require replacement confirmation")
+    transfers.generateKey()
+    try expect(!transfers.busy && transfers.identityPath == configuredIdentity && transfers.errorMessage != nil,
+               "key generation replaced configured identity without explicit confirmation")
+    transfers.errorMessage = nil
+    transfers.generateKey(replacingIdentity: configuredIdentity + "-stale")
+    try expect(!transfers.busy && transfers.identityPath == configuredIdentity && transfers.errorMessage != nil,
+               "key generation accepted confirmation for a different identity")
     var releaseQuit: CheckedContinuation<Void, Never>?
     var hostCleaned = false, quitReplied = false, touchedOperation = false
     let termination = DesktopTermination()

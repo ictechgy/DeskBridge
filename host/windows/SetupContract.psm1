@@ -175,6 +175,118 @@ function Invoke-ProtectedCompilation([string] $TypeDefinition) {
         }
     }
 }
+function Assert-NoOpenSSHWorkers {
+    param([scriptblock] $Inventory = { @(Get-CimInstance -ClassName Win32_Process -Filter "Name='sshd.exe' OR Name='sshd-session.exe' OR Name='sshd-auth.exe'" -Property Name,ProcessId -ErrorAction Stop) })
+    if (@(& $Inventory).Count -ne 0) {
+        throw 'An OpenSSH server or session worker already exists. This helper will not provision alongside an unproven deployment; review it manually.'
+    }
+}
+function Initialize-DeskBridgeLifecycleLease {
+    if ('DeskBridge.SFTPLifecycleLease' -as [type]) { return }
+    Invoke-ProtectedCompilation -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
+namespace DeskBridge {
+ public sealed class SFTPLifecycleLease : IDisposable {
+  const uint MutexAllAccess=0x001F0001, WaitObject=0, WaitAbandoned=0x80, WaitTimeout=0x102;
+  const string ProductionName="Global\\Knot.SFTP.Lifecycle.v1";
+  const string Security="O:BAG:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)";
+  [StructLayout(LayoutKind.Sequential)] struct SecurityAttributes {
+   public int Length; public IntPtr Descriptor;
+   [MarshalAs(UnmanagedType.Bool)] public bool Inherit;
+  }
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, uint revision, out IntPtr descriptor, out uint size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeWaitHandle CreateMutexEx(ref SecurityAttributes attributes, string name, uint flags, uint access);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityInfo(SafeWaitHandle handle, int type, uint information, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  [DllImport("advapi32.dll", SetLastError=true)] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr allocation);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(SafeWaitHandle handle, uint milliseconds);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool ReleaseMutex(SafeWaitHandle handle);
+  SafeWaitHandle mutex; bool owned; int threadId;
+  SFTPLifecycleLease() {}
+  public static SFTPLifecycleLease Acquire() { return AcquireName(ProductionName); }
+  // Kept private: the production API has one fixed machine-wide name. CI reflects this
+  // same factory only for newly generated synthetic names, never the production object.
+  static SFTPLifecycleLease AcquireName(string name) {
+   var result=new SFTPLifecycleLease(); IntPtr descriptor=IntPtr.Zero;
+   try {
+    uint size;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptor(Security, 1, out descriptor, out size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    var attributes=new SecurityAttributes(); attributes.Length=Marshal.SizeOf(typeof(SecurityAttributes));
+    attributes.Descriptor=descriptor; attributes.Inherit=false;
+    result.mutex=CreateMutexEx(ref attributes, name, 0, MutexAllAccess);
+    if (result.mutex.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+    ValidateSecurity(result.mutex);
+    uint wait=WaitForSingleObject(result.mutex, 0); // Fail fast; no queued stale preflight.
+    if (wait==WaitTimeout) throw new InvalidOperationException("Another Knot file-access operation is running. Wait for it to finish, then retry.");
+    if (wait!=WaitObject && wait!=WaitAbandoned) throw new Win32Exception(Marshal.GetLastWin32Error());
+    result.owned=true; result.threadId=Thread.CurrentThread.ManagedThreadId;
+    if (wait==WaitAbandoned) throw new InvalidOperationException("A previous Knot file-access operation ended unexpectedly. Review the retained state before retrying.");
+    return result;
+   } catch { result.Dispose(); throw; }
+   finally { if (descriptor!=IntPtr.Zero) LocalFree(descriptor); }
+  }
+  static bool TrustedPolicy(string owner, bool protectedDacl, string[] sids, int[] masks, int[] flags, bool[] plainAllows) {
+   if ((owner!="S-1-5-18" && owner!="S-1-5-32-544") || !protectedDacl || sids==null || masks==null || flags==null || plainAllows==null ||
+       sids.Length!=2 || masks.Length!=2 || flags.Length!=2 || plainAllows.Length!=2) return false;
+   bool system=false, admins=false;
+   for (int i=0;i<2;i++) {
+    if (!plainAllows[i] || flags[i]!=0 || (masks[i]!=(int)MutexAllAccess && masks[i]!=0x10000000)) return false;
+    if (sids[i]=="S-1-5-18" && !system) system=true;
+    else if (sids[i]=="S-1-5-32-544" && !admins) admins=true;
+    else return false;
+   }
+   return system && admins;
+  }
+  static void ValidateSecurity(SafeWaitHandle handle) {
+   IntPtr owner, group, dacl, sacl, descriptor;
+   uint error=GetSecurityInfo(handle, 6, 0x00000005, out owner, out group, out dacl, out sacl, out descriptor);
+   if (error!=0) throw new Win32Exception((int)error);
+   try {
+    uint length=GetSecurityDescriptorLength(descriptor);
+    if (length==0 || length>65536) throw new InvalidOperationException("Invalid Knot lifecycle mutex security descriptor.");
+    var bytes=new byte[length]; Marshal.Copy(descriptor, bytes, 0, (int)length);
+    var security=new RawSecurityDescriptor(bytes, 0);
+    int count=security.DiscretionaryAcl==null ? 0 : security.DiscretionaryAcl.Count;
+    var sids=new string[count];var masks=new int[count];var flags=new int[count];var allows=new bool[count];
+    for (int i=0;i<count;i++) {
+     var ace=security.DiscretionaryAcl[i] as CommonAce;
+     if (ace==null) continue;
+     sids[i]=ace.SecurityIdentifier.Value;masks[i]=ace.AccessMask;flags[i]=(int)ace.AceFlags;
+     allows[i]=!ace.IsCallback && ace.AceQualifier==AceQualifier.AccessAllowed;
+    }
+    bool trusted=TrustedPolicy(security.Owner==null ? null : security.Owner.Value,
+      (security.ControlFlags & ControlFlags.DiscretionaryAclProtected)!=0, sids,masks,flags,allows);
+    if (!trusted) throw new InvalidOperationException("The Knot lifecycle mutex is not protected for SYSTEM and Administrators. Review its owner and permissions; no operation was started.");
+   } finally { if (descriptor!=IntPtr.Zero) LocalFree(descriptor); }
+  }
+  public void Dispose() {
+   if (mutex==null) return;
+   if (owned && threadId!=Thread.CurrentThread.ManagedThreadId) throw new InvalidOperationException("The Knot lifecycle lease must be released by its owning thread.");
+   try {
+    if (owned && !ReleaseMutex(mutex)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    owned=false;
+   } finally { mutex.Dispose(); mutex=null; }
+  }
+ }
+}
+'@
+}
+function Enter-DeskBridgeLifecycleLease {
+    param([scriptblock] $Acquire)
+    if ($Acquire) { $lease=& $Acquire }
+    else {
+        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'File-access lifecycle operations require Windows.' }
+        Initialize-DeskBridgeLifecycleLease
+        $lease=[DeskBridge.SFTPLifecycleLease]::Acquire()
+    }
+    if ($null -eq $lease -or -not $lease.PSObject.Methods['Dispose']) { throw 'The file-access lifecycle lease was not acquired.' }
+    return $lease
+}
 function Initialize-ManagedWorkerHandle {
     if ('DeskBridge.ManagedWorkerHandle' -as [type]) { return }
     Invoke-ProtectedCompilation -TypeDefinition @'
@@ -653,4 +765,4 @@ function Assert-ProtectedMetadata([string] $Path,[switch] $WindowsBinary) {
         throw 'Managed metadata ownership/permissions are not protected. 관리자가 해당 폴더와 권한을 확인하세요. 기존 폴더는 자동으로 변경하거나 삭제하지 않습니다.'
     }
 }
-Export-ModuleMember -Function Test-ManagedMetadataAcl,Initialize-ConnectionExportDirectory,Get-CanonicalPublicKey,Get-KeyFingerprint,Get-PrivateIPv4,ConvertFrom-MacSetup,Read-MacSetup,Get-ManagedDeploymentAction,Assert-ProtectedMetadata,Resolve-DesktopUser,Assert-OpenSSHServicePath,Remove-NewEmptyDirectory,Write-ManagedRecoveryRecord,Assert-DesktopSetupToken,Resolve-ManagedTransferUser,Get-ManagedDeployment,Assert-ProtectedDirectory,Assert-ProtectedFile,Assert-ManagedConfig,Assert-NoReparsePath,Get-ManagedDirectoryRecords,Set-ManagedConfigAcl,Assert-PrivateHostKey,Test-ManagedFirewallPolicy,Get-ManagedFirewallPolicy,Test-FileAccessInactive,Get-FileAccessInactivityProjection,Test-SystemOpenSSHWorkerPath,Invoke-ProtectedCompilation,Stop-ManagedSessionWorkers,Save-DeskBridgeConnectionReply,Get-NamedManagedFirewallRules,Remove-ManagedFirewallAccess
+Export-ModuleMember -Function Assert-NoOpenSSHWorkers,Enter-DeskBridgeLifecycleLease,Test-ManagedMetadataAcl,Initialize-ConnectionExportDirectory,Get-CanonicalPublicKey,Get-KeyFingerprint,Get-PrivateIPv4,ConvertFrom-MacSetup,Read-MacSetup,Get-ManagedDeploymentAction,Assert-ProtectedMetadata,Resolve-DesktopUser,Assert-OpenSSHServicePath,Remove-NewEmptyDirectory,Write-ManagedRecoveryRecord,Assert-DesktopSetupToken,Resolve-ManagedTransferUser,Get-ManagedDeployment,Assert-ProtectedDirectory,Assert-ProtectedFile,Assert-ManagedConfig,Assert-NoReparsePath,Get-ManagedDirectoryRecords,Set-ManagedConfigAcl,Assert-PrivateHostKey,Test-ManagedFirewallPolicy,Get-ManagedFirewallPolicy,Test-FileAccessInactive,Get-FileAccessInactivityProjection,Test-SystemOpenSSHWorkerPath,Invoke-ProtectedCompilation,Stop-ManagedSessionWorkers,Save-DeskBridgeConnectionReply,Get-NamedManagedFirewallRules,Remove-ManagedFirewallAccess
