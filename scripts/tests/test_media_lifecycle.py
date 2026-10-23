@@ -1939,13 +1939,13 @@ with tempfile.TemporaryDirectory(prefix="knot-live-termination-", dir="/tmp") as
 # Compile complete ENet producers as part of the mandatory media lifecycle gate.
 subprocess.run([sys.executable, str(ROOT / "scripts/tests/test_enet_termination.py")], check=True, timeout=150)
 
-# Real wake-task replacement can cancel a producer after its cancellation guard
-# and before the actor consumes its verdict. Exercise those actual Wake bodies,
-# complete LIVE/episode cleanup, and the shell reducer's intermediate phases.
+# Defensive direct episode cancellation and actual stop/waiting shell behavior.
+# Real Wake producer ownership is exercised separately with two controlled
+# handoff barriers below; it must discard canceled or superseded verdicts.
 wake_source = (ENGINE / "Session/StreamSession+Wake.swift").read_text()
 watchdog_source = (ENGINE / "Session/StreamSession+FrameWatchdog.swift").read_text()
 handoff_fixture = live_fixture[:live_fixture.index("@main struct LiveEntryChecks")]
-handoff_fixture = handoff_fixture.replace("case livePCIdle,", "case wakePrecanceled, stopInitialProbe, waitingPCIdle, waitingSameApp, selfEntryPC, livePCIdle,", 1)
+handoff_fixture = handoff_fixture.replace("case livePCIdle,", "case defensiveCanceledEpisode, stopInitialProbe, waitingPCIdle, waitingSameApp, selfEntryPC, livePCIdle,", 1)
 handoff_fixture = handoff_fixture.replace("enum DisconnectReason { case hostClosedClean, hostError }", "enum DisconnectReason { case hostClosedClean, hostError, systemSleep }", 1)
 handoff_fixture = handoff_fixture.replace("    let p2 = P2(), reconnectTotal = Counter()", "    let p2 = P2(), reconnectTotal = Counter(), wakeTotal = Counter()", 1)
 # Rename the actual public contract in this combined fixture so the independent
@@ -1956,12 +1956,13 @@ shell_presentation = recovery_sources["presentation"].replace("import GlimmerEng
 handoff_fixture = handoff_fixture.replace("import os\n", "import os\n" + shell_contract + "\n" + shell_presentation, 1)
 other_constants = "\n".join(line.replace("package ", "") for line in recovery_constants.splitlines() if "deadPeerTerminationCode" not in line)
 handoff_fixture = handoff_fixture.replace("actor StreamSession {", "actor StreamSession {\n" + other_constants, 1)
-handoff_fixture = handoff_fixture.replace("case hdrActive(Bool), firstFrame,", "case waitingForVideo(Bool), hdrActive(Bool), firstFrame,", 1)
+handoff_fixture = handoff_fixture.replace("case hdrActive(Bool), firstFrame,", "case stopped, waitingForVideo(Bool), hdrActive(Bool), firstFrame,", 1)
 handoff_fixture = handoff_fixture.replace("    let values = Locked<[String]>([])", "    let values = Locked<[String]>([])\n    let shell = Locked(DesktopRecoveryPresentation())\n    let shellPhases = Locked<[String]>([])", 1)
 handoff_fixture = handoff_fixture.replace("        if let attempt, attempt != currentAttempt { return }\n        values.use", r'''
         if let attempt, attempt != currentAttempt { return }
         let publicEvent: ShellStreamEvent
         switch event {
+        case .stopped: publicEvent = .stopped
         case .waitingForVideo(let value): publicEvent = .waitingForVideo(value)
         case .hdrActive(let value): publicEvent = .hdrActive(value)
         case .firstFrame: publicEvent = .firstFrame
@@ -1980,7 +1981,7 @@ handoff_fixture = handoff_fixture.replace("        if let attempt, attempt != cu
         let phase = shell.use { $0.receive(publicEvent); return String(describing: $0.phase) }
         shellPhases.use { $0.append(phase) }
         values.use''', 1)
-handoff_fixture = handoff_fixture.replace("            case .hdrActive:", "            case .waitingForVideo(let value): value ? value.append(\"waiting-true\") : value.append(\"waiting-false\")\n            case .hdrActive:", 1)
+handoff_fixture = handoff_fixture.replace("            case .hdrActive:", "            case .stopped: value.append(\"stopped\")\n            case .waitingForVideo(let value): value ? value.append(\"waiting-true\") : value.append(\"waiting-false\")\n            case .hdrActive:", 1)
 # Avoid shadowing the recorded event array with the waiting payload.
 handoff_fixture = handoff_fixture.replace("case .waitingForVideo(let value): value ? value.append(\"waiting-true\") : value.append(\"waiting-false\")", "case .waitingForVideo(let waiting): value.append(waiting ? \"waiting-true\" : \"waiting-false\")", 1)
 waiting_method = block(watchdog_source, "package func setWaitingForVideo(").replace("package ", "")
@@ -2017,15 +2018,22 @@ wake_methods = "\n".join(block(wake_source, signature).replace("package ", "") f
     "package func teardownWakeObservers(", "package func handleSystemWake(", "private func startWakeProbe(", "private func finishWakeProbe("))
 # One explicit inert scheduling seam at the existing guard → actor-handoff gap.
 # The replacement uses the real stored producer and real cancellation statement.
-needle = "            await self.finishWakeProbe(budgetMs: budgetMs)"
+needle = "            await self.finishWakeProbe(budgetMs: budgetMs, probeID: probeID, armedAttempt: armedAttempt)"
 assert wake_methods.count(needle) == 1
 wake_methods = wake_methods.replace(needle, "            wakeHandoff.pauseOnce()\n" + needle, 1)
 handoff_fixture = handoff_fixture.replace("actor StreamSession {", """actor StreamSession {
     static let wakeProbeFloorMs: UInt64 = 50, wakeProbeCeilingMs: UInt64 = 50, wakeProbeRttMultiple: UInt64 = 1
     var wakeProbeTask: Task<Void, Never>?
+    var wakeProbeID: UUID?
     let services = InertWakeServices()
     var stopCalls = 0
+    var stopCause: DisconnectReason?
 """ + wake_methods + r'''
+    func runDefensiveCanceledEpisode() async {
+        await prepareLive()
+        withUnsafeCurrentTask { $0?.cancel() }
+        await runReconnectEpisode(code: -1, cause: "defensive synthetic API cancellation", initialTermination: -1)
+    }
     func startObservedWake() async -> Task<Void, Never> { await handleSystemWake(); return wakeProbeTask! }
     func cleanupState() -> (Bool, Bool, Bool, Int) { (isStreaming, isReconnecting, reconnectAttemptID == nil, stopCalls) }
     func beginWaiting() { bridge?.emit(.firstFrame); setWaitingForVideo(true) }
@@ -2044,7 +2052,21 @@ handoff_fixture = handoff_fixture.replace("actor StreamSession {", """actor Stre
         await runSelfInitiatedReconnect(cause: "inert self-entry race")
     }
 ''', 1)
-handoff_fixture = handoff_fixture.replace("func stop(cause: DisconnectReason) async { cancelCurrent() }", "func stop(cause: DisconnectReason) async { stopCalls += 1; cancelCurrent() }", 1)
+# Execute the active-session production stop prefix, including its actual
+# waiting flag behavior; only unrelated native disposal is an inert stand-in.
+actual_stop = block(lifecycle_source, "package func stop(cause:")
+stop_prefix_start = actual_stop.index("        guard isStreaming || stopInProgress else { return }")
+stop_prefix_end = actual_stop.index("        initialServerInfoTask?.cancel()", stop_prefix_start)
+stop_prefix = actual_stop[stop_prefix_start:stop_prefix_end]
+assert "waitingForVideo = false" in stop_prefix
+handoff_stop = "func stop(cause: DisconnectReason) async {\n" + stop_prefix + """
+        stopCalls += 1
+        teardownWakeObservers()
+        backend.stopConnection() // Inert native disposal, same terminal suffix below.
+        bridge?.emit(.stopped)
+        stopInProgress = false
+    }"""
+handoff_fixture = handoff_fixture.replace("func stop(cause: DisconnectReason) async { cancelCurrent() }", handoff_stop, 1)
 handoff_fixture = handoff_fixture.replace("        probeCalls += 1\n", "        probeCalls += 1\n        if mode == .stopInitialProbe { await session?.stop(cause: .hostClosedClean); return 0 }\n        if mode == .waitingPCIdle || mode == .selfEntryPC { return 0 }\n", 1)
 self_entry = block(reconnect, "package func runSelfInitiatedReconnect(")
 assert self_entry.index("bridge?.beginAttempt(UUID())") < self_entry.index("await runReconnectEpisode(")
@@ -2055,37 +2077,32 @@ handoff_fixture += r'''
     static func main() async {
         var checks = 0
         func expect(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
-        for mode: Schedule.Mode in [.wakePrecanceled, .stopInitialProbe, .waitingPCIdle, .waitingSameApp, .selfEntryPC] {
+        for mode: Schedule.Mode in [.defensiveCanceledEpisode, .stopInitialProbe, .waitingPCIdle, .waitingSameApp, .selfEntryPC] {
             inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }
             let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
             let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
             bridge.session = session; await schedule.setSession(session)
-            if mode == .wakePrecanceled {
-                await session.prepareLive()
-                let first = await session.startObservedWake()
-                wait(wakeHandoff.passed)
-                let replacement = await session.startObservedWake()
-                expect(first.isCancelled, "real replacement cancels stored first wake after its production guard")
-                wakeHandoff.release.signal()
-                await first.value; await replacement.value
+            if mode == .defensiveCanceledEpisode {
+                await Task { await session.runDefensiveCanceledEpisode() }.value
             } else if mode == .selfEntryPC { await session.runObservedSelf() }
             else { await session.runWaitingLive() }
             let state = await session.cleanupState(), events = bridge.values.use { $0 }, phases = bridge.shellPhases.use { $0 }
             let banners = await MainActor.run { presentation.values }, stats = await schedule.policyStats()
             expect(!state.1 && state.2, "all initial verdicts release reconnect ownership and attempt identity")
             expect(await session.liveInputStops() == 1, "initial input owner stops exactly once")
-            if mode == .wakePrecanceled {
-                expect(!state.0 && state.3 == 1, "precancelled real wake driver reaches one shared terminal stop")
-                expect(events == ["terminated"] && banners.allSatisfy { $0 == nil }, "preannouncement cancellation never shows false recovery UI")
-                expect(stats.2 == 0 && stats.1.isEmpty, "canceled wake never selects or launches replacement")
+            if mode == .defensiveCanceledEpisode {
+                expect(!state.0 && state.3 == 1, "defensive canceled API driver reaches one shared terminal stop")
+                expect(events == ["terminated", "stopped"] && banners.allSatisfy { $0 == nil }, "preannouncement cancellation never shows false recovery UI")
+                expect(stats.2 == 0 && stats.1.isEmpty, "defensive canceled API never selects or launches replacement")
             }
             if mode == .stopInitialProbe {
                 expect(!state.0 && state.3 == 1, "stop during initial probe is not stopped twice")
                 expect(events.filter { $0 == "terminated" }.isEmpty && !events.contains("reconnecting"), "stopped initial probe cannot emit duplicate terminal or recovery")
+                expect(phases == ["live", "waiting", "ended"], "actual stop prefix clears waiting silently without restoring old live frame")
             }
             if mode == .waitingPCIdle {
-                expect(events == ["frame", "waiting-true", "terminated"], "waiting PC-close never emits waiting=false or false recovery")
-                expect(phases == ["live", "waiting", "ended"], "actual shell never transiently returns live before clean PC-end")
+                expect(Array(events.prefix(3)) == ["frame", "waiting-true", "terminated"] && events.last == "stopped", "actual PC-ended stop follows terminal with its stop suffix")
+                expect(Array(phases.prefix(3)) == ["live", "waiting", "ended"] && phases.dropFirst(2).allSatisfy { $0 == "ended" }, "actual shell stays ended through the real stop prefix and suffix")
                 expect(banners.isEmpty && stats.1.isEmpty, "clean waiting PC-end has no card or host launch")
             }
             if mode == .waitingSameApp {
@@ -2099,7 +2116,7 @@ handoff_fixture += r'''
             }
             await session.finalCleanup()
         }
-        print("{\"status\":\"passed\",\"preannouncementClosureChecks\":\(checks),\"scope\":\"actual Wake producer/guard/replacement/finish with one controlled post-guard scheduling pause, complete LIVE episode/shared cleanup, actual waiting policy/decoder/input and shell reducer; inert resources only\"}")
+        print("{\"status\":\"passed\",\"preannouncementClosureChecks\":\(checks),\"scope\":\"defensive direct canceled API episode, complete LIVE episode/shared cleanup, actual active-session stop prefix/waiting policy/decoder/input and shell reducer; inert resources only\"}")
     }
 }
 '''
@@ -2113,3 +2130,189 @@ with tempfile.TemporaryDirectory(prefix="knot-preannouncement-closure-", dir="/t
     subprocess.run([str(executable)], check=True, timeout=30)
     print(json.dumps({"preannouncementClosureFixtureSHA256": hashlib.sha256(handoff_fixture.encode()).hexdigest(),
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Wake.swift", ENGINE / "Session/StreamSession+FrameWatchdog.swift", ENGINE / "Session/StreamSession+Start.swift", ENGINE / "Session/StreamBridgeContext.swift", ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift")}}))
+
+# Real Wake verdicts have a generation owner. Park every producer after its
+# guard, then choose both finish orders explicitly; no timer race decides order.
+wake_owner_fixture = handoff_fixture[:handoff_fixture.index("@main struct PreannouncementClosureChecks")]
+wake_gates = r'''
+final class WakeGate: @unchecked Sendable {
+    let passed = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+}
+final class WakeHandoff: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gates: [UUID: WakeGate] = [:]
+    func gate(_ id: UUID) -> WakeGate {
+        lock.withLock { if let gate = gates[id] { return gate }; let gate = WakeGate(); gates[id] = gate; return gate }
+    }
+    func pause(probeID: UUID) { let gate = gate(probeID); gate.passed.signal(); wait(gate.release) }
+}
+'''
+wake_owner_fixture = wake_owner_fixture.replace(block(wake_owner_fixture, "final class WakeHandoff:"), wake_gates, 1)
+wake_owner_fixture = wake_owner_fixture.replace("wakeHandoff.pauseOnce()", "wakeHandoff.pause(probeID: probeID)", 1)
+wake_owner_fixture = wake_owner_fixture.replace("struct InertWakeRTT", "let wakeHealthReads = Locked(0)\nstruct InertWakeRTT", 1)
+wake_owner_fixture = wake_owner_fixture.replace("    func enetHealth() -> InertWakeHealth? { nil }", "    var syntheticWakeHealth: InertWakeHealth?\n    func enetHealth() -> InertWakeHealth? { wakeHealthReads.use { $0 += 1 }; return withState { syntheticWakeHealth } }", 1)
+wake_owner_fixture = wake_owner_fixture.replace("    var wakeProbeTask: Task<Void, Never>?", "    var wakeTerminationEntries: [Bool] = []\n    var wakeProbeTask: Task<Void, Never>?", 1)
+# This entry recorder observes the full production consumer without replacing it.
+handler = block(wake_owner_fixture, "func handleHostTerminate(")
+opening = handler.index("{")
+recorded_handler = handler[:opening + 1] + "\n        wakeTerminationEntries.append(Task.isCancelled)" + handler[opening + 1:]
+wake_owner_fixture = wake_owner_fixture.replace(handler, recorded_handler, 1)
+wake_owner_fixture = wake_owner_fixture.replace("    func startObservedWake()", r'''
+    func startTaggedWake() async -> (Task<Void, Never>, UUID) {
+        await handleSystemWake()
+        return (wakeProbeTask!, wakeProbeID!)
+    }
+    func wakeOwnerState() -> (UUID?, Bool, [Bool], ObjectIdentifier) {
+        (wakeProbeID, wakeProbeTask != nil, wakeTerminationEntries, ObjectIdentifier(backend))
+    }
+    func invalidateWakeOwner() { teardownWakeObservers() }
+    func configureWakeHealth(_ sinceLastAckMs: UInt32) { backend.withState { backend.syntheticWakeHealth = InertWakeHealth(sinceLastAckMs: sinceLastAckMs) } }
+    func recoverIndependently() async { await runSelfInitiatedReconnect(cause: "inert independent transport replacement") }
+    func defensiveProbeEntry(_ id: UUID, cancelDriver: Bool) async {
+        // A deliberate package-entry contract check, separate from real producers.
+        if cancelDriver { withUnsafeCurrentTask { $0?.cancel() } }
+        await finishWakeProbe(budgetMs: 1, probeID: id, armedAttempt: attemptID)
+    }
+    func startObservedWake()''', 1)
+owner_finish = block(wake_source, "private func finishWakeProbe(")
+assert owner_finish.index("guard !Task.isCancelled, wakeProbeID == probeID else { return }") < owner_finish.index("wakeProbeTask = nil")
+assert block(wake_source, "package func teardownWakeObservers(").index("wakeProbeID = nil") < block(wake_source, "package func teardownWakeObservers(").index("wakeProbeTask?.cancel()")
+assert "package var wakeProbeID: UUID?" in session_source
+wake_owner_fixture += r'''
+@main struct WakeOwnershipChecks {
+    static func main() async {
+        var checks = 0
+        func expect(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
+        func makeSession() async -> (StreamSession, Schedule, Bridge) {
+            inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }; wakeHealthReads.use { $0 = 0 }
+            let schedule = Schedule(.waitingSameApp), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session); await session.prepareLive()
+            return (session, schedule, bridge)
+        }
+        for oldFirst in [true, false] {
+            let (session, schedule, bridge) = await makeSession()
+            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
+            let (replacement, replacementID) = await session.startTaggedWake(); wait(wakeHandoff.gate(replacementID).passed)
+            expect(first.isCancelled && firstID != replacementID, "real replacement cancels old producer and owns a fresh generation")
+            let pending = await session.wakeOwnerState()
+            expect(pending.0 == replacementID && pending.1 && pending.2.isEmpty, "both producer handoffs are parked with replacement handle intact")
+            if oldFirst {
+                wakeHandoff.gate(firstID).release.signal(); await first.value
+                let discarded = await session.wakeOwnerState()
+                expect(discarded.0 == replacementID && discarded.1, "old finish cannot clear replacement handle or generation")
+                expect(discarded.2.isEmpty && bridge.values.use { $0 }.isEmpty, "discarded old finish never enters termination consumer")
+                wakeHandoff.gate(replacementID).release.signal(); await replacement.value
+            } else {
+                wakeHandoff.gate(replacementID).release.signal(); await replacement.value
+                let recovered = await session.wakeOwnerState(), before = await session.cleanupState()
+                expect(before.0 && before.3 == 0 && recovered.2 == [false], "replacement alone completes uncancelled recovery before old release")
+                wakeHandoff.gate(firstID).release.signal(); await first.value
+                let after = await session.wakeOwnerState()
+                expect(after.3 == recovered.3 && after.2 == [false], "late old finish cannot tear down or replace recovered transport")
+            }
+            let owner = await session.wakeOwnerState(), state = await session.cleanupState(), stats = await schedule.policyStats()
+            expect(owner.0 == nil && !owner.1 && owner.2 == [false], "only current replacement consumes its handle and delivers one valid verdict")
+            expect(state.0 && !state.1 && state.2 && state.3 == 0, "replacement recovery stays live with no stop or sticky episode")
+            expect(stats.2 == 1 && stats.1 == ["resume"], "replacement alone selects and resumes exactly once")
+            expect(bridge.values.use { $0 } == ["reconnecting", "reconnected"], "neither completion order emits a stale terminal outcome")
+            expect(await session.liveInputStops() == 1, "discarded probe never revokes input of current recovery")
+            await session.finalCleanup()
+        }
+
+        // An uncancelled sole probe still belongs to its arm-time transport,
+        // even after another actual reconnect has committed a replacement.
+        do {
+            let (session, schedule, bridge) = await makeSession()
+            let (old, oldID) = await session.startTaggedWake(); wait(wakeHandoff.gate(oldID).passed)
+            await session.recoverIndependently()
+            let recovered = await session.wakeOwnerState(), before = await session.cleanupState()
+            expect(!old.isCancelled && recovered.0 == oldID && recovered.1, "independent reconnect leaves old uncancelled wake owner parked")
+            expect(before.0 && before.3 == 0 && recovered.2.isEmpty, "independent replacement completes without wake termination")
+            wakeHandoff.gate(oldID).release.signal(); await old.value
+            let after = await session.wakeOwnerState(), state = await session.cleanupState()
+            expect(after.0 == nil && !after.1 && after.3 == recovered.3, "old current owner may consume only its finished handle, never the new backend")
+            expect(wakeHealthReads.use { $0 } == 0 && after.2.isEmpty, "stale arm-time attempt cannot read new health or drive any terminate")
+            expect(state.0 && state.3 == 0 && bridge.values.use { $0 } == ["reconnecting", "reconnected"], "late uncancelled verdict cannot tear down recovered session")
+            expect(await schedule.policyStats().1 == ["resume"], "independent replacement is not relaunched by old wake")
+            await session.finalCleanup()
+        }
+        // Non-nil healthy ACK liveness must remain a no-op, while a stale ACK
+        // sample takes the existing bounded wake-recovery branch.
+        for fresh in [true, false] {
+            let (session, schedule, bridge) = await makeSession()
+            await session.configureWakeHealth(fresh ? 0 : 10_000)
+            let (probe, probeID) = await session.startTaggedWake(); wait(wakeHandoff.gate(probeID).passed)
+            wakeHandoff.gate(probeID).release.signal(); await probe.value
+            let owner = await session.wakeOwnerState(), state = await session.cleanupState()
+            expect(owner.0 == nil && !owner.1 && wakeHealthReads.use { $0 } == 1, "current owner consumes exactly one configured health sample")
+            expect(owner.2 == (fresh ? [] : [false]), "fresh ACK does not terminate; stale ACK alone drives valid wake verdict")
+            expect(state.0 && state.3 == 0 && bridge.values.use { $0 } == (fresh ? [] : ["reconnecting", "reconnected"]), "configured fresh/stale health preserves bounded existing recovery semantics")
+            expect(await schedule.policyStats().1 == (fresh ? [] : ["resume"]), "healthy wake sends no launch; stale current wake resumes once")
+            await session.finalCleanup()
+        }
+        // Actual observer teardown invalidates before cancellation; stale verdicts
+        // cannot consume a newly armed generation while the session remains live.
+        do {
+            let (session, schedule, bridge) = await makeSession()
+            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
+            let (second, secondID) = await session.startTaggedWake(); wait(wakeHandoff.gate(secondID).passed)
+            await session.invalidateWakeOwner()
+            let invalid = await session.wakeOwnerState()
+            expect(invalid.0 == nil && !invalid.1 && first.isCancelled && second.isCancelled, "observer teardown invalidates ownership and cancels stored task")
+            let (third, thirdID) = await session.startTaggedWake(); wait(wakeHandoff.gate(thirdID).passed)
+            wakeHandoff.gate(firstID).release.signal(); wakeHandoff.gate(secondID).release.signal()
+            await first.value; await second.value
+            let untouched = await session.wakeOwnerState()
+            expect(untouched.0 == thirdID && untouched.1 && untouched.2.isEmpty, "invalidated old finishes cannot clear rearmed generation")
+            expect(bridge.values.use { $0 }.isEmpty && await session.liveInputStops() == 0, "invalidated old probes have no terminal or input effects")
+            wakeHandoff.gate(thirdID).release.signal(); await third.value
+            let state = await session.cleanupState()
+            expect(state.0 && state.3 == 0, "only rearmed current generation may recover")
+            expect(await schedule.policyStats().1 == ["resume"], "rearmed current producer resumes once")
+            await session.finalCleanup()
+        }
+        // A full stop invalidates both parked producers before either can act.
+        do {
+            let (session, _, bridge) = await makeSession()
+            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
+            let (second, secondID) = await session.startTaggedWake(); wait(wakeHandoff.gate(secondID).passed)
+            await session.stop(cause: .hostClosedClean)
+            wakeHandoff.gate(secondID).release.signal(); wakeHandoff.gate(firstID).release.signal()
+            await first.value; await second.value
+            let owner = await session.wakeOwnerState(), state = await session.cleanupState()
+            expect(owner.0 == nil && !owner.1 && owner.2.isEmpty, "stopped probe cannot consume handle or deliver stale verdict")
+            expect(!state.0 && state.3 == 1 && bridge.values.use { $0 } == ["stopped"], "stopped probes cannot duplicate terminal or revive a stopped stream")
+            await session.finalCleanup()
+        }
+        // Defensive entry checks deliberately call the actual actor consumer from
+        // a fresh task; these are separate from real stored-producer schedules.
+        for cancelDriver in [false, true] {
+            let (session, _, bridge) = await makeSession()
+            let (current, currentID) = await session.startTaggedWake(); wait(wakeHandoff.gate(currentID).passed)
+            let attemptedID = cancelDriver ? currentID : UUID()
+            await Task { await session.defensiveProbeEntry(attemptedID, cancelDriver: cancelDriver) }.value
+            let pending = await session.wakeOwnerState()
+            expect(pending.0 == currentID && pending.1 && pending.2.isEmpty, "noncurrent generation or canceled entry cannot consume valid owner")
+            expect(bridge.values.use { $0 }.isEmpty && await session.liveInputStops() == 0, "defensive rejected entry has no liveness side effects")
+            wakeHandoff.gate(currentID).release.signal(); await current.value
+            let state = await session.cleanupState()
+            expect(state.0 && state.3 == 0, "valid current producer still recovers after rejected synthetic entry")
+            await session.finalCleanup()
+        }
+        print("{\"status\":\"passed\",\"wakeProbeOwnershipChecks\":\(checks),\"scope\":\"actual Wake generation producer/replacement/finish/teardown and complete recovery; both handoffs barriered for both orders, observer rearm and stopped lifecycle; separate defensive actor-entry checks; inert resources only\"}")
+    }
+}
+'''
+# Read actor-isolated diagnostics before combining them with synchronous values.
+wake_owner_fixture = wake_owner_fixture.replace("expect(bridge.values.use { $0 }.isEmpty && await session.liveInputStops() == 0,", "let inputStops = await session.liveInputStops()\n            expect(bridge.values.use { $0 }.isEmpty && inputStops == 0,")
+with tempfile.TemporaryDirectory(prefix="knot-wake-owner-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"; source.write_text(wake_owner_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"wakeProbeOwnershipFixtureSHA256": hashlib.sha256(wake_owner_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Wake.swift", ENGINE / "Session/StreamSession.swift", ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Lifecycle.swift")}}))

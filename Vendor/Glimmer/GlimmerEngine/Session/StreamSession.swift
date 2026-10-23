@@ -241,6 +241,8 @@ public actor StreamSession {
     /// One bounded post-wake probe, actor-owned and cancelled on completion, stop or a new wake.
     /// Native observer tokens remain in the prepared service adapter.
     package var wakeProbeTask: Task<Void, Never>?
+    /// Only this generation may consume the stored task or act on its liveness verdict.
+    package var wakeProbeID: UUID?
     /// Probe budget multiple of RTT, clamped: budget = clamp(N·RTT, 750ms, 2.5s).
     package static let wakeProbeRttMultiple = 4
     package static let wakeProbeFloorMs: UInt64 = 750

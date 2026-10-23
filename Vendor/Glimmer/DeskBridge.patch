@@ -1781,6 +1781,13 @@ diff --git a/GlimmerEngine/Session/StreamSession+Connect.swift b/GlimmerEngine/S
 @@ -107 +107 @@
 -            encryptionFlags: 0,
 +            encryptionFlags: Int32(StreamSecurityPolicy.requiredFeatures),
+diff --git a/GlimmerEngine/Session/StreamSession+Lifecycle.swift b/GlimmerEngine/Session/StreamSession+Lifecycle.swift
+--- a/GlimmerEngine/Session/StreamSession+Lifecycle.swift
++++ b/GlimmerEngine/Session/StreamSession+Lifecycle.swift
+@@ -35 +35,2 @@
+-        setWaitingForVideo(false)
++        // Stop is terminal; clearing the hold must not announce old video as live.
++        waitingForVideo = false
 diff --git a/GlimmerEngine/Session/StreamSession+Public.swift b/GlimmerEngine/Session/StreamSession+Public.swift
 --- a/GlimmerEngine/Session/StreamSession+Public.swift
 +++ b/GlimmerEngine/Session/StreamSession+Public.swift
@@ -2105,6 +2112,29 @@ diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Ses
 @@ -180 +181 @@
 -        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
 +        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)
+diff --git a/GlimmerEngine/Session/StreamSession+Wake.swift b/GlimmerEngine/Session/StreamSession+Wake.swift
+--- a/GlimmerEngine/Session/StreamSession+Wake.swift
++++ b/GlimmerEngine/Session/StreamSession+Wake.swift
+@@ -31,0 +32 @@
++        wakeProbeID = nil
+@@ -58,0 +60,3 @@
++        let probeID = UUID()
++        let armedAttempt = attemptID
++        wakeProbeID = probeID
+@@ -67 +71 @@
+-            await self.finishWakeProbe(budgetMs: budgetMs)
++            await self.finishWakeProbe(budgetMs: budgetMs, probeID: probeID, armedAttempt: armedAttempt)
+@@ -75 +79,5 @@
+-    private func finishWakeProbe(budgetMs: UInt64) async {
++    private func finishWakeProbe(budgetMs: UInt64, probeID: UUID, armedAttempt: UUID) async {
++        // Replacement/stop may happen after the producer's cancellation guard
++        // and before this actor hop. A stale owner must not clear the new task.
++        guard !Task.isCancelled, wakeProbeID == probeID else { return }
++        wakeProbeID = nil
+@@ -76,0 +85,3 @@
++        // An independent reconnect may have replaced transport while this owner
++        // waited for the actor; its old liveness sample cannot judge the new one.
++        guard armedAttempt == attemptID else { return }
 diff --git a/GlimmerEngine/Session/StreamSession.swift b/GlimmerEngine/Session/StreamSession.swift
 --- a/GlimmerEngine/Session/StreamSession.swift
 +++ b/GlimmerEngine/Session/StreamSession.swift
@@ -2125,6 +2155,9 @@ diff --git a/GlimmerEngine/Session/StreamSession.swift b/GlimmerEngine/Session/S
 +    package var reconnectAttemptFailureHandled = false
 +    /// Explicit termination diagnostics survive generic connect/cancellation errors.
 +    package var lastReconnectTerminationCode: Int32?
+@@ -232,0 +244,2 @@
++    /// Only this generation may consume the stored task or act on its liveness verdict.
++    package var wakeProbeID: UUID?
 diff --git a/GlimmerEngine/Video/VideoDecoder+Decode.swift b/GlimmerEngine/Video/VideoDecoder+Decode.swift
 --- a/GlimmerEngine/Video/VideoDecoder+Decode.swift
 +++ b/GlimmerEngine/Video/VideoDecoder+Decode.swift

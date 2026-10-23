@@ -32,7 +32,8 @@ extension StreamSession {
         if stopCause == nil { stopCause = cause }
         stopInProgress = true
         isStreaming = false
-        setWaitingForVideo(false)
+        // Stop is terminal; clearing the hold must not announce old video as live.
+        waitingForVideo = false
         initialServerInfoTask?.cancel()
         launchTask?.cancel()
         let pendingPreparation = mediaPreparation
