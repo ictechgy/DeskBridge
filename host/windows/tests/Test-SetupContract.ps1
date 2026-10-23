@@ -275,6 +275,23 @@ using System.Runtime.InteropServices;
 Expect ([Runtime.InteropServices.Marshal]::SizeOf([type][KnotOwnershipLayout32]) -eq 24) 'Inert x86 process basic information layout'
 Expect ([Runtime.InteropServices.Marshal]::SizeOf([type][KnotOwnershipLayout64]) -eq 48) 'Inert x64 process basic information layout'
 
+function Reject-NativeOwnershipGuard([scriptblock] $Body,[string] $ExpectedMessage,[string] $Boundary) {
+ $failure=$null
+ try {& $Body | Out-Null} catch {
+  $failure=$_.Exception
+  while ($failure.InnerException) {$failure=$failure.InnerException}
+ }
+ Expect ($failure -is [InvalidOperationException] -and $failure.Message -ceq $ExpectedMessage) ('Actual native ownership guard did not reject at '+$Boundary)
+}
+# Member-access property reads suppress .NET getter exceptions in PowerShell.
+# Invoke the actual getter METHOD so the assertion observes its precise guard,
+# rather than mistaking a silent null result or a binder error for a rejection.
+$closedProbe=New-Object DeskBridge.ManagedWorkerHandle
+try {
+ $closedProbe.Dispose()
+ Reject-NativeOwnershipGuard {$closedProbe.get_Alive()} 'OpenSSH ownership handle is closed.' 'fresh empty/disposed handle'
+} finally {$closedProbe.Dispose()}
+
 # On Windows only, exercise the actual native class against one NEW child owned by
 # this test process. Never inspect sshd/CIM/services/accounts/firewall or existing PIDs.
 if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
@@ -300,12 +317,12 @@ if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
   $childStarted=$true
   $ownedHandle=[DeskBridge.ManagedWorkerHandle]::Capture([uint32]$ownedChild.Id,$hostExecutable)
   Expect ($ownedHandle.ProcessId -eq $ownedChild.Id -and $ownedHandle.ParentProcessId -eq [uint32]$PID -and $ownedHandle.CreatedFileTime -gt 0 -and $ownedHandle.Alive) 'Actual Windows native capture binds the fresh child PID, current test parent, creation time, image and liveness'
-  Reject {[DeskBridge.ManagedWorkerHandle]::Capture([uint32]$ownedChild.Id,'C:\SyntheticWrongImage\sshd.exe')}
+  Reject-NativeOwnershipGuard {[DeskBridge.ManagedWorkerHandle]::Capture([uint32]$ownedChild.Id,'C:\SyntheticWrongImage\sshd.exe')} 'OpenSSH worker identity changed.' 'fresh child wrong expected image'
   Expect (-not $ownedChild.HasExited -and $ownedHandle.Alive) 'Rejecting a wrong expected image never terminates the fresh child'
   $ownedHandle.Stop()
   Expect ($ownedChild.WaitForExit(5000) -and -not $ownedHandle.Alive) 'Actual native stop terminates only the same held test-child object'
   $ownedHandle.Dispose()
-  Reject {$ownedHandle.Alive}
+  Reject-NativeOwnershipGuard {$ownedHandle.get_Alive()} 'OpenSSH ownership handle is closed.' 'disposed held child handle'
  } finally {
   if ($ownedHandle) {$ownedHandle.Dispose()}
   if ($ownedChild) {
