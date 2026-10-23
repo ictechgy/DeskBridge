@@ -556,6 +556,62 @@ class HostChecks(unittest.TestCase):
                 if count == 2: sockets[0].close.assert_called_once()
             finally: control.close()
 
+    def test_locally_capped_candidate_retries_after_later_route_rejects(self):
+        control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
+        rows = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::1', 443, 0, 0]),
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443])]
+        first = Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0))
+        rejected = Mock(connect_ex=Mock(return_value=errno.ENETUNREACH))
+        retried = Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0))
+        elapsed = {id(first): 0.0, id(retried): 0.0}
+        def ready(_readers, writers, _exceptional, timeout):
+            clock[0] += timeout; elapsed[id(writers[0])] += timeout
+            return ([], writers, []) if elapsed[id(writers[0])] >= 3 else ([], [], [])
+        try:
+            with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                 patch('runtime.socket.socket', side_effect=[first, rejected, retried]) as create, patch('runtime.select.select', side_effect=ready):
+                self.assertIs(control._connect_tcp('fixture.invalid', 443, began + 20, None), retried)
+            self.assertEqual([call.args[0] for call in create.call_args_list], [socket.AF_INET6, socket.AF_INET, socket.AF_INET6])
+            first.close.assert_called_once(); rejected.close.assert_called_once(); retried.close.assert_not_called()
+            retried.connect_ex.assert_called_once_with(('2001:db8::1', 443, 0, 0))
+            self.assertAlmostEqual(elapsed[id(first)], control.CONNECT_ATTEMPT_SECONDS)
+            self.assertGreaterEqual(elapsed[id(retried)], 3); self.assertLess(clock[0] - began, 6)
+        finally: control.close()
+
+    def test_permanently_rejected_candidates_are_not_retried(self):
+        control = TransferControl(threading.Event())
+        rows = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.' + str(i), 443]) for i in (1, 2)]
+        sockets = [Mock(connect_ex=Mock(return_value=status)) for status in (errno.ECONNREFUSED, errno.ENETUNREACH)]
+        try:
+            with patch.object(control, '_resolve', return_value=rows), patch('runtime.socket.socket', side_effect=sockets) as create, \
+                 self.assertRaises(Failure) as caught:
+                control._connect_tcp('fixture.invalid', 443, time.monotonic() + 20, None)
+            self.assertEqual(caught.exception.key, 'download'); self.assertEqual(create.call_count, 2)
+            for sock in sockets: sock.close.assert_called_once()
+        finally: control.close()
+
+    def test_capped_candidate_retry_keeps_shared_deadline_and_cancellation(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
+                rows = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::1', 443, 0, 0]),
+                        (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443])]
+                first, retried = [Mock(connect_ex=Mock(return_value=errno.EINPROGRESS)) for _ in range(2)]
+                rejected = Mock(connect_ex=Mock(return_value=errno.ENETUNREACH))
+                def not_ready(_readers, writers, _exceptional, timeout):
+                    clock[0] += timeout
+                    if cancel and writers == [retried]: control.cancel.set()
+                    return [], [], []
+                try:
+                    with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                         patch('runtime.socket.socket', side_effect=[first, rejected, retried]) as create, \
+                         patch('runtime.select.select', side_effect=not_ready), self.assertRaises(Failure) as caught:
+                        control._connect_tcp('fixture.invalid', 443, began + 4, None)
+                    self.assertEqual(caught.exception.key, 'cancel' if cancel else 'download')
+                    self.assertEqual(create.call_count, 3); self.assertLessEqual(clock[0] - began, 4.000001)
+                    for sock in (first, rejected, retried): sock.close.assert_called_once()
+                finally: control.close()
+
     def test_shutdown_finalizes_after_lost_ownership(self):
         events = []
         class Host:
@@ -693,6 +749,32 @@ sys.stdin.read()
         self.assertEqual(state.package, 'synthetic-private-download')
         self.assertEqual(len(values), 1, 'public export must not replace the private install command')
         self.assertIn('사본을 저장', values[0])
+
+    def test_ui_reports_cleanup_failure_without_masking_primary_or_raw_os_text(self):
+        import ast
+        from types import SimpleNamespace
+        source = Path(__file__).resolve().parents[1] / 'ui.py'
+        tree = ast.parse(source.read_text())
+        window = next(item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == 'Window')
+        method = next(item for item in window.body if isinstance(item, ast.FunctionDef) and item.name == 'run')
+        class Thread:
+            def __init__(self, target, **_): self.target = target
+            def start(self): self.target()
+        namespace = dict(GLib=SimpleNamespace(idle_add=lambda callback, *args: callback(*args)),
+                         threading=SimpleNamespace(Thread=Thread), Failure=Failure)
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), namespace)
+        for error in (Failure('export_destination'), Failure('collision'), OSError('synthetic private path and raw OS text')):
+            with self.subTest(error=type(error).__name__, key=getattr(error, 'key', None)):
+                error.cleanup_failed = True
+                values = []; completed = Mock()
+                state = SimpleNamespace(busy=False, closing=False, cancel=threading.Event(), controls=lambda: None,
+                                        status=SimpleNamespace(set_text=values.append))
+                def work(): raise error
+                namespace['run'](state, work, completed)
+                primary = str(error) if isinstance(error, Failure) else str(Failure('operation'))
+                self.assertEqual(len(values), 1); self.assertTrue(values[0].startswith(primary))
+                self.assertIn('임시 패키지 사본', values[0]); self.assertNotIn('synthetic', values[0])
+                completed.assert_not_called(); self.assertFalse(state.busy); self.assertIsNone(state.operation_kind)
 
 
 if __name__ == '__main__': unittest.main()

@@ -30,9 +30,21 @@ final class FixtureDefaults {
     func synchronize() {}
 }
 struct FixtureLog { func info(_ message: String) {}; func error(_ message: String) {} }
+enum StreamError: Error { case crypto(String), hostTimedOut }
+enum FixtureCryptoFailure: Error { case unexpected }
+// Synthetic PEM validation preserves the production crypto-error taxonomy;
+// this harness does not exercise Security.framework PEM parsing or real RSA keys.
 enum PEM {
     static func identity(certPEM: String, keyPEM: String) throws {
-        guard certPEM == "CERT", keyPEM == "KEY" else { throw IdentityStorageError.unsafeStorage }
+        if certPEM == "UNEXPECTED-ERROR" { throw FixtureCryptoFailure.unexpected }
+        if certPEM == "NONCRYPTO-ERROR" { throw StreamError.hostTimedOut }
+        guard certPEM != "WEAK-CERT", keyPEM != "WEAK-KEY" else {
+            throw StreamError.crypto("client identity requires RSA keys of at least 2048 bits")
+        }
+        guard certPEM == "CERT", keyPEM == "KEY" || keyPEM == "MISMATCHED-KEY" else {
+            throw StreamError.crypto("could not parse client certificate or private key")
+        }
+        guard keyPEM == "KEY" else { throw StreamError.crypto("client cert/key mismatch") }
     }
 }
 final class IdentityManager {
@@ -67,6 +79,15 @@ func incomplete(_ label: String, _ body: () throws -> Void) throws {
     do { try body() } catch IdentityStorageError.incompleteIdentity { checks += 1; return }
     catch { fatalError("wrong incomplete-identity failure for \(label): \(type(of: error))") }
     fatalError("incomplete identity accepted: \(label)")
+}
+enum FixtureValidationFailure { case unsafeStorage, unexpected, nonCrypto }
+func validationFailure(_ expected: FixtureValidationFailure, _ label: String, _ body: () throws -> Void) throws {
+    do { try body() }
+    catch IdentityStorageError.unsafeStorage where expected == .unsafeStorage { checks += 1; return }
+    catch FixtureCryptoFailure.unexpected where expected == .unexpected { checks += 1; return }
+    catch StreamError.hostTimedOut where expected == .nonCrypto { checks += 1; return }
+    catch { fatalError("wrong local identity validation failure for \(label): \(type(of: error))") }
+    fatalError("invalid local identity accepted: \(label)")
 }
 func fresh(_ name: String) throws -> URL {
     let url = fixture.appendingPathComponent(name, isDirectory: true)
@@ -330,6 +351,55 @@ for (index, component) in [(IdentityManager.accountCert, Data()),
                "malformed partial identity regenerated material")
     try expect(try FileIdentityStore.read(account: component.0, base: base) == component.1,
                "malformed partial bytes changed")
+}
+// Valid UTF-8 can still fail PEM parsing, RSA strength, or cert/key matching.
+// Both local validation boundaries must preserve all material and defaults.
+let validationCases: [(String, String, String, FixtureValidationFailure)] = [
+    ("bad-cert", "NOT-A-CERTIFICATE", "KEY", .unsafeStorage),
+    ("bad-key", "CERT", "NOT-A-PRIVATE-KEY", .unsafeStorage),
+    ("weak-cert", "WEAK-CERT", "KEY", .unsafeStorage),
+    ("weak-key", "CERT", "WEAK-KEY", .unsafeStorage),
+    ("mismatch", "CERT", "MISMATCHED-KEY", .unsafeStorage),
+    ("unexpected", "UNEXPECTED-ERROR", "KEY", .unexpected),
+    ("noncrypto", "NONCRYPTO-ERROR", "KEY", .nonCrypto),
+]
+for (name, cert, key, expectedFailure) in validationCases {
+    for version in [0, 1] {
+        for prewrite in [false, true] {
+            let label = "\(name), flag \(version), prewrite \(prewrite)"
+            let base = try fresh("pem-validation-\(name)-\(version)-\(prewrite)")
+            let stored = [(IdentityManager.accountCert, Data((prewrite ? "CERT" : cert).utf8)),
+                          (IdentityManager.accountKey, Data((prewrite ? "KEY" : key).utf8)),
+                          (IdentityManager.accountUID, Data("UID".utf8))]
+            for (account, bytes) in stored { try FileIdentityStore.write(bytes, account: account, base: base) }
+            let manager = IdentityManager(base)
+            manager.defaults!.set(version, forKey: IdentityManager.fileStorageFlag)
+            manager.defaults!.set("RECOVERY-CERT", forKey: IdentityKey.certificate)
+            manager.defaults!.set("RECOVERY-KEY", forKey: IdentityKey.privateKey)
+            manager.defaults!.set("RECOVERY-UID", forKey: IdentityKey.uniqueID)
+            manager.defaults!.set("unrelated", forKey: "other-setting")
+            let beforeDefaults = NSDictionary(dictionary: manager.defaults!.values)
+            let directory = base.appendingPathComponent("Glimmer/Identity")
+            let beforeEntries = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+            try validationFailure(expectedFailure, label) {
+                if prewrite {
+                    try manager.writeIdentityToFileStore(.init(uniqueID: "REPLACEMENT-UID", certPEM: cert, keyPEM: key))
+                } else {
+                    _ = try manager.load()
+                }
+            }
+            try expect(manager.generations == 0 && manager.uidGenerations == 0 && manager.cached == nil,
+                       "local PEM refusal generated or cached replacement material: \(label)")
+            try expect(beforeDefaults.isEqual(NSDictionary(dictionary: manager.defaults!.values)),
+                       "local PEM refusal changed defaults or initialized flag: \(label)")
+            try expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == beforeEntries,
+                       "local PEM refusal changed storage entries: \(label)")
+            for (account, bytes) in stored {
+                try expect(try FileIdentityStore.read(account: account, base: base) == bytes,
+                           "local PEM refusal changed component bytes: \(label)")
+            }
+        }
+    }
 }
 try noKeygen("all refusal tests precede real keygen")
 let sshBase = try fresh("ssh-success"), generated = try SSHKeyManager.generate(in: sshBase)

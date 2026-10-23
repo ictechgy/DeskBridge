@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Actual MacHostChild + native helper, fresh inert /tmp processes only. No app UI/host."""
 from pathlib import Path
-import argparse, errno, fcntl, hashlib, json, os, signal, subprocess, tempfile, time
+import argparse, errno, fcntl, hashlib, json, os, signal, subprocess, sys, tempfile, time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts"))
+from build_snapshot import unchanged_supervisor_digest
 
 FIXTURE = r'''
 #include <errno.h>
@@ -183,6 +185,7 @@ def gone(pid):
 
 
 def check(supervisor):
+    tested_digest = hashlib.sha256(supervisor.read_bytes()).hexdigest()
     checks = 0
     known = set()
     with tempfile.TemporaryDirectory(prefix="knot-mac-host-lifetime-") as temporary:
@@ -290,7 +293,7 @@ def check(supervisor):
             "nativeSupervisor": True, "freshSyntheticOnly": True, "productionHostLaunched": False,
             "appAbruptDeath": True, "gracefulStop": True, "boundedStop": True,
             "restartDescendantCleanup": True, "writerNotInherited": True, "supervisorCrashCleanup": True,
-            "testedSupervisorSHA256": hashlib.sha256(supervisor.read_bytes()).hexdigest(),
+            "testedSupervisorSHA256": unchanged_supervisor_digest(supervisor, tested_digest),
             "pinnedRestartForkDenied": True, "forkVforkSpawnDenied": True,
             "normalThreadsAndFiles": True, "unrestrictedChildModeRefused": True,
             "wrapperAndProfileUnavailableRefused": True}

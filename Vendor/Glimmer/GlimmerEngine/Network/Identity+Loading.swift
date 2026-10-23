@@ -129,7 +129,7 @@ extension IdentityManager {
         if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
         guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
         else { throw IdentityStorageError.incompleteIdentity }
-        _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
+        try validateLocalIdentity(certPEM: certPEM, keyPEM: keyPEM)
         let uid: String
         if let stored = storedUID {
             uid = stored
@@ -149,13 +149,22 @@ extension IdentityManager {
     /// stuck via stat(2).
     func writeIdentityToFileStore(_ identity: Identity) throws {
         try FileIdentityStore.validateStorage(base: storageRoot())
-        _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
+        try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
         try FileIdentityStore.write(Data(identity.certPEM.utf8),
                                     account: Self.accountCert, base: storageRoot())
         try FileIdentityStore.write(Data(identity.keyPEM.utf8),
                                     account: Self.accountKey, base: storageRoot())
         try FileIdentityStore.write(Data(identity.uniqueID.utf8),
                                     account: Self.accountUID, base: storageRoot())
+    }
+
+    /// Invalid local PEM material needs local storage guidance, not host crypto settings.
+    private func validateLocalIdentity(certPEM: String, keyPEM: String) throws {
+        do {
+            _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
+        } catch StreamError.crypto {
+            throw IdentityStorageError.unsafeStorage
+        }
     }
 
     // MARK: UserDefaults plaintext cleanup

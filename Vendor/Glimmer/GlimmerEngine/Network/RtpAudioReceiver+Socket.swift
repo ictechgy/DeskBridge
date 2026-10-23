@@ -11,6 +11,18 @@ import Darwin
 
 extension RtpAudioReceiver {
 
+    /// A receive loop retains this receiver while blocked. Require the timeout
+    /// before publishing fd so cancellation cannot leave an unbounded read.
+    private static func configureReceiveTimeout(_ socket: Int32) throws {
+        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            let failure = errno
+            _ = close(socket) // Still local: fd ownership has not been published.
+            throw EnetError.socketFailure("audio receive timeout unavailable (errno \(failure))")
+        }
+    }
+
     func openSocket() throws {
         guard let (dest, destLen, family) = UdpPinger.makeSockaddr(for: host, port: audioPort) else {
             throw EnetError.socketFailure("could not build audio host address for \(host)")
@@ -38,8 +50,7 @@ extension RtpAudioReceiver {
         setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, socklen_t(MemoryLayout<Int32>.size))
         // 100ms recv timeout so the receive loop polls `interrupted` and exits
         // (UDP_RECV_POLL_TIMEOUT_MS in Limelight-internal.h).
-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        try Self.configureReceiveTimeout(sock)
 
         // Bind to a wildcard ephemeral local port - UNCONNECTED, so recvfrom
         // accepts RTP from any source port. The host learns our return port from

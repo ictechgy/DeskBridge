@@ -147,6 +147,14 @@ private struct ControlReplaySyntheticChecks {
             }
         }
         for command in peerCommands {
+            let flagged = try makePeer()
+            let beforeFlagged = SyntheticControlIO.shared.ackCount
+            flagged.onDatagram(commandDatagram(command, body: commandBody(command),
+                                               channel: Enet.peerChannelID, reliable: 0x1234))
+            try require(SyntheticControlIO.shared.ackCount == beforeFlagged + 1
+                        && SyntheticControlIO.shared.lastAck == [Enet.cmdAcknowledge, Enet.peerChannelID,
+                                                                0x12, 0x34, 0x12, 0x34, 0, 123],
+                        "peer-control ACK changed its peer channel, sequence or received time")
             let unflagged = try makePeer()
             let beforeAck = SyntheticControlIO.shared.ackCount
             unflagged.onDatagram(commandDatagram(command, body: commandBody(command),

@@ -173,7 +173,7 @@ final class DesktopModel: ObservableObject {
             case .unsafeStorage:
                 return CorePrivateStorageFailure.unsafeStorage.localizedDescription
             case .incompleteIdentity:
-                return "이 Mac의 연결 인증 파일이 없거나 일부가 누락되었습니다. 기존 파일을 자동으로 대체하지 않습니다. 원래 인증 파일을 백업에서 복원한 뒤 앱을 다시 여세요. 복원할 수 없다면 대상 PC의 연결 권한을 취소한 뒤 수동으로 새 연결을 설정하세요."
+                return "이 Mac의 연결 인증 파일이 없거나 일부가 누락되었습니다. 기존 파일을 보존하고 같은 백업의 인증 파일 전체를 복원한 뒤 다시 시도하세요. 백업이 없다면 이 버전에서는 연결 인증을 초기화할 수 없습니다. 대상 PC에서 이 Mac의 연결 권한을 취소한 뒤 설치 안내의 인증 파일 복구 항목을 확인하세요."
             default: break
             }
         }
@@ -261,6 +261,10 @@ final class DesktopModel: ObservableObject {
     }
 
     func connect() {
+        guard settingsReadable else {
+            errorMessage = storageReadFailure ?? CorePrivateStorageFailure.unsafeStorage.localizedDescription
+            return
+        }
         guard canVerifyCurrentPC else {
             errorMessage = "화면·파일 작업을 마친 뒤 PC를 다시 확인하세요. 파일 연결 중에는 같은 주소의 PC만 확인할 수 있습니다."
             return

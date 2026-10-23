@@ -1372,6 +1372,7 @@
     "GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift",
     "GlimmerEngine/Network/RtpAudioReceiver+Ping.swift",
     "GlimmerEngine/Network/RtpAudioReceiver+Receive.swift",
+    "GlimmerEngine/Network/RtpAudioReceiver+Socket.swift",
     "GlimmerEngine/Network/RtpAudioReceiver.swift",
     "GlimmerEngine/Network/RtspClient.swift",
     "GlimmerEngine/Network/VideoRtpReceiver.swift",

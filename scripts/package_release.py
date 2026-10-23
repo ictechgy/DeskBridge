@@ -3,7 +3,7 @@
 """Offline packaging. Only explicit release mode calls Apple's notarization service."""
 from pathlib import Path
 import argparse, datetime, gzip, hashlib, io, json, os, plistlib, re, shutil, subprocess, tarfile, tempfile, zipfile
-from build_snapshot import BuildSnapshotError, host_supervisor_snapshot, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
+from build_snapshot import BuildSnapshotError, host_supervisor_snapshot, source_snapshot, supervisor_package_record, tree_snapshot, validate_completed_build, validate_corresponding_source
 from windows_resources import NativePE, validate_bootstrap
 from windows_check_record import validate_windows_check_record
 from linux_check_record import validate_linux_check_record, validate_payload_sources
@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
             run("inspect-staged-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]), supervisor)
     except SystemDependencyError as error:
         raise SystemExit(str(error))
-    host_supervisor_snapshot(app)
+    packaged_supervisor = supervisor_package_record(completed["hostSupervisor"], host_supervisor_snapshot(app), args.mode == "release")
     run("verify-staged-app", ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     entitlements = run("inspect-staged-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(app)])
     if plistlib.loads(entitlements) != {"com.apple.security.device.camera": True}:
@@ -195,7 +195,7 @@ artifacts = sorted(generated)
 hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in artifacts}
 (output / "SHA256SUMS").write_text("".join(digest + "  " + filename + "\n" for filename, digest in sorted(hashes.items())))
 manifest = {"head": head, "version": version, "mode": args.mode, "output": str(output.relative_to(ROOT)), "configuration": completed["configuration"],
-            "checks": checks, "sha256": hashes,
+            "checks": checks, "sha256": hashes, "macHostSupervisor": packaged_supervisor,
             "macNotarized": args.mode == "release", "linuxHostBuiltHere": bool(args.linux_package), "linuxDesktopRuntimeTested": False, "windowsExeBuiltHere": bool(args.windows_launcher),
             "windowsInstallerBuiltHere": False, "windowsHelperRuntimeTested": False,
             "windowsCompiler": "Pinned Zig native bootstrap + explicit Roslyn / Framework 4.8 references" if args.windows_launcher else "GitHub Actions Windows job / pinned Inno Setup", "guiLaunched": False}

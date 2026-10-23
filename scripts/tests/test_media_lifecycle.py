@@ -570,3 +570,206 @@ with tempfile.TemporaryDirectory(prefix="knot-media-lifecycle-", dir="/tmp") as 
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                                  for path in source_paths},
                       "scope": "offline source-extracted synthetic regression, not device acceptance"}))
+
+
+# Separate source-extracted audio startup fixture keeps all 74 receive/drain
+# checks above unchanged. Only syscalls, ping scheduling, codec work and logging
+# are inert; openSocket, timeout setup and both backend audio consumers are real.
+audio_socket = (ENGINE / "Network/RtpAudioReceiver+Socket.swift").read_text()
+assert audio_socket.index("try Self.configureReceiveTimeout(sock)") < audio_socket.index("fd = sock")
+assert "config: config, host: host, events: events" in block(pipeline, "rtsp.onAudioPortNegotiated =")
+socket_fixture = r'''
+import Foundation
+import Darwin
+
+final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func use<T>(_ body: (inout Value) -> T) -> T { lock.lock(); defer { lock.unlock() }; return body(&value) }
+}
+struct Ledger {
+    var nextSocket: Int32 = 703
+    var timeoutFails = false
+    var binds = [Int32](), closes = [Int32](), timeouts = [Int32](), timestamps = [Int32]()
+    var family = AF_INET
+    var onTimeout: (@Sendable () -> Void)?
+}
+let ledger = Locked(Ledger())
+func socket(_ family: Int32, _ kind: Int32, _ proto: Int32) -> Int32 {
+    precondition(kind == SOCK_DGRAM && proto == 0)
+    return ledger.use { value in defer { value.nextSocket += 1 }; return value.nextSocket }
+}
+@discardableResult func setsockopt(_ socket: Int32, _ level: Int32, _ option: Int32, _ bytes: UnsafeRawPointer?, _ length: socklen_t) -> Int32 {
+    precondition(level == SOL_SOCKET)
+    guard option == SO_RCVTIMEO else {
+        precondition(option == SO_RCVBUF || option == SO_NET_SERVICE_TYPE); return 0
+    }
+    precondition(length == MemoryLayout<timeval>.size && bytes!.load(as: timeval.self).tv_sec == 0
+                 && bytes!.load(as: timeval.self).tv_usec == 100_000)
+    let state = ledger.use { value -> (Bool, (@Sendable () -> Void)?) in
+        value.timeouts.append(socket); return (value.timeoutFails, value.onTimeout)
+    }
+    state.1?()
+    if state.0 { errno = EIO; return -1 }
+    return 0
+}
+@discardableResult func close(_ socket: Int32) -> Int32 { ledger.use { $0.closes.append(socket) }; return 0 }
+func bind(_ socket: Int32, _ address: UnsafePointer<sockaddr>?, _ length: socklen_t) -> Int32 {
+    ledger.use { $0.binds.append(socket) }; return 0
+}
+enum SocketTimestamp { static func enable(on socket: Int32) -> Bool { ledger.use { $0.timestamps.append(socket) }; return true } }
+enum NWEndpoint { typealias Host = String }
+enum EnetError: Error { case socketFailure(String) }
+enum UdpPinger {
+    static func makeSockaddr(for host: String, port: UInt16) -> (sockaddr_storage, socklen_t, Int32)? {
+        (sockaddr_storage(), socklen_t(MemoryLayout<sockaddr_storage>.size), ledger.use { $0.family })
+    }
+}
+enum Privacy { case `private`, `public` }
+struct Message: ExpressibleByStringInterpolation {
+    init(stringLiteral: String) {}
+    init(stringInterpolation: StringInterpolation) {}
+    static func + (_ lhs: Message, _ rhs: Message) -> Message { Message(stringLiteral: "") }
+    struct StringInterpolation: StringInterpolationProtocol {
+        init(literalCapacity: Int, interpolationCount: Int) {}
+        mutating func appendLiteral(_ value: String) {}
+        mutating func appendInterpolation<T>(_ value: T, privacy: Privacy = .public) {}
+    }
+}
+enum Diag {
+    static func info(_ message: Message, _ category: String) {}
+    static func warn(_ message: Message, _ category: String) {}
+    static func notice(_ message: Message, _ category: String) {}
+    static func error(_ message: Message, _ category: String) {}
+}
+struct OpusConfig {}
+struct RtspHandshakeResult {}
+struct BackendServerInfo {}
+struct BackendStreamConfig {
+    let audioConfiguration: Int32 = 0
+    let remoteInputAesKey = [UInt8](), remoteInputAesIv = [UInt8]()
+}
+struct TransportPlatform { let configureAudioThread: @Sendable () -> Void = {} }
+final class Sink: @unchecked Sendable {}
+final class Counter: @unchecked Sendable {
+    let count = Locked(0)
+    func increment() { count.use { $0 += 1 } }
+}
+final class TelemetryCounters: Sendable {
+    static let shared = TelemetryCounters()
+    let audioReceiveFailedTotal = Counter()
+}
+final class RtpAudioReceiver: @unchecked Sendable {
+    static let cat = "inert.audio", maxPacketSize = 1400
+    let host: String, audioPort: UInt16
+    var destAddr = sockaddr_storage(), destAddrLen: socklen_t = 0
+    var fd: Int32 = -1
+    var onReceiveFailed: (@Sendable (Int32) -> Void)?
+    var receiveStarts = 0
+    init(host: String = "inert", audioPort: UInt16 = 1, pingPayload: [UInt8] = [], audioPacketDuration: Int = 5,
+         opusConfig: OpusConfig = OpusConfig(), audioConfig: Int32 = 0, audioEncryption: Bool = false,
+         aesKey: [UInt8] = [], aesIvId: [UInt8] = [], sink: Sink? = nil, platform: TransportPlatform = TransportPlatform(),
+         configureThread: @escaping @Sendable () -> Void = {}) { self.host = host; self.audioPort = audioPort }
+    func startPing() throws { try openSocket() } // Ping scheduling deliberately inert.
+    func startReceive() throws { receiveStarts += 1 } // Codec and receive loop covered separately.
+    __SOCKET_METHODS__
+}
+protocol ConnectionEvents: Sendable { func audioFailed(_ detail: String) }
+final class Events: ConnectionEvents, @unchecked Sendable {
+    let failures = Locked<[String]>([])
+    func audioFailed(_ detail: String) { failures.use { $0.append(detail) } }
+}
+final class NativeBackend: @unchecked Sendable {
+    static let logCategory = "inert.backend"
+    let stateLock = NSLock(), platform = TransportPlatform()
+    var interrupted = false
+    var audioReceiver: RtpAudioReceiver?, audioSink: Sink?
+    func withState<T>(_ body: () -> T) -> T { stateLock.lock(); defer { stateLock.unlock() }; return body() }
+    func adoptWhileConnecting(_ body: () -> Void) -> Bool { withState { guard !interrupted else { return false }; body(); return true } }
+    __PIPELINE_METHODS__
+}
+@main struct Checks {
+    static func main() throws {
+        var checks = 0
+        func expect(_ value: @autoclosure () -> Bool, _ name: String) throws {
+            guard value() else { throw NSError(domain: name, code: checks) }; checks += 1
+        }
+        ledger.use { $0.timeoutFails = true }
+        let failed = RtpAudioReceiver()
+        var refused = false
+        do { try failed.openSocket() } catch EnetError.socketFailure { refused = true }
+        try expect(refused && failed.fd == -1, "timeout failure refuses fd publication")
+        try expect(ledger.use { $0.closes } == [703], "only unpublished audio socket closes")
+        try expect(ledger.use { $0.binds.isEmpty && $0.timestamps.isEmpty && $0.timeouts == [703] }, "timeout failure precedes bind and timestamp enable")
+
+        ledger.use { $0.timeoutFails = false }
+        let valid = RtpAudioReceiver()
+        try valid.openSocket()
+        try expect(valid.fd == 704 && ledger.use { $0.binds } == [704], "successful audio timeout allows normal fd publication")
+        try expect(ledger.use { $0.closes } == [703], "successful audio socket remains receiver owned")
+        ledger.use { $0.family = AF_INET6 }
+        let valid6 = RtpAudioReceiver()
+        try valid6.openSocket()
+        try expect(valid6.fd == 705 && ledger.use { $0.binds.last } == 705, "IPv6 bind also follows mandatory timeout")
+
+        func start(_ backend: NativeBackend, _ events: Events) {
+            backend.startAudioPing(audioPort: 1, pingPayload: [], audioEncryption: false,
+                                   opusConfig: OpusConfig(), config: BackendStreamConfig(), host: "inert", events: events)
+            backend.startAudioReceive(handshake: RtspHandshakeResult(), config: BackendStreamConfig(),
+                                      server: BackendServerInfo(), host: "inert", events: events)
+        }
+        ledger.use { $0.timeoutFails = true }
+        let backend = NativeBackend(), events = Events()
+        backend.audioSink = Sink()
+        start(backend, events)
+        try expect(backend.audioReceiver == nil, "failed early ping receiver is released")
+        try expect(events.failures.use { $0 } == ["audio transport initialization failed"], "one fixed nonfatal audio failure reaches event sink")
+        try expect(TelemetryCounters.shared.audioReceiveFailedTotal.count.use { $0 } == 1, "failed early transport increments audio failure counter once")
+
+        let disabled = NativeBackend(), disabledEvents = Events()
+        start(disabled, disabledEvents)
+        try expect(disabled.audioReceiver == nil && disabledEvents.failures.use { $0.isEmpty }, "deliberate no-sink configuration remains silent")
+
+        ledger.use { $0.timeoutFails = false }
+        let live = NativeBackend(), liveEvents = Events()
+        live.audioSink = Sink()
+        start(live, liveEvents)
+        try expect(live.audioReceiver?.receiveStarts == 1 && liveEvents.failures.use { $0.isEmpty }, "successful ping reuses its receiver without a failure event")
+
+        let stopped = NativeBackend(), stoppedEvents = Events()
+        stopped.audioSink = Sink()
+        ledger.use { $0.timeoutFails = true; $0.onTimeout = { stopped.withState { stopped.interrupted = true } } }
+        start(stopped, stoppedEvents)
+        ledger.use { $0.onTimeout = nil }
+        try expect(stopped.audioReceiver == nil && stoppedEvents.failures.use { $0.isEmpty }, "concurrent stop suppresses stale startup failure event")
+        try expect(TelemetryCounters.shared.audioReceiveFailedTotal.count.use { $0 } == 1, "no-sink success and cancellation do not count failures")
+        let replaced = NativeBackend(), replacedEvents = Events(), replacement = RtpAudioReceiver()
+        replaced.audioSink = Sink()
+        ledger.use { $0.onTimeout = { replaced.withState { replaced.audioReceiver = replacement } } }
+        start(replaced, replacedEvents)
+        ledger.use { $0.onTimeout = nil }
+        try expect(replaced.audioReceiver === replacement && replacedEvents.failures.use { $0.isEmpty }, "obsolete startup failure cannot clear a replacement receiver or emit its error")
+        print("{\"status\":\"passed\",\"audioSocketStartupChecks\":\(checks),\"scope\":\"exact production audio socket and backend startup methods; inert syscalls/ping/codec/logging, no network or device\"}")
+    }
+}
+'''
+socket_fixture = socket_fixture.replace("__SOCKET_METHODS__", "\n".join(
+    block(audio_socket, signature).replace("private static func", "static func", 1)
+    for signature in ("func openSocket()", "private static func configureReceiveTimeout(")))
+socket_fixture = socket_fixture.replace("__PIPELINE_METHODS__", "\n".join(
+    block(pipeline, signature) for signature in ("func startAudioPing(", "func startAudioReceive(")))
+with tempfile.TemporaryDirectory(prefix="knot-audio-socket-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"
+    source.write_text(socket_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O",
+            "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"audioSocketFixtureSHA256": hashlib.sha256(socket_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in (ENGINE / "Network/RtpAudioReceiver+Socket.swift",
+                                                              ENGINE / "Session/NativeBackend+Pipeline.swift")}}))

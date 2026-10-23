@@ -278,7 +278,7 @@ extension NativeBackend {
     /// startAudioReceive() later brings up the SAME receiver's recv side, and run()'s catch tears it down.
     func startAudioPing(
         audioPort: UInt16, pingPayload: [UInt8], audioEncryption: Bool, opusConfig: OpusConfig,
-        config: BackendStreamConfig, host: NWEndpoint.Host
+        config: BackendStreamConfig, host: NWEndpoint.Host, events: any ConnectionEvents
     ) {
         guard let sink = withState({ audioSink }) else {
             Diag.error("native backend: no audio sink injected; audio receive disabled",
@@ -301,7 +301,15 @@ extension NativeBackend {
             try receiver.startPing()
         } catch {
             Diag.error("native backend: audio ping start failed: \(error, privacy: .private)", Self.logCategory)
-            withState { audioReceiver = nil }
+            let failedCurrentReceiver = withState {
+                guard audioReceiver === receiver else { return false }
+                audioReceiver = nil
+                return !interrupted
+            }
+            if failedCurrentReceiver {
+                TelemetryCounters.shared.audioReceiveFailedTotal.increment()
+                events.audioFailed("audio transport initialization failed")
+            }
         }
     }
 
@@ -379,7 +387,7 @@ extension NativeBackend {
         rtsp.onAudioPortNegotiated = { [weak self] audioPort, pingPayload, audioEncryption, opus in
             self?.startAudioPing(audioPort: audioPort, pingPayload: pingPayload,
                                  audioEncryption: audioEncryption, opusConfig: opus,
-                                 config: config, host: host)
+                                 config: config, host: host, events: events)
         }
         guard adoptWhileConnecting({ rtspClient = rtsp }) else {
             events.stageFailed("RTSP handshake", code: -4)

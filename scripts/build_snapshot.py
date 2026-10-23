@@ -7,13 +7,32 @@ import hashlib, io, json, stat, struct, subprocess, tarfile
 class BuildSnapshotError(ValueError):
     pass
 
-REQUIRED_CHECK_STAGES = {"synthetic-checks", "synthetic-model-checks", "build-contract-checks",
+REQUIRED_CHECK_STAGES = {"synthetic-checks", "synthetic-model-checks", "build-contract-checks", "system-dependency-policy-checks",
                          "input-batching-checks", "control-hardening-checks", "desktop-input-backpressure-checks",
                          "video-frame-lifecycle-checks", "media-receive-lifecycle-checks", "audio-notice-power-checks",
                          "rtsp-replay-checks", "inspect-app-entitlements", "inspect-dependencies",
                          "compile-host-supervisor", "sign-host-supervisor", "verify-host-supervisor",
                          "inspect-host-supervisor-entitlements", "inspect-host-supervisor-dependencies",
                          "mac-host-lifetime-checks", "private-storage-checks"}
+
+
+def unchanged_supervisor_digest(supervisor, expected):
+    if hashlib.sha256(Path(supervisor).read_bytes()).hexdigest() != expected:
+        raise BuildSnapshotError("Supervisor changed during lifetime checks")
+    return expected
+
+
+def supervisor_package_record(tested, packaged, release_resigned):
+    tested_contract = {key: value for key, value in tested.items() if key != "sha256"}
+    packaged_contract = {key: value for key, value in packaged.items() if key != "sha256"}
+    if type(release_resigned) is not bool or packaged_contract != tested_contract:
+        raise BuildSnapshotError("Packaged supervisor contract differs from its tested build")
+    if not release_resigned and tested["sha256"] != packaged["sha256"]:
+        raise BuildSnapshotError("Preview supervisor differs from its tested build")
+    return {"testedSHA256": tested["sha256"], "packagedSHA256": packaged["sha256"],
+            "releaseResigned": release_resigned,
+            "transformation": "Developer ID codesign before package signature validation" if release_resigned else "none",
+            "lifetimeProofScope": "tested build before release re-signing"}
 
 
 def host_supervisor_snapshot(app):

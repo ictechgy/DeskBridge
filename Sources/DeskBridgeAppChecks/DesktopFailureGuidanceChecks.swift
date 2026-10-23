@@ -18,7 +18,7 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
         (ConnectionInvitation.Failure.invalid, "새 연결 QR"),
         (CorePrivateStorageFailure.unsafeStorage, "저장 폴더"),
         (IdentityStorageError.unsafeStorage, "저장 폴더"),
-        (IdentityStorageError.incompleteIdentity, "백업에서 복원"),
+        (IdentityStorageError.incompleteIdentity, "인증 파일 전체를 복원"),
         (StreamSecurityPolicy.Failure.plaintextSignalling, "필수 화면 암호화"),
         (StreamSecurityPolicy.Failure.missingEncryption(7), "필수 화면 암호화"),
         (PairingFailure.invalidAddress, "IPv4 주소"),
@@ -64,6 +64,9 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
     let unknown = DesktopModel.failureMessage(NSError(domain: raw, code: -1, userInfo: [NSLocalizedDescriptionKey: raw]))
     try expect(unknown.contains("작업을 완료하지 못했습니다") && !unknown.contains(raw),
                "unknown framework errors must use fixed Korean guidance")
+    let recovery = DesktopModel.failureMessage(IdentityStorageError.incompleteIdentity)
+    try expect(recovery.contains("초기화할 수 없습니다") && !recovery.contains("수동으로 새 연결"),
+               "missing identity offered an unsupported reset path")
     let files = FilesModel(desktop: model)
     files.perform { throw NSError(domain: raw, code: -1, userInfo: [NSLocalizedDescriptionKey: raw]) }
     for _ in 0..<1000 {
@@ -87,6 +90,9 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
     try expect(deniedModel.errorMessage?.contains("접근 권한") == true && deniedModel.errorMessage?.contains("설정 파일을 복구") == false,
                "startup permission refusal lost typed storage guidance")
     let startupMessage = deniedModel.errorMessage
+    deniedModel.connect()
+    try expect(deniedModel.errorMessage == startupMessage && !deniedModel.busy,
+               "PC verification replaced startup storage refusal with unrelated busy guidance")
     do { try deniedModel.assertStorageReady(); throw ModelCheckFailure(message: "unsafe startup allowed operations") }
     catch let error as AppFailure { try expect(error.message == startupMessage, "later operations changed the startup recovery guidance") }
     let deniedFiles = FilesModel(desktop: deniedModel)

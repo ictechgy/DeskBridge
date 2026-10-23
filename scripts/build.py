@@ -61,6 +61,7 @@ def compile_module(name, folder, package):
 run("verify-vendor", ["/usr/bin/python3", str(ROOT / "scripts/verify_vendor.py")])
 if not args.skip_checks:
     run("build-contract-checks", [sys.executable, str(ROOT / "scripts/tests/test_build_snapshot.py")])
+    run("system-dependency-policy-checks", [sys.executable, str(ROOT / "scripts/tests/test_system_dependencies.py")])
     run("input-batching-checks", [sys.executable, str(ROOT / "scripts/tests/test_input_batching.py")])
     run("control-hardening-checks", [sys.executable, str(ROOT / "scripts/tests/test_control_hardening.py")])
     run("desktop-input-backpressure-checks", [sys.executable, str(ROOT / "scripts/tests/test_desktop_input_backpressure.py")])

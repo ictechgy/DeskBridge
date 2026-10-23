@@ -59,6 +59,8 @@ Generated SSH keys and the upstream streaming identity are owner-only local file
 
 Generated SSH keys are created only after validating the app-owned base and a fresh private generation directory. A folder with inherited ACL entries is refused before key generation; the app does not remove ACLs from an existing directory to make it usable. Private streaming PEM files are limited to 64 KiB each and client IDs to 4 KiB. An initialized streaming identity requires all three persisted components, even if every file later disappears; it is never silently replaced. An uninitialized legacy PEM pair may complete migration with a generated client ID. Keep existing credentials when investigating a storage refusal; verify the app folder's owner, permissions and sharing settings before retrying.
 
+If identity material is missing or corrupt, restore the complete matching identity from an original private backup. This preview has no client-identity reset or assisted repair implementation; deleting files or reinstalling the app does not clear its initialized state. Without a usable original backup, revoke this client's pairing on the host and seek project recovery guidance rather than deleting more state. Do not share private keys or settings in a bug report. See [installation and recovery guidance](INSTALLATION.md).
+
 ## Validation still required
 
 Real Windows11 Home Sunshine encrypted signalling/media; revocation during an active stream; Windows OpenSSH chroot/ACL/fresh-install/rollback; focus/IME behavior; monitor input/EDID; audio output changes; cancellation across actual network loss; reproducible public release signing and notarization. No agent attempts a protected local service or accesses existing user content to test these.

@@ -5,9 +5,38 @@ import copy, json, os, shlex, struct, subprocess, sys, tempfile, unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, host_supervisor_snapshot, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
+from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, host_supervisor_snapshot, source_snapshot, supervisor_package_record, tree_snapshot, unchanged_supervisor_digest, validate_completed_build, validate_corresponding_source
 from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
 from test_windows_launcher import run_headless_checks
+
+
+class SupervisorDigestTests(unittest.TestCase):
+    def test_package_records_tested_and_resigned_hashes_separately(self):
+        tested = {"path": "Contents/Helpers/KnotHostSupervisor", "architecture": "arm64", "type": "MH_EXECUTE", "mode": 0o755, "sha256": "a" * 64}
+        preview = supervisor_package_record(tested, dict(tested), False)
+        self.assertEqual((preview["testedSHA256"], preview["packagedSHA256"], preview["releaseResigned"], preview["transformation"]),
+                         ("a" * 64, "a" * 64, False, "none"))
+        signed = {**tested, "sha256": "b" * 64}
+        release = supervisor_package_record(tested, signed, True)
+        self.assertEqual((release["testedSHA256"], release["packagedSHA256"], release["releaseResigned"]),
+                         ("a" * 64, "b" * 64, True))
+        self.assertIn("codesign", release["transformation"])
+        self.assertIn("before release re-signing", release["lifetimeProofScope"])
+        with self.assertRaises(BuildSnapshotError):
+            supervisor_package_record(tested, signed, False)
+        with self.assertRaises(BuildSnapshotError):
+            supervisor_package_record(tested, {**signed, "mode": 0o777}, True)
+
+    def test_lifetime_digest_refuses_changed_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="knot-supervisor-digest-") as temporary:
+            path = Path(temporary) / "synthetic-helper"
+            path.write_bytes(b"synthetic initial bytes")
+            import hashlib
+            initial = hashlib.sha256(path.read_bytes()).hexdigest()
+            self.assertEqual(unchanged_supervisor_digest(path, initial), initial)
+            path.write_bytes(b"synthetic changed bytes")
+            with self.assertRaisesRegex(BuildSnapshotError, "changed during"):
+                unchanged_supervisor_digest(path, initial)
 
 
 class WindowsPayloadCheckRecordTests(unittest.TestCase):

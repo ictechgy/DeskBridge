@@ -127,7 +127,8 @@ $install = Add-Button 'Sunshine 설치' {
         $status.Text=$result.Text
         if ($result.State -cne 'Installed') { return }
         $install.Text='Sunshine 다시 설치'
-        Start-Process 'https://localhost:47990'
+        try { Start-Process 'https://localhost:47990' }
+        catch { $status.Text += [Environment]::NewLine+'Sunshine 설치는 완료했지만 설정 브라우저를 열지 못했습니다. 브라우저에서 https://localhost:47990 을 직접 여세요.' }
     } catch [OperationCanceledException] { $status.Text='Sunshine 다운로드를 취소했습니다. 필요할 때 다시 시작하세요.' }
     catch { Show-Failure $_ }
     finally {
@@ -149,7 +150,10 @@ $install = Add-Button 'Sunshine 설치' {
 $downloadCancel=Add-Button '다운로드 취소' { $script:cancelDownload=$true }; $downloadCancel.Visible=$false
 $null = Add-Text '2   Sunshine 초기 설정 · 처음 한 번' 30
 $null = Add-Text "설정 창에서 계정을 만들고, Configuration → Network에서 LAN/WAN 암호화를 모두 Mandatory로 저장하세요. Desktop 앱도 확인하세요.`r`n이 계정은 Windows의 Sunshine 설정용입니다. Mac에서 로그인하지 않습니다." 66
-$open = Add-Button 'Sunshine 설정 열기' { try { Start-Process 'https://localhost:47990' } catch { Show-Failure $_ } }
+$open = Add-Button 'Sunshine 설정 열기' {
+    try { Start-Process 'https://localhost:47990' }
+    catch { $status.Text='Sunshine 설정 브라우저를 열지 못했습니다. 브라우저에서 https://localhost:47990 을 직접 여세요.' }
+}
 $headless = Add-Button '모니터 없이 사용… (선택)' {
     Set-Busy $true
     try { & (Join-Path $PSScriptRoot 'Show-HeadlessSetup.ps1') -Owner $form -LauncherPath $LauncherPath }

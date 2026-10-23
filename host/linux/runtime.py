@@ -356,36 +356,45 @@ sys.stdout.buffer.write(data)
         first = [row for row in rows if row[0] == rows[0][0]]
         other = [row for row in rows if row[0] != rows[0][0]]
         ordered = [row for pair in itertools.zip_longest(first, other) for row in pair if row is not None]
-        for index, (family, kind, protocol, address) in enumerate(ordered):
-            self._remaining(expires)
-            sock = None
-            try:
-                sock = socket.socket(family, kind, protocol)
-                self.attach(sock)
-                sock.setblocking(False)
-                if source_address: sock.bind(source_address)
+        deferred = []
+        # Retry locally capped routes once if later routes reject promptly. This
+        # remains TCP setup only and shares the original DNS/TCP/TLS deadline.
+        for candidates, retrying in ((ordered, False), (deferred, True)):
+            for index, (family, kind, protocol, address) in enumerate(candidates):
+                self._remaining(expires)
+                sock = None
                 try:
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                except OSError as error:
-                    if error.errno != errno.ENOPROTOOPT: raise
-                status = sock.connect_ex(tuple(address))
-                if status not in (0, errno.EISCONN):
-                    if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
-                        raise OSError(status, os.strerror(status))
-                    # Reserve fallback time only while another candidate remains.
-                    # A slow final/only route retains the shared connection budget.
-                    attempt_expires = expires if index == len(ordered) - 1 else min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
-                    self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
-                    status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    if status: raise OSError(status, os.strerror(status))
-                self._remaining(expires)
-                return sock
-            except OSError:
-                if sock is not None: sock.close()
-                self._remaining(expires)
-            except BaseException:
-                if sock is not None: sock.close()
-                raise
+                    sock = socket.socket(family, kind, protocol)
+                    self.attach(sock)
+                    sock.setblocking(False)
+                    if source_address: sock.bind(source_address)
+                    try:
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    except OSError as error:
+                        if error.errno != errno.ENOPROTOOPT: raise
+                    status = sock.connect_ex(tuple(address))
+                    if status not in (0, errno.EISCONN):
+                        if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
+                            raise OSError(status, os.strerror(status))
+                        # Reserve fallback time only while another candidate remains.
+                        # A slow final/only route retains the shared connection budget.
+                        attempt_expires = expires if index == len(candidates) - 1 else min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
+                        try:
+                            self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
+                        except TimeoutError:
+                            if not retrying and attempt_expires < min(expires, self.deadline):
+                                deferred.append((family, kind, protocol, address))
+                            raise
+                        status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        if status: raise OSError(status, os.strerror(status))
+                    self._remaining(expires)
+                    return sock
+                except OSError:
+                    if sock is not None: sock.close()
+                    self._remaining(expires)
+                except BaseException:
+                    if sock is not None: sock.close()
+                    raise
         raise Failure('download')
 
     def connect(self, host, port, context, timeout, source_address=None):

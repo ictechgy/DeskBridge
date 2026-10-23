@@ -537,18 +537,20 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
 +            else { throw IdentityStorageError.unsafeStorage }
 +            return value
-@@ -115,5 +126,6 @@
+@@ -115,6 +126,7 @@
 -        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
 -              let keyPEM = String(data: keyData, encoding: .utf8),
 -              !keyPEM.isEmpty else {
 -            return nil
 -        }
+-        _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
 +        let certificatePEM = try text(certificate)
 +        let privateKeyPEM = try text(privateKey)
 +        let storedUID = try text(uniqueID)?.trimmingCharacters(in: .whitespacesAndNewlines)
 +        if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
 +        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
 +        else { throw IdentityStorageError.incompleteIdentity }
++        try validateLocalIdentity(certPEM: certPEM, keyPEM: keyPEM)
 @@ -122,4 +134 @@
 -        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
 -           let stored = String(data: uidData, encoding: .utf8)?
@@ -559,8 +561,20 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 -            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
 +            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
 +            // Complete an unpublished legacy migration without replacing its valid PEM pair.
-@@ -140,0 +151 @@
+@@ -141 +151,2 @@
+-        _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
 +        try FileIdentityStore.validateStorage(base: storageRoot())
++        try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
+@@ -147,0 +159,9 @@
++    }
++
++    /// Invalid local PEM material needs local storage guidance, not host crypto settings.
++    private func validateLocalIdentity(certPEM: String, keyPEM: String) throws {
++        do {
++            _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
++        } catch StreamError.crypto {
++            throw IdentityStorageError.unsafeStorage
++        }
 diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identity.swift
 --- a/GlimmerEngine/Network/Identity.swift
 +++ b/GlimmerEngine/Network/Identity.swift
@@ -1108,6 +1122,26 @@ diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Receive.swift b/GlimmerEngin
 +        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
 +            guard let self, !self.interrupted.isSet else { return }
 +            callback?(error)
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift b/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
+@@ -12,0 +13,12 @@
++
++    /// A receive loop retains this receiver while blocked. Require the timeout
++    /// before publishing fd so cancellation cannot leave an unbounded read.
++    private static func configureReceiveTimeout(_ socket: Int32) throws {
++        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
++        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
++                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
++            let failure = errno
++            _ = close(socket) // Still local: fd ownership has not been published.
++            throw EnetError.socketFailure("audio receive timeout unavailable (errno \(failure))")
++        }
++    }
+@@ -41,2 +53 @@
+-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
+-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
++        try Self.configureReceiveTimeout(sock)
 diff --git a/GlimmerEngine/Network/RtpAudioReceiver.swift b/GlimmerEngine/Network/RtpAudioReceiver.swift
 --- a/GlimmerEngine/Network/RtpAudioReceiver.swift
 +++ b/GlimmerEngine/Network/RtpAudioReceiver.swift
@@ -1432,13 +1466,30 @@ diff --git a/GlimmerEngine/Session/NativeBackend+Pipeline.swift b/GlimmerEngine/
 @@ -156 +160 @@
 -            self?.stopConnection()
 +            self.stopConnection()
-@@ -317,0 +322,6 @@
+@@ -277 +281 @@
+-        config: BackendStreamConfig, host: NWEndpoint.Host
++        config: BackendStreamConfig, host: NWEndpoint.Host, events: any ConnectionEvents
+@@ -300 +304,9 @@
+-            withState { audioReceiver = nil }
++            let failedCurrentReceiver = withState {
++                guard audioReceiver === receiver else { return false }
++                audioReceiver = nil
++                return !interrupted
++            }
++            if failedCurrentReceiver {
++                TelemetryCounters.shared.audioReceiveFailedTotal.increment()
++                events.audioFailed("audio transport initialization failed")
++            }
+@@ -316,0 +329,6 @@
++        }
 +        receiver.onReceiveFailed = { [weak self, weak receiver] error in
 +            guard let self, let receiver,
 +                  self.withState({ !interrupted && audioReceiver === receiver }) else { return }
 +            TelemetryCounters.shared.audioReceiveFailedTotal.increment()
 +            events.audioFailed("audio receive failed (errno \(error))")
-+        }
+@@ -372 +390 @@
+-                                 config: config, host: host)
++                                 config: config, host: host, events: events)
 diff --git a/GlimmerEngine/Session/NativeBackend.swift b/GlimmerEngine/Session/NativeBackend.swift
 --- a/GlimmerEngine/Session/NativeBackend.swift
 +++ b/GlimmerEngine/Session/NativeBackend.swift
