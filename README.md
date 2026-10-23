@@ -32,6 +32,8 @@ In each row, the computer on the left controls the computer on the right.
 - **Linux:** host only. No Linux client, Wayland, headless or pre-login desktop support.
 - Signing in, unlocking, waking from sleep and using virtual monitors are not guaranteed. The user must be logged in on the shared computer.
 
+Windows has an optional **모니터 없이 사용** (use without a monitor) setup panel. Automatic virtual-display installation is currently blocked pending the third-party driver security review; it is not a ready-to-use headless feature. See [Windows headless status and setup](docs/HEADLESS_WINDOWS.md).
+
 ## Features
 
 - **Full-screen Mac Spaces:** open a remote desktop and switch between macOS workspaces. Control+↑/←/→ stays local by default.

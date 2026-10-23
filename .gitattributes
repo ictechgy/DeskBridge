@@ -1,2 +1,4 @@
 # Preserve exact upstream source/license bytes across Windows checkouts.
 /Vendor/** -text
+# Byte-pinned virtual display configuration must match on every checkout platform.
+host/windows/Knot-vdd_settings.xml text eol=lf

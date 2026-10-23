@@ -144,6 +144,25 @@ jobs:
         run: |
           python -m unittest discover -s scripts/tests -p test_windows_build_provenance.py
           if ($LASTEXITCODE -ne 0) { throw 'Runtime notice provenance checks failed' }
+      - name: Validate headless setup with inert Windows PowerShell fixtures
+        shell: powershell
+        run: |
+          .\host\windows\tests\Test-HeadlessSetup.ps1
+          .\host\windows\tests\Test-HeadlessNative.ps1
+          .\host\windows\tests\Test-HeadlessStatus.ps1
+      - name: Validate headless setup with inert PowerShell 7 fixtures
+        shell: pwsh
+        run: |
+          .\host\windows\tests\Test-HeadlessSetup.ps1
+          .\host\windows\tests\Test-HeadlessStatus.ps1
+      - name: Verify official virtual display package without installing it
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pin = Get-Content -LiteralPath .\host\windows\VirtualDisplayDependency.json -Raw | ConvertFrom-Json
+          $archive = Join-Path $env:RUNNER_TEMP 'knot-virtual-display.zip'
+          Invoke-WebRequest -UseBasicParsing -Uri $pin.url -OutFile $archive
+          .\host\windows\tests\Test-VirtualDisplayArtifact.ps1 -Archive $archive
       - name: Validate pure firewall policy in Windows PowerShell
         shell: powershell
         run: .\host\windows\tests\Test-FirewallPolicy.ps1

@@ -95,7 +95,7 @@ info = {
     "CFBundleExecutable": "DeskBridge", "CFBundleIdentifier": "org.deskbridge.app",
     "CFBundleName": "Knot", "CFBundleDisplayName": "Knot",
     "CFBundleIconFile": "AppIcon",
-    "CFBundleVersion": "16", "CFBundleShortVersionString": (ROOT / "VERSION").read_text().strip().split("-")[0],
+    "CFBundleVersion": "17", "CFBundleShortVersionString": (ROOT / "VERSION").read_text().strip().split("-")[0],
     "DeskBridgeVersion": (ROOT / "VERSION").read_text().strip(),
     "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "26.0",
     "NSHighResolutionCapable": True, "NSPrincipalClass": "NSApplication",

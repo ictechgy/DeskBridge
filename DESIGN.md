@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Status: Active
-- Last refreshed: 2026-10-22
+- Last refreshed: 2026-10-23
 - Primary product surfaces: native macOS host connection, fullscreen desktop, SFTP file browser, Mac sharing setup, Windows sharing/client role chooser, drag-to-Applications Mac package.
 - Evidence reviewed: conversation requirements; pinned GlimmerEngine source; .omx/plans/deskbridge-v0.1.md; user-approved Concept A (Quiet Sidebar), selected 2026-10-19.
 - Approved visual references: ../design-concepts/previews/a-{desktop,files,setup}-window.png in the local deliverable; immutable copies under .omx/artifacts/visual-ralph/quiet-sidebar. Reproduce native synthetic snapshots with scripts/render_visual_fixture.py. No Local Media UI or existing user settings inspected.
@@ -131,3 +131,12 @@ Windows 설정·QR 창은 DPI에 맞춰 확대되고 현재 작업 영역 안으
 - Windows Linux role keeps the existing per-address engine trust store. Mac Command mapping is unavailable in the Linux role.
 - Linux emits v2 address-only invitations with platform=linux. v1 stays backward-compatible for Windows/Mac roles. Platform is an untrusted UI hint; a wrong-role invitation is rejected and every connection requires ordinary certificate/PIN checks.
 - Linux installer, hardware capture/input/audio and LAN/Tailscale latency require actual Ubuntu acceptance. Synthetic process/package tests never claim those results.
+
+## Windows virtual display extension (2026-10-23)
+
+- Optional Windows setup modal for one persistent virtual display. Native controls, scrollable instructions, fixed selectable status text, bounded cancellable download and explicit UAC operation. No display topology mutation, automatic physical-screen disable or session hotplug.
+- First setup still needs a display or another remote access method. Windows must be powered on and logged in; this does not unlock, wake or enable pre-login access. Mac/Linux headless support remains outside this change.
+- Device, active display, reboot/recovery and successful stream are separate facts. Read-only inventory runs on a background task with bounded UI wait. The GDI display name is diagnostic text, never a fabricated Sunshine identifier.
+- Sunshine output selection stays manual. Its pinned Windows UI uses a free-text device ID field; the user obtains the correct device_id from Sunshine's own display enumeration. Knot neither reads its logs/config nor writes it. Use ensure_active, never ensure_only_display.
+- Journal the exact random device ID before creating it; device-targeted SetupAPI install/remove. Refuse foreign present/phantom VDD devices and existing/changed registry or files. Shared driver-store cache is retained. Removing the app retains the virtual display; explicit managed removal is a separate action.
+- Artifact, catalog and member pins establish provenance, not driver safety. Driver availability must remain subject to upstream IPC review and stock Windows/SecureBoot device acceptance. Synthetic checks never imply hardware or remote-session success.

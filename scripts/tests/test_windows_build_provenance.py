@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_windows_launcher import verify_runtime_notices
+from build_windows_launcher import verify_runtime_notices, verify_virtual_display_inputs
 
 
 class RuntimeNotices(unittest.TestCase):
@@ -57,6 +57,82 @@ class RuntimeNotices(unittest.TestCase):
         self.write_pins()
         with self.assertRaises(ValueError):
             verify_runtime_notices(self.root)
+
+
+class VirtualDisplayPolicy(unittest.TestCase):
+    def setUp(self):
+        self.fixture = tempfile.TemporaryDirectory(prefix='knot-vdd-policy-')
+        self.root = Path(self.fixture.name)
+        self.folder = self.root / 'host/windows'
+        self.folder.mkdir(parents=True)
+        source = Path(__file__).resolve().parents[2] / 'host/windows'
+        for name in ('VirtualDisplayDependency.json', 'VirtualDisplayFiles.json',
+                     'Knot-vdd_settings.xml', 'VirtualDisplay-NOTICE.txt', 'VirtualDisplayDeployments.json', 'HeadlessNative.cs'):
+            (self.folder / name).write_bytes((source / name).read_bytes())
+        self.pin = json.loads((self.folder / 'VirtualDisplayDependency.json').read_text())
+
+    def tearDown(self):
+        self.fixture.cleanup()
+
+    def write_pin(self, pin):
+        (self.folder / 'VirtualDisplayDependency.json').write_text(json.dumps(pin))
+
+    def test_current_blocked_candidate_is_packaged(self):
+        self.assertIs(verify_virtual_display_inputs(self.root)['deviceRuntimeTested'], False)
+
+    def test_deployment_identity_or_files_cannot_drift_from_current_pins(self):
+        path = self.folder / 'VirtualDisplayDeployments.json'
+        original = json.loads(path.read_text())
+        import copy
+        for field in ('archiveSha256', 'catalogSignerCertificateSha256', 'driverVersion', 'files'):
+            changed = copy.deepcopy(original)
+            changed['profiles'][0][field] = [] if field == 'files' else ('1.2.3.4' if field == 'driverVersion' else '0' * 64)
+            path.write_text(json.dumps(changed))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                verify_virtual_display_inputs(self.root)
+        path.write_text(json.dumps(original))
+
+    def test_profile_and_file_unknown_fields_match_runtime_rejection(self):
+        path = self.folder / 'VirtualDisplayDeployments.json'
+        original = json.loads(path.read_text())
+        import copy
+        for target in ('profile', 'file'):
+            changed = copy.deepcopy(original)
+            record = changed['profiles'][0]
+            if target == 'file':
+                record = record['files'][0]
+            record['annotation'] = 'synthetic future metadata'
+            path.write_text(json.dumps(changed))
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                verify_virtual_display_inputs(self.root)
+        path.write_text(json.dumps(original))
+
+    def test_native_verification_version_is_bound_to_current_driver(self):
+        path = self.folder / 'HeadlessNative.cs'
+        path.write_text(path.read_text().replace('11.30.4.434', '1.2.3.4'))
+        with self.assertRaisesRegex(ValueError, 'Native virtual display verification version'):
+            verify_virtual_display_inputs(self.root)
+
+    def test_json_alone_cannot_enable_candidate(self):
+        for key, values in {
+            'installEnabled': (True, None, 0, 'false', 'true'),
+            'driverSafetyReviewStatus': ('accepted', 'BLOCKED', False, None),
+            'installBlockedReason': ('', 'reviewed', False, None),
+        }.items():
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.write_pin({**self.pin, key: value})
+                    with self.assertRaisesRegex(ValueError, 'must remain blocked'):
+                        verify_virtual_display_inputs(self.root)
+
+    def test_missing_policy_field_is_rejected(self):
+        for key in ('installEnabled', 'driverSafetyReviewStatus', 'installBlockedReason'):
+            with self.subTest(key=key):
+                pin = self.pin.copy()
+                del pin[key]
+                self.write_pin(pin)
+                with self.assertRaisesRegex(ValueError, 'must remain blocked'):
+                    verify_virtual_display_inputs(self.root)
 
 
 if __name__ == '__main__':

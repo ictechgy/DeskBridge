@@ -61,7 +61,7 @@ begin
   ExitCode := -1;
   Launched := False;
   if (not UninstallSilent) and
-     (MsgBox('파일 접속 상태를 확인하고 설정된 Knot 파일 접속을 즉시 해제합니다. 이후 제거 확인을 취소해도 접속 해제는 유지됩니다. 상태를 확인할 수 없으면 제거를 중단합니다. 공유 파일과 Sunshine은 보존됩니다. 계속할까요?', mbConfirmation, MB_OKCANCEL) <> IDOK) then
+     (MsgBox('파일 접속 상태를 확인하고 설정된 Knot 파일 접속을 즉시 해제합니다. 이후 제거 확인을 취소해도 접속 해제는 유지됩니다. 상태를 확인할 수 없으면 제거를 중단합니다. 공유 파일과 Sunshine, 가상 화면은 보존됩니다. 가상 화면이 필요 없으면 먼저 Knot의 모니터 없이 사용에서 제거하세요. 계속할까요?', mbConfirmation, MB_OKCANCEL) <> IDOK) then
     exit;
   BrokerArguments := '--elevated-operation DisableFiles';
   if UninstallSilent then

@@ -67,3 +67,11 @@ Please avoid public reports containing private keys, PINs, host certificates pai
 The extracted Windows managed EXE, QR DLL and PowerShell scripts are individually unsigned in this preview. An outer Authenticode signature authenticates embedded bytes; it does not establish their acceptance under Smart App Control, WDAC or ConstrainedLanguage. Do not disable these policies. Public signed releases need inner-artifact signing before hashing/embedding and acceptance on an application-control-enabled Windows device.
 
 Mac 공유는 Knot가 직접 시작한 자식 프로세스를 사용하므로 macOS TCC의 책임 앱이 Knot일 수 있습니다. 화면·시스템 오디오·선택한 오디오 입력의 목적 문자열을 부모 앱에도 포함하며, 권한은 실제 macOS 요청에 표시된 Knot 또는 Sunshine에 사용자가 직접 승인합니다. 개인 SPI로 책임을 숨기거나 자동 승인하지 않습니다. 실제 권한 귀속·입력·오디오 승인과 앱 교체 후 유지 여부는 대상 기기 검증 항목입니다.
+
+## Optional Windows virtual display boundary
+
+Automatic installation is currently blocked by an explicit default-deny policy while the candidate third-party driver control interface is reviewed. The UI cannot bypass the same check in the privileged backend. Removal remains independently available for an owned deployment. A pinned archive and valid Windows signature establish provenance, not driver safety.
+
+The implemented installer uses an exact-source elevated stage, bounded pinned ZIP/member parsing, pinned catalog signer, protected fixed settings and an exact planned random device ID journaled before creation. It uses device-targeted SetupAPI, refuses existing or later-added foreign present/phantom devices and altered files/registry, and retains shared driver-store packages. Only administrators/SYSTEM can write persistent state; the UMDF LocalService account has read access. No driver test-signing, certificate-store changes, topology mutation or physical-screen disable is performed. Manual Sunshine output selection does not require reading existing credentials/configuration/logs.
+
+Inert tests and read-only artifact-signature checks do not establish stock Windows/Secure Boot, device installation, headless capture or performance acceptance. See [headless validation boundary](docs/HEADLESS_WINDOWS.md).

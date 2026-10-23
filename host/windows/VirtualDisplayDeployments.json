@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "currentManifestId": "vdd-25.7.23-knot-settings-v1",
+  "legacySchema2ManifestIds": [
+    "vdd-25.7.23-knot-settings-v1"
+  ],
+  "profiles": [
+    {
+      "manifestId": "vdd-25.7.23-knot-settings-v1",
+      "archiveSha256": "e24210692b442b39af763536330ce78b423f19342b7a7792c26de3944e418b3a",
+      "driverVersion": "11.30.4.434",
+      "catalogSignerCertificateSha256": "69dfd3e1cbd49f039463edfe4c0d876c1dc7fdcd3aef08700a41355dc6c15fdb",
+      "files": [
+        {
+          "name": "mttvdd.cat",
+          "bytes": 13017,
+          "sha256": "08a0093fc9b2e32b287a6f8a77ca4de0a31830d29fc33d2b13a918dc859468f6"
+        },
+        {
+          "name": "MttVDD.dll",
+          "bytes": 251640,
+          "sha256": "c9ca837f57a98fbd43bc416a7f535a95843626e7759eaf85cf0cd7ce334dbb05"
+        },
+        {
+          "name": "MttVDD.inf",
+          "bytes": 4132,
+          "sha256": "550d211fe481e74dfe3f9d724ed78be48b3a9113405965d683d9373e8d672f5d"
+        },
+        {
+          "name": "vdd_settings.xml",
+          "bytes": 810,
+          "sha256": "84b1726e93c4337f48c8ba43f74249357a72340f02dac198b965b7f0381f00b7"
+        }
+      ]
+    }
+  ]
+}

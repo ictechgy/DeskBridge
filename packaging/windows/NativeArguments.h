@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <wchar.h>
 
-typedef enum { DB_INVALID = -1, DB_NORMAL = 0, DB_ENABLE, DB_EXPORT, DB_DISABLE, DB_INSTALL } db_operation;
+typedef enum { DB_INVALID = -1, DB_NORMAL = 0, DB_ENABLE, DB_EXPORT, DB_DISABLE, DB_INSTALL, DB_INSTALL_DISPLAY, DB_REMOVE_DISPLAY } db_operation;
 static size_t db_length(const wchar_t *s) { size_t n=0; if (s) while (s[n]) ++n; return n; }
 static int db_equal(const wchar_t *a,const wchar_t *b) { return a && b && wcscmp(a,b)==0; }
 static int db_digit(wchar_t c) { return c>=L'0' && c<=L'9'; }
@@ -98,14 +98,29 @@ static db_operation db_dispatch(int argc,const wchar_t *const *argv) {
     if (!argv || argc<2 || !db_equal(argv[0],L"--elevated-operation")) return DB_INVALID;
     if (db_equal(argv[1],L"DisableFiles")) return argc==2 || db_silent_disable(argc,argv)?DB_DISABLE:DB_INVALID;
     if (db_equal(argv[1],L"InstallSunshine")) return argc==4 && db_equal(argv[2],L"--msi-path") && db_local_file(argv[3],L".msi")?DB_INSTALL:DB_INVALID;
+    if (db_equal(argv[1],L"InstallVirtualDisplay")) return argc==4 && db_equal(argv[2],L"--zip-path") && db_local_file(argv[3],L".zip")?DB_INSTALL_DISPLAY:DB_INVALID;
+    if (db_equal(argv[1],L"RemoveVirtualDisplay")) return argc==2?DB_REMOVE_DISPLAY:DB_INVALID;
     enable=db_equal(argv[1],L"EnableFiles");
     if ((!enable && !db_equal(argv[1],L"Export")) || argc!=(enable?8:6) || !db_equal(argv[2],L"--request-base64") ||
         !db_request_base64(argv[3]) || !db_equal(argv[4],L"--windows-address") || !db_private_ip(argv[5]) ||
         (enable && (!db_equal(argv[6],L"--desktop-user-sid") || !db_desktop_sid(argv[7])))) return DB_INVALID;
     return enable?DB_ENABLE:DB_EXPORT;
 }
+/* Headless continuation/recovery statuses are meaningful only for these two
+ * fixed operations; they already carry actionable managed guidance. */
+static int db_headless_status(int exit_code,db_operation operation) {
+    return (operation==DB_INSTALL_DISPLAY || operation==DB_REMOVE_DISPLAY) && (exit_code==12 || exit_code==13);
+}
 /* Exit 2 means the managed helper already displayed its failure; it is still failure. */
-static int db_show_failure(int exit_code,int silent) { return exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent; }
+static int db_show_failure(int exit_code,int silent,db_operation operation) {
+    return !db_headless_status(exit_code,operation) && exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent;
+}
+static int db_complete_exit_code(int exit_code,int silent,db_operation operation,int acknowledged) {
+    if (db_headless_status(exit_code,operation)) return exit_code;
+    /* A non-headless child cannot introduce a valid headless status. */
+    if (exit_code==12 || exit_code==13) exit_code=1;
+    return db_show_failure(exit_code,silent,operation) && acknowledged?2:exit_code;
+}
 static int db_env_name(const wchar_t *entry,const wchar_t *name,int prefix) {
     size_t i;
     if (!entry || !name) return 0;

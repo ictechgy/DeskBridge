@@ -149,6 +149,12 @@ $downloadCancel=Add-Button '다운로드 취소' { $script:cancelDownload=$true 
 $null = Add-Text '2   Sunshine 초기 설정 · 처음 한 번' 30
 $null = Add-Text "설정 창에서 계정을 만들고, Configuration → Network에서 LAN/WAN 암호화를 모두 Mandatory로 저장하세요. Desktop 앱도 확인하세요.`r`n이 계정은 Windows의 Sunshine 설정용입니다. Mac에서 로그인하지 않습니다." 66
 $open = Add-Button 'Sunshine 설정 열기' { try { Start-Process 'https://localhost:47990' } catch { Show-Failure $_ } }
+$headless = Add-Button '모니터 없이 사용… (선택)' {
+    Set-Busy $true
+    try { & (Join-Path $PSScriptRoot 'Show-HeadlessSetup.ps1') -Owner $form -LauncherPath $LauncherPath }
+    catch { Show-Failure $_ }
+    finally { Set-Busy $false }
+}
 $null = Add-Text '3   Mac에서 연결' 30
 $null = Add-Text 'Mac의 원격 화면에서 근처 PC를 선택하세요. 목록에 없으면 연결 QR / 링크로 가져올 수 있습니다.' 40
 $qrButton = Add-Button '연결 QR / 링크 보기…' {
