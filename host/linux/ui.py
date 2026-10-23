@@ -141,8 +141,9 @@ class Window(Gtk.Window):
         finally: dialog.destroy()
 
     def exported_package(self, destination):
-        self.install_command.set_text('sudo apt install ' + shlex.quote(str(destination)))
-        self.status.set_text('검증된 설치 패키지 사본을 저장했습니다. 아래 명령을 터미널에서 직접 실행해 설치할 수 있습니다. 설치 후 이 Linux 공유 시작을 누르세요.')
+        # Export destinations may be shared or replaceable. Privileged install
+        # guidance continues to name the private, verified managed source.
+        self.status.set_text('설치 패키지 사본을 저장했습니다. 아래 설치 명령은 보호된 원본을 사용합니다. 설치 후 이 Linux 공유 시작을 누르세요.')
 
     def start(self):
         name = self.name.get_text()

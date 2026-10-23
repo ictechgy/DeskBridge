@@ -2,19 +2,26 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Actual MacHostChild + native helper, fresh inert /tmp processes only. No app UI/host."""
 from pathlib import Path
-import argparse, fcntl, json, os, signal, subprocess, tempfile, time
+import argparse, errno, fcntl, hashlib, json, os, signal, subprocess, tempfile, time
 
 ROOT = Path(__file__).resolve().parents[2]
 
 FIXTURE = r'''
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
+extern char **environ;
 static volatile sig_atomic_t stopped;
+static pid_t replacement;
 static void term(int n) { (void)n; stopped = 1; }
+static void forward(int n) { if (replacement > 0) kill(replacement, n); }
+static void *worker(void *value) { return value; }
 static void marker(const char *base, const char *suffix, long value) {
     char path[4096]; if (snprintf(path, sizeof(path), "%s.%s", base, suffix) >= (int)sizeof(path)) _exit(80);
     FILE *file = fopen(path, "wx"); if (!file) _exit(81);
@@ -25,14 +32,50 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "companion") == 0) {
         marker(argv[2], "companion", getpid()); for (;;) pause();
     }
+    if (strcmp(argv[1], "replacement") == 0) {
+        marker(argv[2], "descendant", getpid()); for (;;) pause();
+    }
     marker(argv[2], "leader", getpid());
     int inherited = 0;
     for (int fd = 3; fd < 256; ++fd) if (fcntl(fd, F_GETFD) >= 0) ++inherited;
     marker(argv[2], "inherited-fds", inherited);
+    pthread_t thread;
+    int thread_result = pthread_create(&thread, NULL, worker, NULL);
+    if (!thread_result) thread_result = pthread_join(thread, NULL);
+    marker(argv[2], "pthread-result", thread_result);
     if (strcmp(argv[1], "restart") == 0) {
-        pid_t child = fork(); if (child < 0) return 3;
-        if (child > 0) { usleep(10000); return 0; }
-        marker(argv[2], "descendant", getpid());
+        // Exact pinned Sunshine restart topology: original stays alive,
+        // forwards TERM/INT/HUP, waits; fork child escapes the group then execs.
+        replacement = fork();
+        if (replacement < 0) { int error = errno; marker(argv[2], "restart-denied", error); return error == EPERM ? 0 : 3; }
+        if (!replacement) {
+            if (setpgid(0, 0) != 0) _exit(4);
+            char *values[] = {argv[0], "replacement", argv[2], NULL};
+            execv(argv[0], values); _exit(5);
+        }
+        signal(SIGTERM, forward); signal(SIGINT, forward); signal(SIGHUP, forward);
+        while (waitpid(replacement, NULL, 0) < 0 && errno == EINTR) {}
+        return 0;
+    }
+    if (strcmp(argv[1], "primitives") == 0) {
+        errno = 0;
+        pid_t child = fork(); int error = errno;
+        if (!child) _exit(0);
+        if (child > 0) while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+        marker(argv[2], "fork-denied", child == -1 && error == EPERM);
+        errno = 0;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        child = vfork(); error = errno;
+#pragma clang diagnostic pop
+        if (!child) _exit(0);
+        if (child > 0) while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+        marker(argv[2], "vfork-denied", child == -1 && error == EPERM);
+        char *values[] = {"/usr/bin/true", NULL};
+        child = 0;
+        int result = posix_spawn(&child, values[0], NULL, NULL, values, environ);
+        if (!result) while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+        marker(argv[2], "spawn-denied", result == EPERM && child == 0);
     }
     if (strcmp(argv[1], "ignore") == 0) signal(SIGTERM, SIG_IGN);
     else signal(SIGTERM, term);
@@ -48,7 +91,7 @@ int main(int argc, char **argv) {
 HARNESS = r'''
 import Darwin
 import Foundation
-enum MacHostPolicy { enum Failure: Error { case exited } }
+enum MacHostPolicy { enum Failure: Error { case exited, helperUnavailable } }
 @MainActor enum MacHostRuntime { static var supervisorExecutable: URL { URL(fileURLWithPath: "/unused-synthetic-default") } }
 @main struct Check {
  @MainActor static func main() async throws {
@@ -68,18 +111,18 @@ enum MacHostPolicy { enum Failure: Error { case exited } }
             do {
                 _ = try MacHostChild(executable: fixture, arguments: [], supervisor: supervisor.appendingPathComponent("absent"))
                 throw NSError(domain: "Spawn failure accepted", code: 1)
-            } catch MacHostPolicy.Failure.exited {}
+            } catch MacHostPolicy.Failure.helperUnavailable {}
         }
         for arguments in [[String(repeating: "x", count: 16_385)], ["embedded\0nul"], Array(repeating: "x", count: 257)] {
             do {
                 _ = try MacHostChild(executable: fixture, arguments: arguments, supervisor: supervisor)
                 throw NSError(domain: "Unbounded argv accepted", code: 1)
-            } catch MacHostPolicy.Failure.exited {}
+            } catch MacHostPolicy.Failure.helperUnavailable {}
         }
         guard descriptors() == before else { throw NSError(domain: "Failed spawn leaked lifetime pipe", code: 1) }
         return
     }
-    let fixtureMode = ["normal": "graceful", "bounded": "ignore", "force": "ignore", "restart": "restart", "race": "restart", "helper-crash": "crash-supervisor"][mode] ?? "linger"
+    let fixtureMode = ["normal": "graceful", "bounded": "ignore", "force": "ignore", "restart": "restart", "race": "restart", "primitives": "primitives", "helper-crash": "crash-supervisor"][mode] ?? "linger"
     var owned: MacHostChild? = try MacHostChild(executable: fixture, arguments: [fixtureMode, base], supervisor: supervisor)
     for _ in 0..<1500 {
         if exists("ready") { break }
@@ -102,7 +145,7 @@ enum MacHostPolicy { enum Failure: Error { case exited } }
         return
     }
     guard let child = owned else { fatalError("synthetic ownership") }
-    if mode == "normal" || mode == "bounded" { child.stop() }
+    if mode == "normal" || mode == "bounded" || mode == "primitives" { child.stop() }
     if mode == "force" { child.forceStop() }
     try await settle(child)
     // Queued/repeated stop operations after exit cannot signal a reused group.
@@ -158,7 +201,7 @@ def check(supervisor):
             run(["/usr/bin/swiftc", "-parse-as-library", "-swift-version", "6", "-module-cache-path", root / "module-cache", child_source, harness, "-o", parent])
             companion = subprocess.Popen([str(fixture), "companion", str(root / "unrelated")], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             known.add(companion.pid)
-            for mode in ["parent-death", "writer-leak", "normal", "bounded", "force", "release", "restart", "helper-crash", *(["race"] * 24), "failure"]:
+            for mode in ["parent-death", "writer-leak", "normal", "bounded", "force", "release", "restart", "primitives", "helper-crash", *(["race"] * 24), "failure"]:
                 base = root / (str(checks) + "-" + mode)
                 result = run([parent, supervisor, fixture, mode, base])
                 assert result.returncode == 0
@@ -169,6 +212,13 @@ def check(supervisor):
                     for pid in pids:
                         gone(pid)
                     assert Path(str(base) + ".inherited-fds").read_text().strip() == "0", "Host inherited a lifetime descriptor"
+                    assert Path(str(base) + ".pthread-result").read_text().strip() == "0", "Ordinary host threads failed"
+                if mode in ("restart", "race"):
+                    assert Path(str(base) + ".restart-denied").read_text().strip() == str(errno.EPERM)
+                    assert not Path(str(base) + ".descendant").exists(), "Pinned restart escaped the owned group"
+                if mode == "primitives":
+                    for primitive in ("fork", "vfork", "spawn"):
+                        assert Path(str(base) + "." + primitive + "-denied").read_text().strip() == "1", primitive + " was allowed"
                 if mode == "normal":
                     assert Path(str(base) + ".term").exists(), "Graceful stop did not reach child"
                 if mode == "writer-leak":
@@ -178,20 +228,42 @@ def check(supervisor):
                 assert companion.poll() is None, "Owned cleanup signalled an unrelated process group"
                 checks += 1
 
+            # The child exec mode must refuse when called without the fixed
+            # restriction. Its probe child exits without ever executing a host.
+            base = root / "unrestricted-child-mode"
+            result = subprocess.run([str(supervisor), "--exec-host", "--", str(fixture), "linger", str(base)],
+                                    capture_output=True, timeout=5)
+            assert result.returncode == 126
+            assert not Path(str(base) + ".leader").exists()
+            checks += 1
+
             # Exercise the native parser/spawn boundary directly with a valid
             # exclusive pipe. Its reader must never reach the inert executable.
-            for mode in ("eof-before-spawn", "invalid-data", "invalid-argv", "spawn-failure"):
+            # Two fresh source mutations exercise unavailable wrapper / invalid
+            # profile branches, with no system file or production binary change.
+            unavailable = {}
+            supervisor_source = (ROOT / "host/macos/KnotHostSupervisor.c").read_text()
+            for name, old, new in (
+                    ("wrapper-unavailable", '"/usr/bin/sandbox-exec"', '"/nonexistent-knot-synthetic-sandbox-exec"'),
+                    ("profile-rejected", '"(version 1)(allow default)(deny process-fork)"', '"(invalid-knot-synthetic-profile"')):
+                assert supervisor_source.count(old) == 1
+                source = root / (name + ".c"); source.write_text(supervisor_source.replace(old, new))
+                binary = root / name
+                run(["/usr/bin/clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", source, "-o", binary])
+                unavailable[name] = binary
+            for mode in ("eof-before-spawn", "invalid-data", "invalid-argv", "spawn-failure", *unavailable):
                 reader, writer = os.pipe()
                 source_fd = fcntl.fcntl(reader, fcntl.F_DUPFD_CLOEXEC, 10)
                 os.close(reader)
-                command = [str(supervisor), "--", str(fixture), "linger", str(root / mode)]
+                helper = unavailable.get(mode, supervisor)
+                command = [str(helper), "--", str(fixture), "linger", str(root / mode)]
                 if mode == "invalid-argv": command[1] = "bad-protocol"
                 if mode == "spawn-failure": command[2] = str(root / "absent-inert")
                 if mode == "eof-before-spawn": os.close(writer); writer = -1
                 if mode == "invalid-data": os.write(writer, b"invalid")
                 actions = [(os.POSIX_SPAWN_DUP2, source_fd, 3), (os.POSIX_SPAWN_CLOSE, source_fd)]
                 if writer >= 0: actions.append((os.POSIX_SPAWN_CLOSE, writer))
-                process = os.posix_spawn(str(supervisor), command, {"PATH": "/usr/bin:/bin"}, file_actions=actions, setpgroup=0)
+                process = os.posix_spawn(str(helper), command, {"PATH": "/usr/bin:/bin"}, file_actions=actions, setpgroup=0)
                 os.close(source_fd)
                 try:
                     deadline = time.monotonic() + 3
@@ -217,7 +289,11 @@ def check(supervisor):
     return {"status": "passed", "checks": checks, "actualMacHostChild": True,
             "nativeSupervisor": True, "freshSyntheticOnly": True, "productionHostLaunched": False,
             "appAbruptDeath": True, "gracefulStop": True, "boundedStop": True,
-            "restartDescendantCleanup": True, "writerNotInherited": True, "supervisorCrashCleanup": True}
+            "restartDescendantCleanup": True, "writerNotInherited": True, "supervisorCrashCleanup": True,
+            "testedSupervisorSHA256": hashlib.sha256(supervisor.read_bytes()).hexdigest(),
+            "pinnedRestartForkDenied": True, "forkVforkSpawnDenied": True,
+            "normalThreadsAndFiles": True, "unrestrictedChildModeRefused": True,
+            "wrapperAndProfileUnavailableRefused": True}
 
 
 if __name__ == "__main__":

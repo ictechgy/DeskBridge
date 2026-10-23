@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
+import Foundation
 import GlimmerEngine
 
 /// Presentation belongs to the desktop shell, independently of transport recovery.
@@ -8,10 +9,11 @@ struct DesktopRecoveryPresentation {
     private var receivedFreshFrame = false
     private var hasReceivedVideo = false
     private var audioUnavailable = false
+    private(set) var audioNoticeID: UUID?
     private var terminalStatus: String?
 
     private var audioWarning: String? {
-        audioUnavailable ? "오디오를 사용할 수 없습니다. Mac과 PC의 오디오 출력 장치를 확인하세요." : nil
+        audioNoticeID != nil ? "오디오를 사용할 수 없습니다. Mac과 PC의 오디오 장치·네트워크를 확인한 뒤 다시 연결하세요." : nil
     }
 
     var status: String {
@@ -39,7 +41,7 @@ struct DesktopRecoveryPresentation {
         switch event {
         case .firstFrame: receivedFreshFrame = true; hasReceivedVideo = true; phase = .live
         case .reconnecting:
-            receivedFreshFrame = false; audioUnavailable = false; phase = .reconnecting
+            receivedFreshFrame = false; audioUnavailable = false; audioNoticeID = nil; phase = .reconnecting
         // A recovered transport is not proof that a fresh picture has arrived.
         case .reconnected: if !receivedFreshFrame { phase = .waiting }
         case .waitingForVideo(true):
@@ -47,13 +49,22 @@ struct DesktopRecoveryPresentation {
         case .waitingForVideo(false):
             if phase == .waiting && receivedFreshFrame { phase = .live }
         // Stage failures can belong to a retryable reconnect attempt.
-        case .audioFailed: audioUnavailable = true
+        case .audioFailed:
+            if !audioUnavailable { audioNoticeID = UUID() }
+            audioUnavailable = true
         case .connectionTerminated(let code, let error):
             terminalStatus = Self.terminationMessage(code: code, hasReceivedVideo: hasReceivedVideo, error: error)
-            phase = .ended
-        case .stopped: phase = .ended
+            audioNoticeID = nil; phase = .ended
+        case .stopped: audioNoticeID = nil; phase = .ended
         default: break
         }
+    }
+
+    /// A bounded notice is separate from persistent audio status. Old timers cannot
+    /// dismiss a later reconnect's notice or change the video-recovery phase.
+    mutating func acknowledgeAudioNotice(_ id: UUID) {
+        guard audioNoticeID == id else { return }
+        audioNoticeID = nil
     }
 
     /// Remote diagnostic strings never become shell copy. Keep the engine's typed failure reason.

@@ -364,7 +364,27 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEng
 +        (UInt32(channelID) << 16) | UInt32(relSeq)
 +    }
 +}
-@@ -111,3 +154,5 @@
+@@ -93,2 +136,7 @@
+-            handleVerifyConnect(&reader)
+-            // VERIFY_CONNECT has FLAG_ACKNOWLEDGE → must ACK it.
++            // VERIFY_CONNECT is peer control, never an authenticated data-channel
++            // command. Consume its exact fixed body even on a wrong channel so a
++            // following coalesced command still has a known offset.
++            guard let body = reader.take(40) else { return false }
++            guard channelID == Enet.peerChannelID else { return true }
++            var verification = ByteReader(body)
++            handleVerifyConnect(&verification)
+@@ -105,3 +153,6 @@
+-            // PING has no body; ACK if requested.
+-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+-                           flags: flags, sentTime: sentTime)
++            // Unencrypted peer commands must not retire an outstanding encrypted
++            // reliable with the same (data channel, sequence) transport labels.
++            if channelID == Enet.peerChannelID {
++                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
++                               flags: flags, sentTime: sentTime)
++            }
+@@ -111,3 +162,5 @@
 -            // ACK unconditionally, duplicates included, as real ENet does in
 -            // enet_peer_queue_incoming_command's discardCommand path; withholding
 -            // an ACK keeps the PC retransmitting until its peer timeout.
@@ -373,12 +393,23 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEng
 +            guard let result = acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq) else {
 +                return true
 +            }
-@@ -116 +161,3 @@
+@@ -116 +169,3 @@
 -            acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq)
 +            // TERMINATION and other callbacks may close the socket, so ACK after
 +            // admission but before dispatching any authenticated due payloads.
 +            dispatchInboundDue(result, channelID: channelID, reason: "hold full")
-@@ -128,3 +175,5 @@
+@@ -122,2 +177,8 @@
+-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+-                           flags: flags, sentTime: sentTime)
++            // Only these supported peer-control commands have an unencrypted ACK
++            // path. Ignored unreliable/unsequenced/fragment data is never ACKed,
++            // even if its unauthenticated command byte carries ACKNOWLEDGE.
++            if channelID == Enet.peerChannelID,
++               command == Enet.cmdBandwidthLimit || command == Enet.cmdThrottleConfigure {
++                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
++                               flags: flags, sentTime: sentTime)
++            }
+@@ -128,3 +189,5 @@
 -    /// Drop duplicates, already ACKed; authenticate everything else before it can
 -    /// hold or move the channel cursor.
 -    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
@@ -387,12 +418,12 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEng
 +    /// matching history must never admit a replay at a current/future reliable label.
 +    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16)
 +        -> (due: [[UInt8]], skipped: Int)? {
-@@ -132,0 +182,4 @@
+@@ -132,0 +196,4 @@
 +            guard inboundReliableHistory.matches(bytes, channelID: channelID, relSeq: relSeq) else {
 +                rejectInboundControl("reliable duplicate has no matching authenticated envelope")
 +                return nil
 +            }
-@@ -138,4 +191,5 @@
+@@ -138,4 +205,5 @@
 -            return
 -        }
 -        guard let inner = openInboundControl(bytes) else { return }
@@ -402,18 +433,24 @@ diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEng
 +        guard let inner = openInboundControl(bytes) else { return nil }
 +        inboundReliableHistory.record(bytes, channelID: channelID, relSeq: relSeq)
 +        return inboundOrder[channelID, default: EnetInboundOrder()]
-@@ -143 +196,0 @@
+@@ -143 +210,0 @@
 -        dispatchInboundDue(result, channelID: channelID, reason: "hold full")
-@@ -219 +272 @@
+@@ -185,2 +252,3 @@
+-    /// Send an ACK for a received command iff it requested one AND the datagram
+-    /// carried a sent-time (ENet's ACK echoes the sender's serviceTime).
++    /// Send an ACK for an admitted reliable or allowlisted peer-control command
++    /// iff it requested one. Callers enforce admission; sent-time only selects
++    /// the timestamp to echo and is not an additional ACK requirement.
+@@ -219 +287 @@
 -    /// Authenticate a control payload (envelope 0x0001), returning its inner
 +    /// Authenticate and reject replayed control payloads (envelope 0x0001), returning the inner
-@@ -221 +274 @@
+@@ -221 +289 @@
 -    /// Changes no ordering state, so rejected packets cannot move the cursor.
 +    /// Commits only the authenticated replay counter; rejected packets cannot move the ENet cursor.
-@@ -233 +286 @@
+@@ -233 +301 @@
 -            return try crypto.open(bytes)
 +            return try crypto.open(bytes, replayWindow: &inboundReplayWindow)
-@@ -304 +357 @@
+@@ -304 +372 @@
 -    /// Count an inbound control payload that failed authentication; only the
 +    /// Count an inbound control payload rejected by authentication or replay checks; only the
 diff --git a/GlimmerEngine/Network/EnetControlChannel+Send.swift b/GlimmerEngine/Network/EnetControlChannel+Send.swift
@@ -477,20 +514,14 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +            return identity
 @@ -28,0 +29,2 @@
 +        // An established identity disappearing is a recovery error, not a new install.
-+        guard !established else { throw IdentityStorageError.unsafeStorage }
-@@ -108,12 +110,11 @@
++        guard !established else { throw IdentityStorageError.incompleteIdentity }
+@@ -108,6 +110,15 @@
 -    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
 -    func loadFromFileStore() throws -> Identity? {
 -        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
 -              let certPEM = String(data: certData, encoding: .utf8),
 -              !certPEM.isEmpty else {
 -            return nil
--        }
--        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
--              let keyPEM = String(data: keyData, encoding: .utf8),
--              !keyPEM.isEmpty else {
--            return nil
--        }
 +    /// Only an unflagged first install/migration may fall through or synthesize a missing ID.
 +    /// Once published, all three identity components must remain present.
 +    func loadFromFileStore(requireComplete: Bool) throws -> Identity? {
@@ -498,23 +529,37 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +        let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
 +        let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
 +        if certificate == nil && privateKey == nil && uniqueID == nil { return nil }
-+        guard let certData = certificate, let keyData = privateKey,
-+              let certPEM = String(data: certData, encoding: .utf8), !certPEM.isEmpty,
-+              let keyPEM = String(data: keyData, encoding: .utf8), !keyPEM.isEmpty
-+        else { throw IdentityStorageError.unsafeStorage }
-@@ -122,4 +123,3 @@
++        // Existing malformed bytes remain a storage validation failure even if
++        // another component is absent. Missing ordinary material instead needs
++        // recovery guidance; changing permissions cannot restore those bytes.
++        func text(_ data: Data?) throws -> String? {
++            guard let data else { return nil }
++            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
++            else { throw IdentityStorageError.unsafeStorage }
++            return value
+@@ -115,5 +126,6 @@
+-        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
+-              let keyPEM = String(data: keyData, encoding: .utf8),
+-              !keyPEM.isEmpty else {
+-            return nil
+-        }
++        let certificatePEM = try text(certificate)
++        let privateKeyPEM = try text(privateKey)
++        let storedUID = try text(uniqueID)?.trimmingCharacters(in: .whitespacesAndNewlines)
++        if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
++        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
++        else { throw IdentityStorageError.incompleteIdentity }
+@@ -122,4 +134 @@
 -        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
 -           let stored = String(data: uidData, encoding: .utf8)?
 -                    .trimmingCharacters(in: .whitespacesAndNewlines),
 -           !stored.isEmpty {
-+        if let uidData = uniqueID {
-+            guard let stored = String(data: uidData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-+                  !stored.isEmpty else { throw IdentityStorageError.unsafeStorage }
-@@ -128 +128,2 @@
++        if let stored = storedUID {
+@@ -128 +137,2 @@
 -            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
-+            guard !requireComplete else { throw IdentityStorageError.unsafeStorage }
++            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
 +            // Complete an unpublished legacy migration without replacing its valid PEM pair.
-@@ -140,0 +142 @@
+@@ -140,0 +151 @@
 +        try FileIdentityStore.validateStorage(base: storageRoot())
 diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identity.swift
 --- a/GlimmerEngine/Network/Identity.swift
@@ -708,9 +753,10 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +        _ = unlinkat(root, name, 0)
 +    }
 +
-@@ -207 +286,2 @@
+@@ -207 +286,3 @@
 -}
 +    case unsafeStorage
++    case incompleteIdentity
 +}
 diff --git a/GlimmerEngine/Network/InputBatcher.swift b/GlimmerEngine/Network/InputBatcher.swift
 --- a/GlimmerEngine/Network/InputBatcher.swift
@@ -1180,9 +1226,33 @@ diff --git a/GlimmerEngine/Network/VideoRtpReceiver.swift b/GlimmerEngine/Networ
 +        // already in flight before returning, so an old receiver cannot feed a
 +        // newly started decoder. Failure callbacks are dispatched off this queue.
 +        recvQueue.sync {}
-@@ -276,0 +281 @@
+@@ -145,0 +150,10 @@
++
++    private static func configureReceiveTimeout(_ socket: Int32) throws {
++        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
++        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
++                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
++            let failure = errno
++            _ = close(socket) // Still local: fd ownership has not been published.
++            throw EnetError.socketFailure("video receive timeout unavailable (errno \(failure))")
++        }
++    }
+@@ -203,2 +217 @@
+-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
+-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
++        try Self.configureReceiveTimeout(sock)
+@@ -276,0 +290 @@
 +                self?.publishReceiveFailure(callback: onReceiveFailed)
-@@ -309 +314,10 @@
+@@ -286,0 +301 @@
++            var pressureDelay: useconds_t = 1_000
+@@ -288,0 +304 @@
++                if count >= 0 { pressureDelay = 1_000 }
+@@ -304 +320,3 @@
+-                    if self.shouldContinueReceiving(after: err, batched: &batched) { continue }
++                    if self.shouldContinueReceiving(after: err, batched: &batched,
++                                                    pressureDelay: &pressureDelay) { continue }
++                    guard !self.interrupted.load(ordering: .relaxed) else { break }
+@@ -309 +327,10 @@
 -            if receiveFailed { onReceiveFailed?() }
 +            if receiveFailed { self?.publishReceiveFailure(callback: onReceiveFailed) }
 +        }
@@ -1194,15 +1264,31 @@ diff --git a/GlimmerEngine/Network/VideoRtpReceiver.swift b/GlimmerEngine/Networ
 +        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
 +            guard let self, !self.interrupted.load(ordering: .relaxed) else { return }
 +            callback?()
-@@ -401,0 +416 @@
+@@ -315 +342,2 @@
+-    private func shouldContinueReceiving(after err: Int32, batched: inout Bool) -> Bool {
++    private func shouldContinueReceiving(after err: Int32, batched: inout Bool,
++                                        pressureDelay: inout useconds_t) -> Bool {
+@@ -317,0 +346 @@
++            pressureDelay = 1_000
+@@ -327,2 +356,4 @@
+-            // These fail at once instead of waiting out SO_RCVTIMEO, so pause before retrying.
+-            usleep(1_000)
++            // These fail at once instead of waiting out SO_RCVTIMEO. Bound
++            // wakeups under sustained pressure while keeping stop responsive.
++            usleep(pressureDelay)
++            pressureDelay = min(pressureDelay * 2, 16_000)
+@@ -333 +364 @@
+-        return true
++        return !interrupted.load(ordering: .relaxed)
+@@ -401,0 +433 @@
 +        var destination = destAddr
-@@ -403 +418 @@
+@@ -403 +435 @@
 -            withUnsafePointer(to: &destAddr) { sp in
 +            withUnsafePointer(to: &destination) { sp in
-@@ -435 +450 @@
+@@ -435 +467 @@
 -        guard let sink else { return }
 +        guard !interrupted.load(ordering: .relaxed), let sink else { return }
-@@ -461,0 +477 @@
+@@ -461,0 +494 @@
 +        guard !interrupted.load(ordering: .relaxed) else { return }
 diff --git a/GlimmerEngine/Protocol/StreamCrypto.swift b/GlimmerEngine/Protocol/StreamCrypto.swift
 --- a/GlimmerEngine/Protocol/StreamCrypto.swift
@@ -1336,19 +1422,17 @@ diff --git a/GlimmerEngine/Session/NativeBackend+Input.swift b/GlimmerEngine/Ses
 diff --git a/GlimmerEngine/Session/NativeBackend+Pipeline.swift b/GlimmerEngine/Session/NativeBackend+Pipeline.swift
 --- a/GlimmerEngine/Session/NativeBackend+Pipeline.swift
 +++ b/GlimmerEngine/Session/NativeBackend+Pipeline.swift
-@@ -154 +154,4 @@
+@@ -154 +154,5 @@
 -        receiver.onReceiveFailed = { [weak self] in
 +        receiver.onReceiveFailed = { [weak self, weak receiver] in
 +            guard let self, let receiver,
 +                  self.withState({ !interrupted && videoReceiver === receiver }) else { return }
++            // Queue recovery before a receiver/decoder join can delay its UI edge.
++            // Teardown still completes before this callback returns.
+@@ -156 +160 @@
+-            self?.stopConnection()
 +            self.stopConnection()
-@@ -156 +158,0 @@
--            self?.stopConnection()
-@@ -190,0 +193 @@
-+            self?.stopConnection()
-@@ -192 +194,0 @@
--            self?.stopConnection()
-@@ -317,0 +320,6 @@
+@@ -317,0 +322,6 @@
 +        receiver.onReceiveFailed = { [weak self, weak receiver] error in
 +            guard let self, let receiver,
 +                  self.withState({ !interrupted && audioReceiver === receiver }) else { return }
@@ -1374,6 +1458,26 @@ diff --git a/GlimmerEngine/Session/NativeBackend.swift b/GlimmerEngine/Session/N
 @@ -250,0 +261,2 @@
 +        teardownLock.lock()
 +        defer { teardownLock.unlock() }
+diff --git a/GlimmerEngine/Session/StreamBridgeContext.swift b/GlimmerEngine/Session/StreamBridgeContext.swift
+--- a/GlimmerEngine/Session/StreamBridgeContext.swift
++++ b/GlimmerEngine/Session/StreamBridgeContext.swift
+@@ -22,0 +23,3 @@
++    // A self-initiated reconnect emits its UI edge before stopping the old
++    // receiver. Fence its late audio failure in the same lock as event delivery.
++    private var audioEventsQuiesced = false
+@@ -28,0 +32 @@
++            audioEventsQuiesced = false
+@@ -36,0 +41 @@
++            audioEventsQuiesced = false
+@@ -87,0 +93,8 @@
++            switch event {
++            case .reconnecting:
++                audioEventsQuiesced = true
++            case .audioFailed where audioEventsQuiesced:
++                return
++            default:
++                break
++            }
 diff --git a/GlimmerEngine/Session/StreamConnection+Configuration.swift b/GlimmerEngine/Session/StreamConnection+Configuration.swift
 --- a/GlimmerEngine/Session/StreamConnection+Configuration.swift
 +++ b/GlimmerEngine/Session/StreamConnection+Configuration.swift
@@ -1432,6 +1536,14 @@ diff --git a/GlimmerEngine/Session/StreamSession+Public.swift b/GlimmerEngine/Se
 +        refreshPowerAssertion()
 +    }
 +
+diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Session/StreamSession+Start.swift
+--- a/GlimmerEngine/Session/StreamSession+Start.swift
++++ b/GlimmerEngine/Session/StreamSession+Start.swift
+@@ -42,0 +43 @@
++        refreshPowerAssertion()
+@@ -180 +181 @@
+-        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
++        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)
 diff --git a/GlimmerEngine/Video/VideoDecoder+Decode.swift b/GlimmerEngine/Video/VideoDecoder+Decode.swift
 --- a/GlimmerEngine/Video/VideoDecoder+Decode.swift
 +++ b/GlimmerEngine/Video/VideoDecoder+Decode.swift

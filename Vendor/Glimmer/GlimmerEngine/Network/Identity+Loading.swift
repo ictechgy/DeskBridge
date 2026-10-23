@@ -27,7 +27,7 @@ extension IdentityManager {
             return identity
         }
         // An established identity disappearing is a recovery error, not a new install.
-        guard !established else { throw IdentityStorageError.unsafeStorage }
+        guard !established else { throw IdentityStorageError.incompleteIdentity }
 
         // The keychain-era flag means the earliest plaintext defaults were already wiped.
         let legacyKeychainOnly = defaults.integer(forKey: Self.legacyKeychainOnlyFlag) >= 1
@@ -114,18 +114,27 @@ extension IdentityManager {
         let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
         let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
         if certificate == nil && privateKey == nil && uniqueID == nil { return nil }
-        guard let certData = certificate, let keyData = privateKey,
-              let certPEM = String(data: certData, encoding: .utf8), !certPEM.isEmpty,
-              let keyPEM = String(data: keyData, encoding: .utf8), !keyPEM.isEmpty
-        else { throw IdentityStorageError.unsafeStorage }
+        // Existing malformed bytes remain a storage validation failure even if
+        // another component is absent. Missing ordinary material instead needs
+        // recovery guidance; changing permissions cannot restore those bytes.
+        func text(_ data: Data?) throws -> String? {
+            guard let data else { return nil }
+            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
+            else { throw IdentityStorageError.unsafeStorage }
+            return value
+        }
+        let certificatePEM = try text(certificate)
+        let privateKeyPEM = try text(privateKey)
+        let storedUID = try text(uniqueID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
+        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
+        else { throw IdentityStorageError.incompleteIdentity }
         _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
         let uid: String
-        if let uidData = uniqueID {
-            guard let stored = String(data: uidData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !stored.isEmpty else { throw IdentityStorageError.unsafeStorage }
+        if let stored = storedUID {
             uid = stored
         } else {
-            guard !requireComplete else { throw IdentityStorageError.unsafeStorage }
+            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
             // Complete an unpublished legacy migration without replacing its valid PEM pair.
             uid = try generateUniqueID()
             let uidBytes = Data(uid.utf8)

@@ -17,15 +17,29 @@ func runDesktopRecoveryChecks() throws -> Int {
     try expect(state.message == nil, "first frame did not clear connecting status")
     try expect(state.status == "화면 연결됨", "first frame did not publish connected status")
     state.receive(.audioFailed("synthetic untrusted network detail"))
-    try expect(state.phase == .live && state.message?.contains("오디오 출력 장치") == true,
+    try expect(state.phase == .live && state.message?.contains("오디오 장치·네트워크") == true,
                "nonfatal audio failure is invisible in the fullscreen surface")
     try expect(!state.status.contains("synthetic") && state.message?.contains("synthetic") == false,
                "audio diagnostics leaked into shell or accessibility copy")
+    guard let audioNotice = state.audioNoticeID else {
+        throw ModelCheckFailure(message: "audio failure did not identify its bounded notice")
+    }
+    state.receive(.audioFailed("duplicate synthetic error"))
+    try expect(state.audioNoticeID == audioNotice, "duplicate audio failures rearmed the current notice")
     state.receive(.waitingForVideo(true))
     try expect(state.phase == .waiting && state.message != nil, "live video stall was invisible")
+    state.acknowledgeAudioNotice(audioNotice)
+    try expect(state.phase == .waiting && state.message?.contains("영상을 기다리는") == true,
+               "audio expiry hid the actual video wait")
     state.receive(.waitingForVideo(false))
-    try expect(state.message?.contains("오디오 출력 장치") == true,
-               "video recovery hid the persistent nonfatal audio warning")
+    try expect(state.message == nil && state.status.contains("오디오를 사용할 수 없습니다"),
+               "audio expiry removed persistent status or left a fullscreen notice")
+    for _ in 0..<20 {
+        state.receive(.waitingForVideo(true)); state.receive(.waitingForVideo(false))
+        state.receive(.audioFailed("repeated synthetic detail"))
+        try expect(state.message == nil && state.audioNoticeID == nil,
+                   "video recovery replayed a consumed audio notice")
+    }
     state.receive(.reconnecting)
     state.receive(.stageFailed(name: "synthetic retry", errorCode: -1))
     state.receive(.stageStarting(name: "synthetic reconnect"))
@@ -39,6 +53,16 @@ func runDesktopRecoveryChecks() throws -> Int {
     try expect(state.phase == .waiting && state.message != nil, "wait reset hid recovery before fresh video")
     state.receive(.firstFrame)
     try expect(state.message == nil, "fresh recovery frame did not clear status")
+    state.receive(.audioFailed("synthetic receive failure"))
+    guard let recoveredNotice = state.audioNoticeID else {
+        throw ModelCheckFailure(message: "reconnect did not rearm its own audio notice")
+    }
+    state.acknowledgeAudioNotice(audioNotice)
+    try expect(recoveredNotice != audioNotice && state.audioNoticeID == recoveredNotice && state.message != nil,
+               "late prior-attempt audio expiry dismissed the new notice")
+    state.acknowledgeAudioNotice(recoveredNotice)
+    try expect(state.message == nil && state.status.contains("오디오를 사용할 수 없습니다"),
+               "current-attempt expiry changed the persistent audio status")
     state.receive(.reconnecting); state.receive(.firstFrame); state.receive(.reconnected)
     try expect(state.message == nil, "late reconnected event restored a stale waiting card")
     for terminal in [StreamEvent.stopped, .connectionTerminated(errorCode: -1)] {

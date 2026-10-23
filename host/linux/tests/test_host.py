@@ -219,6 +219,25 @@ class HostChecks(unittest.TestCase):
             host.start(dict(binary='/synthetic/symlink'), storage, 'Linux', 'synthetic', 'Synthetic-password-42!')
         self.assertEqual(spawn.call_args.args[0][:4], ['/usr/bin/setpriv', '--no-new-privs', '--', program])
 
+    def test_invalid_host_name_never_prepares_or_commits_credentials(self):
+        host, storage = OwnedHost(), Mock(root=self.store.root)
+        with patch('runtime.preflight') as preflight, patch.object(host, '_spawn') as spawn, self.assertRaises(Failure) as caught:
+            host.start({}, storage, '\ud55c' * 43, 'synthetic', 'Synthetic-password-42!')
+        self.assertEqual(caught.exception.key, 'name_length')
+        storage.prepare.assert_not_called(); storage.prepare_web_credentials.assert_not_called()
+        preflight.assert_not_called(); spawn.assert_not_called()
+
+    def test_preflight_recognizes_versioned_canonical_basename_without_live_proc(self):
+        from runtime import preflight
+        process = self.base / '1234'; process.mkdir(); (process / 'comm').write_bytes(b'sunshine-versio\n')
+        with patch('runtime.platform.freedesktop_os_release', return_value={}, create=True), patch('runtime.validate_session'), \
+             patch('runtime.resolve_pinned_binary', return_value='/synthetic/sunshine-version'), \
+             patch('runtime.metadata_command', return_value=b'fixture'), patch('runtime.os.access', return_value=True), \
+             patch('runtime.trusted_program'), patch('runtime.Path.iterdir', return_value=iter([process])), \
+             patch('runtime.socket.socket') as sockets, self.assertRaises(Failure) as caught:
+            preflight(dict(packageVersion='fixture'), env={})
+        self.assertEqual(caught.exception.key, 'existing'); sockets.assert_not_called()
+
     def test_public_export_accepts_destination_modes_but_keeps_private_source_policy(self):
         pin, opener = self.fixture_download(b'fixture!', 8)
         package = download(pin, self.store, threading.Event(), opener=opener)
@@ -245,6 +264,25 @@ class HostChecks(unittest.TestCase):
         with self.assertRaises(Failure) as caught: save_package(pin, package, self.base / 'private-source-refused.deb')
         self.assertEqual(caught.exception.key, 'storage')
         package.chmod(0o600)
+
+    def test_export_preserves_source_error_and_cleanup_failure_evidence(self):
+        import runtime
+        pin, opener = self.fixture_download(b'fixture!', 8)
+        package = download(pin, self.store, threading.Event(), opener=opener)
+        ordinary = runtime.ordinary_read; calls = [0]
+        def source_error(*args, **kwargs):
+            calls[0] += 1
+            if calls[0] == 2: raise OSError(errno.EIO, 'synthetic source failure')
+            return ordinary(*args, **kwargs)
+        with patch('runtime.ordinary_read', side_effect=source_error), self.assertRaises(Failure) as caught:
+            save_package(pin, package, self.base / 'source-failed.deb')
+        self.assertEqual(caught.exception.key, 'download')
+        with patch('runtime.publish_new', side_effect=PermissionError('synthetic destination')), \
+             patch('runtime.os.unlink', side_effect=OSError(errno.EIO, 'synthetic cleanup')), self.assertRaises(Failure) as caught:
+            save_package(pin, package, self.base / 'destination-failed.deb')
+        self.assertEqual(caught.exception.key, 'export_destination')
+        self.assertTrue(caught.exception.cleanup_failed)
+        self.assertNotIn('synthetic cleanup', str(caught.exception))
 
     def test_nonreaping_child_retains_ownership_and_failed_cleanup(self):
         events = []; host = OwnedHost()
@@ -498,6 +536,26 @@ class HostChecks(unittest.TestCase):
                     context.wrap_socket.assert_not_called()
                 finally: control.close()
 
+    def test_final_or_only_candidate_retains_remaining_shared_deadline(self):
+        for count in (1, 2):
+            control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
+            rows = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.' + str(i), 443]) for i in range(1, count + 1)]
+            sockets = [Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0)) for _ in rows]
+            elapsed = [0.0]
+            def ready(_readers, writers, _exceptional, timeout):
+                clock[0] += timeout
+                if writers == [sockets[-1]]:
+                    elapsed[0] += timeout
+                    if elapsed[0] >= 3: return [], writers, []
+                return [], [], []
+            try:
+                with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                     patch('runtime.socket.socket', side_effect=sockets), patch('runtime.select.select', side_effect=ready):
+                    self.assertIs(control._connect_tcp('fixture.invalid', 443, began + 20, None), sockets[-1])
+                self.assertGreaterEqual(elapsed[0], 3); self.assertLess(clock[0] - began, 20)
+                if count == 2: sockets[0].close.assert_called_once()
+            finally: control.close()
+
     def test_shutdown_finalizes_after_lost_ownership(self):
         events = []
         class Host:
@@ -633,8 +691,8 @@ sys.stdin.read()
                                 status=SimpleNamespace(set_text=values.append))
         namespace['exported_package'](state, Path('/synthetic/public package.deb'))
         self.assertEqual(state.package, 'synthetic-private-download')
-        self.assertEqual(values[0], "sudo apt install '/synthetic/public package.deb'")
-        self.assertIn('사본을 저장', values[1])
+        self.assertEqual(len(values), 1, 'public export must not replace the private install command')
+        self.assertIn('사본을 저장', values[0])
 
 
 if __name__ == '__main__': unittest.main()

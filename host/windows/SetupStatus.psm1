@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-only
 # Presentation only. Importing this module never probes or changes Windows state.
-function Get-SetupFailureText($ErrorRecord,[ValidateSet('General','DesktopUser','ElevatedToken')][string] $Context='General') {
+function Get-SetupFailureText($ErrorRecord,[ValidateSet('General','DesktopUser','ElevatedToken','VirtualDisplay')][string] $Context='General') {
     $cause=$ErrorRecord.Exception
     while ($cause) {
         if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -eq 1223) {
@@ -15,9 +15,40 @@ function Get-SetupFailureText($ErrorRecord,[ValidateSet('General','DesktopUser',
     if ($Context -ceq 'DesktopUser') {
         return '파일 자동 설정에는 활성화된 로컬 Windows 사용자 계정이 필요합니다. Microsoft 계정에 연결된 로컬 사용자는 지원합니다. 도메인·Entra 계정이나 로컬 사용자 확인이 제한된 조직 PC는 Windows 관리자에게 수동 통합을 요청하세요.'
     }
-    $message=[string]$ErrorRecord.Exception.Message
-    if ($message -match '[가-힣]') { return $message }
-    return 'Windows 설정을 완료하지 못했습니다. 표시된 Windows 오류와 기존 OpenSSH 설정·조직 보안 정책을 확인하세요. 기존 SSH 서버나 조직에서 관리하는 PC는 수동 통합·승인된 배포 안내를 사용하세요.'
+    # Exact authored messages only. Localized OS exceptions can contain Korean
+    # user names and paths; language or exception type is not a provenance marker.
+    $known=@(
+        '관리자 확인을 취소했습니다. 필요할 때 다시 시작하세요.',
+        '파일 자동 설정에는 활성화된 로컬 Windows 사용자 계정이 필요합니다. Microsoft 계정에 연결된 로컬 사용자는 지원합니다. 도메인·Entra 계정이나 로컬 사용자 확인이 제한된 조직 PC는 Windows 관리자에게 수동 통합을 요청하세요.',
+        'Sunshine 설치 파일 정보가 올바르지 않습니다. 새 Knot 배포 파일을 사용하세요.',
+        'Sunshine 설치 파일 검증에 실패했습니다. 실행하지 않았습니다. 새로 다운로드해 다시 시도하세요.',
+        'Sunshine 설치 결과를 확인하지 못했습니다. Windows 설치 안내를 확인하세요.',
+        'Sunshine 설치를 완료하지 못했습니다. Windows 설치 안내의 오류를 확인한 뒤 다시 시도하세요.',
+        '먼저 Wi-Fi 또는 Tailscale에 연결한 뒤 주소를 새로고침하세요.',
+        'Mac 설정 파일의 형식이나 공개 키·허용 주소를 확인하지 못했습니다. Mac의 파일 탭에서 새 설정 JSON을 저장해 다시 불러오세요.',
+        '먼저 Mac 설정 파일을 불러오세요.',
+        'Mac 설정 파일을 읽지 못했습니다. Mac에서 새로 저장한 JSON 파일을 불러오세요.',
+        'Windows 주소를 선택하세요.',
+        '설정을 완료하지 못했습니다. 관리자 창의 오류를 확인하세요. 기존 SSH가 있다면 수동 통합 안내를 사용하세요.',
+        'Windows 연결 결과가 현재 Mac 설정과 다릅니다. 설정 파일과 선택한 PC 주소를 다시 확인하세요.',
+        '설치 파일의 다운로드 주소를 확인하지 못했습니다.',
+        '설치 파일 크기를 확인하지 못했습니다.',
+        '설치 파일이 예상 크기를 초과했습니다.',
+        '설치 파일을 끝까지 내려받지 못했습니다.',
+        '설치 파일 다운로드를 완료하지 못했습니다.',
+        '다운로드 제한 시간 10분을 넘었습니다. 네트워크를 확인한 뒤 다시 시도하세요.',
+        '60초 동안 다운로드가 진행되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.'
+    )
+    $cause=$ErrorRecord.Exception
+    while ($cause) {
+        $message=[string]$cause.Message
+        if ($known -ccontains $message) { return $message }
+        $cause=$cause.InnerException
+    }
+    if ($Context -ceq 'VirtualDisplay') {
+        return '가상 화면 작업을 완료하지 못했습니다. Knot 배포 파일과 저장 폴더의 접근 권한·Windows 보안 정책을 확인한 뒤 상태를 새로고침하세요. 기존 드라이버와 복구 기록은 자동으로 덮어쓰지 않습니다.'
+    }
+    return 'Windows 설정을 완료하지 못했습니다. 저장 폴더의 접근 권한과 기존 OpenSSH 설정·조직 보안 정책을 확인하세요. 기존 SSH 서버나 조직에서 관리하는 PC는 수동 통합·승인된 배포 안내를 사용하세요.'
 }
 function Get-SunshineInstallResult([Nullable[int]] $ExitCode,[switch] $Broker) {
     $state='Failed'; $text='Sunshine 설치를 완료하지 못했습니다. Windows 설치 안내의 오류를 확인한 뒤 다시 시도하세요.'

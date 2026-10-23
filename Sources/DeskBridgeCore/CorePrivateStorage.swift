@@ -6,7 +6,7 @@ import Foundation
 public enum CorePrivateStorageFailure: LocalizedError, Sendable {
     case unsafeStorage
     public var errorDescription: String? {
-        "앱의 저장 폴더나 파일을 안전하게 사용할 수 없습니다. 소유자, 접근 권한과 공유 설정을 확인한 뒤 다시 시도하세요."
+        "앱의 저장 폴더나 파일을 안전하게 사용할 수 없습니다. 소유자·접근 권한·공유 설정과 파일 형식·크기를 확인한 뒤 다시 시도하세요."
     }
 }
 

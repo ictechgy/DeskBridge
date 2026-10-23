@@ -9,7 +9,7 @@ class BuildSnapshotError(ValueError):
 
 REQUIRED_CHECK_STAGES = {"synthetic-checks", "synthetic-model-checks", "build-contract-checks",
                          "input-batching-checks", "control-hardening-checks", "desktop-input-backpressure-checks",
-                         "video-frame-lifecycle-checks", "media-receive-lifecycle-checks",
+                         "video-frame-lifecycle-checks", "media-receive-lifecycle-checks", "audio-notice-power-checks",
                          "rtsp-replay-checks", "inspect-app-entitlements", "inspect-dependencies",
                          "compile-host-supervisor", "sign-host-supervisor", "verify-host-supervisor",
                          "inspect-host-supervisor-entitlements", "inspect-host-supervisor-dependencies",
@@ -132,10 +132,12 @@ def validate_completed_build(root, build, require_release=False):
                 checks.get("status") != "passed" or model_checks.get("status") != "passed"):
             raise BuildSnapshotError("A completed build with both check suites is required")
         if (lifetime_checks.get("status") != "passed" or type(lifetime_checks.get("checks")) is not int or
-                lifetime_checks["checks"] < 37 or
+                lifetime_checks["checks"] < 41 or
                 any(lifetime_checks.get(key) is not True for key in (
                     "actualMacHostChild", "nativeSupervisor", "freshSyntheticOnly", "appAbruptDeath",
-                    "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup")) or
+                    "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup",
+                    "pinnedRestartForkDenied", "forkVforkSpawnDenied", "normalThreadsAndFiles",
+                    "unrestrictedChildModeRefused", "wrapperAndProfileUnavailableRefused")) or
                 lifetime_checks.get("productionHostLaunched") is not False):
             raise BuildSnapshotError("Checked synthetic native host lifetime proof is required")
         if require_release and completed["configuration"] != "release":
@@ -144,6 +146,8 @@ def validate_completed_build(root, build, require_release=False):
             raise BuildSnapshotError("App bundle changed after the successful build; rebuild")
         if completed.get("hostSupervisor") != host_supervisor_snapshot(root / "dist/Knot.app"):
             raise BuildSnapshotError("Host supervisor differs from its checked build; rebuild")
+        if lifetime_checks.get("testedSupervisorSHA256") != completed["hostSupervisor"]["sha256"]:
+            raise BuildSnapshotError("Host supervisor lifetime proof belongs to a different helper; rebuild")
         return completed, checks
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise BuildSnapshotError("Incomplete or invalid build evidence; rebuild") from error

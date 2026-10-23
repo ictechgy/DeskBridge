@@ -355,8 +355,8 @@ sys.stdout.buffer.write(data)
         # families so several unreachable IPv6 rows cannot starve IPv4.
         first = [row for row in rows if row[0] == rows[0][0]]
         other = [row for row in rows if row[0] != rows[0][0]]
-        ordered = (row for pair in itertools.zip_longest(first, other) for row in pair if row is not None)
-        for family, kind, protocol, address in ordered:
+        ordered = [row for pair in itertools.zip_longest(first, other) for row in pair if row is not None]
+        for index, (family, kind, protocol, address) in enumerate(ordered):
             self._remaining(expires)
             sock = None
             try:
@@ -372,7 +372,9 @@ sys.stdout.buffer.write(data)
                 if status not in (0, errno.EISCONN):
                     if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
                         raise OSError(status, os.strerror(status))
-                    attempt_expires = min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
+                    # Reserve fallback time only while another candidate remains.
+                    # A slow final/only route retains the shared connection budget.
+                    attempt_expires = expires if index == len(ordered) - 1 else min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
                     self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
                     status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
                     if status: raise OSError(status, os.strerror(status))
@@ -502,13 +504,14 @@ def preflight(pin, env=None):
     if not os.access('/dev/uinput', os.R_OK | os.W_OK):
         raise Failure('input')
     trusted_program('/usr/bin/setpriv')
+    expected_commands = {b'sunshine', os.fsencode(Path(program).name)[:15]}
     # Detect any existing Sunshine without reading argv/environment/logs/configuration.
     for index, entry in enumerate(Path('/proc').iterdir()):
         if index > 32768: raise Failure('existing')
         if entry.name.isdecimal():
             try:
                 with (entry / 'comm').open('rb') as f:
-                    if f.read(128).strip() == b'sunshine': raise Failure('existing')
+                    if f.read(128).strip() in expected_commands: raise Failure('existing')
             except (FileNotFoundError, PermissionError, ProcessLookupError):
                 pass
     ports = []
@@ -537,10 +540,11 @@ class OwnedHost:
     def start(self, pin, store, name, username='', password=''):
         with self.lock:
             if self.child is not None: raise Failure('existing')
+            host_arguments = arguments(store.root, name)
             env, program = preflight(pin)
             store.prepare()
             store.prepare_web_credentials(username, password)
-            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', program] + arguments(store.root, name)
+            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', program] + host_arguments
             self._spawn(argv, child_environment(env, store.root))
 
     def _spawn(self, argv, env):
@@ -611,26 +615,42 @@ def save_package(pin, package, destination):
         raise Failure('download')
     destination = Path(destination)
     temporary = None
+    primary = None
     try:
-        fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
-        with os.fdopen(fd, 'wb') as out, ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
-            while data := source.read(65536): out.write(data)
-            out.flush(); os.fsync(out.fileno())
-        # This is a public installer copy, possibly on a mode-less removable
-        # filesystem. The managed source remains private and is never replaced.
         try:
-            verified = digest_file(temporary, pin['bytes'], os.getuid())
-        except (OSError, Failure):
-            raise Failure('export_destination') from None
-        if verified != (pin['bytes'], pin['sha256']): raise Failure('export_destination')
-        publish_new(temporary, destination)
-        return destination
-    except FileExistsError:
-        raise Failure('collision') from None
-    except OSError:
-        raise Failure('export_destination') from None
+            with ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
+                try:
+                    fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
+                    with os.fdopen(fd, 'wb') as out:
+                        while True:
+                            try: data = source.read(65536)
+                            except OSError: raise Failure('download') from None
+                            if not data: break
+                            out.write(data)
+                        out.flush(); os.fsync(out.fileno())
+                    # The public copy is not the privileged installation source.
+                    try: verified = digest_file(temporary, pin['bytes'], os.getuid())
+                    except (OSError, Failure): raise Failure('export_destination') from None
+                    if verified != (pin['bytes'], pin['sha256']): raise Failure('export_destination')
+                    publish_new(temporary, destination)
+                    return destination
+                except FileExistsError:
+                    raise Failure('collision') from None
+                except OSError:
+                    raise Failure('export_destination') from None
+        except OSError:
+            raise Failure('download') from None
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        if temporary is not None and os.path.lexists(temporary): os.unlink(temporary)
+        if temporary is not None and os.path.lexists(temporary):
+            try: os.unlink(temporary)
+            except OSError:
+                if primary is None: raise Failure('export_destination') from None
+                # Preserve the authored primary failure, recording cleanup failure
+                # without embedding paths or raw OS text into user guidance.
+                primary.cleanup_failed = True
 
 
 def cleanup_owned(host, store, finished, failed):

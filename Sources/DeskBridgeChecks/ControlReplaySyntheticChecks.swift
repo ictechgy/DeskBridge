@@ -113,6 +113,88 @@ private struct ControlReplaySyntheticChecks {
                     && coalescedDelivery == [40] && coalesced.inboundOrder[0]?.next == 2,
                     "a rejected complete command stopped or ACKed a later coalesced valid command")
 
+        // Unencrypted ENet peer control uses channel 0xFF. A forged peer command
+        // on a data channel must not ACK away an encrypted reliable with those
+        // labels. Every complete command must still preserve coalesced parsing.
+        let peerCommands: [UInt8] = [Enet.cmdVerifyConnect, Enet.cmdPing,
+                                     Enet.cmdBandwidthLimit, Enet.cmdThrottleConfigure]
+        let ignoredDataCommands: [UInt8] = [Enet.cmdSendUnreliable, Enet.cmdSendUnsequenced,
+                                            Enet.cmdSendFragment, Enet.cmdSendUnreliableFragment]
+        for command in peerCommands + ignoredDataCommands {
+            for channel: UInt8 in [0, 1, Enet.peerChannelID] {
+                let routed = try makePeer()
+                var values: [UInt16] = []
+                routed.onRumble = { _, value, _ in values.append(value) }
+                let dataChannel: UInt8 = channel == Enet.peerChannelID ? 0 : channel
+                let expectedValue = UInt16(100 + command)
+                let data = datagram(try frame(sequence: UInt32(expectedValue)),
+                                    channel: dataChannel, reliable: 1, sentTime: true)
+                let beforeAck = SyntheticControlIO.shared.ackCount
+                let beforeVerify = SyntheticControlIO.shared.verifyCount
+                routed.onDatagram(commandDatagram(command, body: commandBody(command),
+                                                  channel: channel, reliable: 1) + data.dropFirst(4))
+                let peerControl = peerCommands.contains(command) && channel == Enet.peerChannelID
+                try require(SyntheticControlIO.shared.ackCount == beforeAck + (peerControl ? 2 : 1),
+                            "unencrypted commands may only ACK allowlisted peer-control labels")
+                try require(values == [expectedValue] && routed.inboundOrder[dataChannel]?.next == 2,
+                            "ignored/wrong-channel commands swallowed a coalesced authenticated reliable")
+                try require(routed.inboundReliableHistory.count == 1,
+                            "unencrypted command occupied authenticated duplicate history")
+                let verifyRouted = command == Enet.cmdVerifyConnect && channel == Enet.peerChannelID
+                try require(SyntheticControlIO.shared.verifyCount == beforeVerify + (verifyRouted ? 1 : 0)
+                            && routed.connected == verifyRouted,
+                            "wrong-channel VERIFY_CONNECT reached the handshake handler")
+            }
+        }
+        for command in peerCommands {
+            let unflagged = try makePeer()
+            let beforeAck = SyntheticControlIO.shared.ackCount
+            unflagged.onDatagram(commandDatagram(command, body: commandBody(command),
+                                                 channel: Enet.peerChannelID, reliable: 1,
+                                                 acknowledge: false))
+            try require(SyntheticControlIO.shared.ackCount == beforeAck,
+                        "peer-control commands without ACKNOWLEDGE were ACKed")
+        }
+        // A truncated fixed/declared body ends this datagram without an ACK or
+        // state mutation; it must not poison the next complete datagram either.
+        for command in (peerCommands + ignoredDataCommands).filter({ $0 != Enet.cmdPing }) {
+            for channel: UInt8 in [0, 1, Enet.peerChannelID] {
+                let truncated = try makePeer()
+                let beforeAck = SyntheticControlIO.shared.ackCount
+                let beforeVerify = SyntheticControlIO.shared.verifyCount
+                truncated.onDatagram(commandDatagram(command, body: Array(commandBody(command).dropLast()),
+                                                      channel: channel, reliable: 1))
+                try require(SyntheticControlIO.shared.ackCount == beforeAck
+                            && SyntheticControlIO.shared.verifyCount == beforeVerify
+                            && !truncated.connected && truncated.inboundOrder.isEmpty
+                            && truncated.inboundReliableHistory.count == 0,
+                            "a truncated peer/data command ACKed or mutated admission state")
+                try inject(truncated, try frame(sequence: 200 + UInt32(command)), reliable: 1)
+                try require(truncated.inboundOrder[0]?.next == 2,
+                            "a malformed preceding datagram poisoned the next reliable")
+
+                let trailing = try makePeer()
+                let validPrefix = datagram(try frame(sequence: 220 + UInt32(command)),
+                                           channel: 0, reliable: 1, sentTime: true)
+                let badSuffix = commandDatagram(command, body: Array(commandBody(command).dropLast()),
+                                                 channel: channel, reliable: 2)
+                let beforeTrailing = SyntheticControlIO.shared.ackCount
+                trailing.onDatagram(validPrefix + badSuffix.dropFirst(4))
+                try require(SyntheticControlIO.shared.ackCount == beforeTrailing + 1
+                            && trailing.inboundOrder[0]?.next == 2
+                            && trailing.inboundReliableHistory.count == 1 && !trailing.connected,
+                            "a truncated coalesced suffix ACKed or discarded the admitted prefix")
+            }
+        }
+        let unknown = try makePeer()
+        let beforeUnknown = SyntheticControlIO.shared.ackCount
+        let validAfterUnknown = datagram(try frame(sequence: 250), channel: 0, reliable: 1, sentTime: true)
+        unknown.onDatagram(commandDatagram(15, body: [], channel: Enet.peerChannelID, reliable: 1)
+                           + validAfterUnknown.dropFirst(4))
+        try require(SyntheticControlIO.shared.ackCount == beforeUnknown && unknown.inboundOrder.isEmpty,
+                    "an unknown command was ACKed or parsed through an unknowable body boundary")
+        try inject(unknown, try frame(sequence: 250), reliable: 1)
+
         // A callback may tear down the transport; its admitted reliable must be ACKed first.
         let closing = try makePeer()
         let beforeClose = SyntheticControlIO.shared.ackCount
@@ -245,6 +327,29 @@ private struct ControlReplaySyntheticChecks {
         bytes.u8(channel); bytes.u16BE(reliable); bytes.u16BE(UInt16(envelope.count)); bytes.append(envelope)
         return bytes.bytes
     }
+
+    static func commandDatagram(_ command: UInt8, body: [UInt8], channel: UInt8,
+                                reliable: UInt16, acknowledge: Bool = true) -> [UInt8] {
+        var bytes = ByteWriter()
+        bytes.u16BE(Enet.headerFlagSentTime); bytes.u16BE(123)
+        bytes.u8(command | (acknowledge ? Enet.flagAcknowledge : 0))
+        bytes.u8(channel); bytes.u16BE(reliable); bytes.append(body)
+        return bytes.bytes
+    }
+
+    static func commandBody(_ command: UInt8) -> [UInt8] {
+        switch command {
+        case Enet.cmdVerifyConnect: return [UInt8](repeating: 0, count: 40)
+        case Enet.cmdPing: return []
+        case Enet.cmdBandwidthLimit: return [UInt8](repeating: 0, count: 8)
+        case Enet.cmdThrottleConfigure: return [UInt8](repeating: 0, count: 12)
+        case Enet.cmdSendUnreliable, Enet.cmdSendUnsequenced:
+            return [0, 1, 0, 3, 0xaa, 0xbb, 0xcc]
+        case Enet.cmdSendFragment, Enet.cmdSendUnreliableFragment:
+            return [0, 1, 0, 3] + [UInt8](repeating: 0, count: 16) + [0xaa, 0xbb, 0xcc]
+        default: preconditionFailure("unsupported synthetic command")
+        }
+    }
 }
 
 // Inert dependencies replace unrelated logging, telemetry and handshake, never the
@@ -253,8 +358,10 @@ private final class SyntheticControlIO: @unchecked Sendable {
     static let shared = SyntheticControlIO()
     private let lock = NSLock()
     private var acknowledgements = 0
+    private var verifications = 0
     private var lastAcknowledgement: [UInt8]?
     var ackCount: Int { lock.withLock { acknowledgements } }
+    var verifyCount: Int { lock.withLock { verifications } }
     var lastAck: [UInt8]? { lock.withLock { lastAcknowledgement } }
     func record(_ commands: [[UInt8]]) {
         lock.withLock {
@@ -263,12 +370,19 @@ private final class SyntheticControlIO: @unchecked Sendable {
             if let last = acks.last { lastAcknowledgement = last }
         }
     }
+    func recordVerify() { lock.withLock { verifications += 1 } }
 }
 extension EnetControlChannel {
     static let controlTickMs: UInt32 = 20
     static func msSince(_ before: UInt32, now: UInt32) -> UInt32 { now &- before }
     func declarePeerDead(code: Int32, reason: DiagMessage) { fatalError("synthetic peer must remain alive") }
-    func handleVerifyConnect(_ reader: inout ByteReader) { fatalError("no handshake in replay fixtures") }
+    // This inert consumer tests parser routing/body isolation only. It does not
+    // substitute for the production handshake's connectID/throttle validation.
+    func handleVerifyConnect(_ reader: inout ByteReader) {
+        precondition(reader.take(40) != nil && reader.remaining == 0)
+        SyntheticControlIO.shared.recordVerify()
+        connected = true
+    }
     func wrapDatagram(commands: [[UInt8]], sentTime: Bool, recordRtt: Bool = true) -> [UInt8] {
         SyntheticControlIO.shared.record(commands)
         return commands.flatMap { $0 }

@@ -197,7 +197,17 @@ Expect ($enableSource.Contains('Invoke-ProtectedCompilation -TypeDefinition')) '
 $syntheticError=[pscustomobject]@{Exception=[Exception]::new('synthetic platform failure')}
 Expect ((Get-SetupFailureText $syntheticError) -notmatch '네트워크') 'Unknown failures must not be classified as network errors'
 $koreanError=[pscustomobject]@{Exception=[Exception]::new('합성 오류 안내')}
-Expect ((Get-SetupFailureText $koreanError) -ceq '합성 오류 안내') 'Actionable Korean failures are preserved'
+Expect ((Get-SetupFailureText $koreanError) -notmatch '합성 오류') 'Unknown Korean failures do not become authored guidance'
+$pathError=[pscustomobject]@{Exception=(New-Object UnauthorizedAccessException "'C:\Users\합성사용자\x' 경로에 대한 액세스가 거부되었습니다.")}
+Expect ((Get-SetupFailureText $pathError) -notmatch '합성사용자|C:\\') 'Localized OS paths must not reach setup guidance'
+$authored='Sunshine 설치 파일 정보가 올바르지 않습니다. 새 Knot 배포 파일을 사용하세요.'
+try { throw $authored } catch { $authoredError=$_ }
+Expect ((Get-SetupFailureText $authoredError) -ceq $authored) 'Exact authored script guidance is preserved'
+$downloadText='60초 동안 다운로드가 진행되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.'
+$downloadError=[pscustomobject]@{Exception=(New-Object InvalidOperationException 'synthetic wrapper',(New-Object TimeoutException $downloadText))}
+Expect ((Get-SetupFailureText $downloadError) -ceq $downloadText) 'Exact authored downloader guidance survives wrappers'
+Expect ((Get-SetupFailureText $syntheticError -Context VirtualDisplay) -match '가상 화면.*복구 기록' -and (Get-SetupFailureText $syntheticError -Context VirtualDisplay) -notmatch '네트워크|OpenSSH') 'Unknown display failures retain display-specific recovery guidance'
+Expect ((Get-SetupFailureText $downloadError -Context VirtualDisplay) -ceq $downloadText) 'Known download failures retain their specific guidance in display setup'
 Expect ((Get-SetupFailureText $syntheticError -Context DesktopUser) -match '로컬.*Entra') 'Desktop identity refusal explains the supported account type'
 Expect ((Get-SetupFailureText $syntheticError -Context ElevatedToken) -match 'UAC.*Administrator') 'Elevated startup refusal explains environments without a filtered token'
 $cancelledError=[pscustomobject]@{Exception=[Exception]::new('synthetic wrapper',[ComponentModel.Win32Exception]::new(1223))}

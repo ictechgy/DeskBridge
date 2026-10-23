@@ -141,7 +141,7 @@ $install = Add-Button 'Sunshine 설치' {
             }
             if ($folder -and (Test-Path -LiteralPath $folder)) {
                 try { Remove-Item -LiteralPath $folder -Recurse -Force }
-                catch { $status.Text='임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
+                catch { $status.Text += [Environment]::NewLine+'임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
             }
         } finally { Set-Busy $false }
     }
@@ -276,7 +276,7 @@ function Invoke-FileSetup([string] $Operation) {
         if ($LauncherPath -and $process.ExitCode -eq 2) { $status.Text='설정을 완료하지 못했습니다. 표시된 오류 안내를 확인한 뒤 다시 시도하세요.'; return }
         if ($null -eq $process.ExitCode -or $process.ExitCode -ne 0) { throw '설정을 완료하지 못했습니다. 관리자 창의 오류를 확인하세요. 기존 SSH가 있다면 수동 통합 안내를 사용하세요.' }
         if (-not $LauncherPath) { $status.Text='수동 설정 명령이 종료되었습니다. Ctrl+C로 중단해도 성공 코드가 반환될 수 있으므로 관리자 창과 실제 설정에서 완료 여부를 확인하세요. 자동 완료 확인과 연결 파일 저장은 배포용 EXE를 사용하세요.'; return }
-        if ($Operation -eq 'DisableFiles') { $status.Text='파일 접속을 해제했습니다. 공유 파일은 유지됩니다.'; return }
+        if ($Operation -eq 'DisableFiles') { $status.Text='Knot 파일 접속을 해제했습니다. 공유 파일은 유지됩니다. OpenSSH 설치와 기존 서비스 시작·방화벽 정책은 그대로 남거나 원래 상태로 복원될 수 있습니다. 필요하지 않다면 Windows 관리자와 기존 설정을 확인하세요.'; return }
         $replyPath=Join-Path $env:ProgramData 'DeskBridgeSetup\connection.json'
         $reply=Get-Content -LiteralPath $replyPath -Raw | ConvertFrom-Json
         if ($reply.requestID -cne $expected.requestID -or $reply.clientPublicKey -cne $expected.clientPublicKey -or $reply.address -cne $selectedAddress) { throw 'Windows 연결 결과가 현재 Mac 설정과 다릅니다. 설정 파일과 선택한 PC 주소를 다시 확인하세요.' }

@@ -75,6 +75,8 @@ func runConnectionDiscoveryChecks(temporary: URL) async throws -> Int {
     _ = InvitationRouting.review(macInvitation.url.absoluteString, windows: model, linux: nil)
     try expect(model.pendingInvitation == nil && model.invitationError != nil && model.address == saved.address,
                "Mac sharing invitation was accepted into the Windows desktop role")
+    try expect(model.invitationError?.contains("Windows의 Knot") == true,
+               "Mac sharing link gave a nonexistent Mac-client tab as recovery guidance")
     model.invitationError = nil
     try expect(!model.nearby.searching && model.nearby.hosts.isEmpty, "constructing models starts no network search")
     let invalidLinkPage = InvitationRouting.review("deskbridge://connect?v=invalid", windows: model, linux: nil)

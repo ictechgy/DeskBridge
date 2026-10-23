@@ -51,8 +51,6 @@ final class IdentityManager {
     func generateUniqueID() throws -> String { uidGenerations += 1; return "0123456789abcdef0123456789abcdef" }
     func generateKeyPairAndCert() throws -> (String, String) { generations += 1; return ("CERT", "KEY") }
 }
-enum IdentityStorageError: Error { case unavailable, defaultsUnavailable, unsafeStorage }
-
 let fixture = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
 let marker = fixture.appendingPathComponent("keygen-invoked")
 var checks = 0
@@ -64,6 +62,11 @@ func refused(_ label: String, _ body: () throws -> Void) throws {
     catch IdentityStorageError.unsafeStorage { checks += 1; return }
     catch { fatalError("unexpected failure for \(label): \(type(of: error))") }
     fatalError("unsafe storage accepted: \(label)")
+}
+func incomplete(_ label: String, _ body: () throws -> Void) throws {
+    do { try body() } catch IdentityStorageError.incompleteIdentity { checks += 1; return }
+    catch { fatalError("wrong incomplete-identity failure for \(label): \(type(of: error))") }
+    fatalError("incomplete identity accepted: \(label)")
 }
 func fresh(_ name: String) throws -> URL {
     let url = fixture.appendingPathComponent(name, isDirectory: true)
@@ -241,13 +244,14 @@ for (name, cert, key, unique) in [("partial", "CERT", nil, "UID"), ("empty-cert"
     if let key { try FileIdentityStore.write(Data(key.utf8), account: IdentityManager.accountKey, base: base) }
     try FileIdentityStore.write(Data(unique.utf8), account: IdentityManager.accountUID, base: base)
     let manager = IdentityManager(base)
-    try refused("malformed identity \(name)") { _ = try manager.load() }
+    if name == "partial" { try incomplete("partial identity") { _ = try manager.load() } }
+    else { try refused("malformed identity \(name)") { _ = try manager.load() } }
     try expect(manager.generations == 0, "malformed identity not regenerated")
 }
 let onlyUID = try fresh("uid-only")
 try FileIdentityStore.write(Data("UID".utf8), account: IdentityManager.accountUID, base: onlyUID)
 let onlyUIDManager = IdentityManager(onlyUID)
-try refused("UID-only partial identity") { _ = try onlyUIDManager.load() }
+try incomplete("UID-only partial identity") { _ = try onlyUIDManager.load() }
 try expect(onlyUIDManager.generations == 0, "UID-only partial identity not regenerated")
 let freshIdentity = IdentityManager(fixture.appendingPathComponent("fresh-generation"))
 _ = try freshIdentity.load(); try expect(freshIdentity.generations == 1, "genuine absence permits generation")
@@ -262,7 +266,7 @@ for hasPEMs in [false, true] {
     manager.defaults!.set(IdentityManager.fileStorageVersion, forKey: IdentityManager.fileStorageFlag)
     manager.defaults!.set("LEGACY-CERT", forKey: IdentityKey.certificate)
     manager.defaults!.set("LEGACY-KEY", forKey: IdentityKey.privateKey)
-    try refused("published identity missing components") { _ = try manager.load() }
+    try incomplete("published identity missing components") { _ = try manager.load() }
     try expect(manager.generations == 0 && manager.uidGenerations == 0 && manager.cached == nil,
                "published identity regenerated or cached replacement material")
     try expect(manager.defaults!.string(forKey: IdentityKey.privateKey) == "LEGACY-KEY" &&
@@ -279,12 +283,87 @@ try FileIdentityStore.write(Data("KEY".utf8), account: IdentityManager.accountKe
 let legacyManager = IdentityManager(legacyPEMs)
 try expect(try legacyManager.load().certPEM == "CERT" && legacyManager.generations == 0 && legacyManager.uidGenerations == 1,
            "unpublished migration no longer preserves its valid PEM pair")
+// Missing material has a distinct recovery error. Exercise every refused subset
+// of the three components, preserving both file bytes and in-memory defaults.
+// Mask 0 without a flag is a fresh install; mask 3 without a flag remains the
+// explicit valid-PEM legacy migration above. Neither contract changes here.
+let components = [(IdentityManager.accountCert, Data("CERT".utf8)),
+                  (IdentityManager.accountKey, Data("KEY".utf8)),
+                  (IdentityManager.accountUID, Data("UID".utf8))]
+for established in [false, true] {
+    for mask in 0..<7 where established || (mask != 0 && mask != 3) {
+        let base = try fresh("incomplete-matrix-\(established)-\(mask)")
+        for (index, component) in components.enumerated() where mask & (1 << index) != 0 {
+            try FileIdentityStore.write(component.1, account: component.0, base: base)
+        }
+        let manager = IdentityManager(base)
+        if established { manager.defaults!.set(IdentityManager.fileStorageVersion, forKey: IdentityManager.fileStorageFlag) }
+        manager.defaults!.set("RECOVERY-CERT", forKey: IdentityKey.certificate)
+        manager.defaults!.set("RECOVERY-KEY", forKey: IdentityKey.privateKey)
+        manager.defaults!.set("RECOVERY-UID", forKey: IdentityKey.uniqueID)
+        manager.defaults!.set("unrelated", forKey: "other-setting")
+        let beforeDefaults = NSDictionary(dictionary: manager.defaults!.values)
+        let beforeEntries = try FileManager.default.contentsOfDirectory(atPath: base.path)
+        try incomplete("component mask \(mask), established \(established)") { _ = try manager.load() }
+        try expect(manager.generations == 0 && manager.uidGenerations == 0 && manager.cached == nil,
+                   "incomplete identity generated or cached replacement material")
+        try expect(beforeDefaults.isEqual(NSDictionary(dictionary: manager.defaults!.values)),
+                   "incomplete identity changed defaults or initialized flag")
+        try expect(try FileManager.default.contentsOfDirectory(atPath: base.path) == beforeEntries,
+                   "incomplete identity created or removed a storage directory")
+        for (index, component) in components.enumerated() {
+            let expected: Data? = mask & (1 << index) != 0 ? component.1 : nil
+            try expect(try FileIdentityStore.read(account: component.0, base: base) == expected,
+                       "incomplete identity changed existing or absent component bytes")
+        }
+    }
+}
+// Invalid bytes remain unsafeStorage even when a different component is missing.
+for (index, component) in [(IdentityManager.accountCert, Data()),
+                            (IdentityManager.accountKey, Data([0xff])),
+                            (IdentityManager.accountUID, Data(" \n".utf8))].enumerated() {
+    let base = try fresh("malformed-partial-\(index)")
+    try FileIdentityStore.write(component.1, account: component.0, base: base)
+    let manager = IdentityManager(base)
+    try refused("malformed partial bytes") { _ = try manager.load() }
+    try expect(manager.generations == 0 && manager.uidGenerations == 0,
+               "malformed partial identity regenerated material")
+    try expect(try FileIdentityStore.read(account: component.0, base: base) == component.1,
+               "malformed partial bytes changed")
+}
 try noKeygen("all refusal tests precede real keygen")
 let sshBase = try fresh("ssh-success"), generated = try SSHKeyManager.generate(in: sshBase)
 try expect(generated.publicKey.hasPrefix("ssh-ed25519 "), "fresh SSH key success")
 try expect(FileManager.default.fileExists(atPath: marker.path), "wrapper proves successful keygen invocation")
 var keyStat = stat(); guard lstat(generated.privateKey.path, &keyStat) == 0 else { fatalError("generated key") }
 try expect(keyStat.st_mode & 0o777 == 0o600 && keyStat.st_nlink == 1, "generated private key mode/link")
+for mask in ["027", "002", "077"] {
+    setenv("DESKBRIDGE_FIXTURE_UMASK", mask, 1)
+    let base = try fresh("ssh-umask-" + mask)
+    let key = try SSHKeyManager.generate(in: base)
+    var pub = stat(), priv = stat()
+    guard lstat(key.privateKey.path + ".pub", &pub) == 0, lstat(key.privateKey.path, &priv) == 0 else { fatalError("umask key fixture") }
+    try expect(pub.st_mode & 0o7777 == 0o600 && priv.st_mode & 0o7777 == 0o600,
+               "child umask must preserve successful private key publication")
+}
+unsetenv("DESKBRIDGE_FIXTURE_UMASK")
+for keepExtra in [false, true] {
+    setenv("DESKBRIDGE_FIXTURE_FAIL", "1", 1)
+    if keepExtra { setenv("DESKBRIDGE_FIXTURE_EXTRA", "1", 1) }
+    let base = try fresh("ssh-partial-failure-\(keepExtra)")
+    var failed = false
+    do { _ = try SSHKeyManager.generate(in: base) } catch { failed = true }
+    unsetenv("DESKBRIDGE_FIXTURE_FAIL"); unsetenv("DESKBRIDGE_FIXTURE_EXTRA")
+    try expect(failed, "nonzero keygen status was published")
+    let children = try FileManager.default.contentsOfDirectory(at: base.appendingPathComponent("SSH"), includingPropertiesForKeys: nil)
+    if keepExtra {
+        try expect(children.count == 1, "unexpected content was recursively deleted")
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: children[0].path)
+        try expect(remaining == ["unexpected"], "partial private/public keys survived failure cleanup")
+    } else {
+        try expect(children.isEmpty, "failed keygen left an orphan private generation")
+    }
+}
 print("private storage checks passed: \(checks) synthetic assertions")
 '''
 
@@ -295,11 +374,24 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-private-storage-", dir="/pri
     fixture.mkdir(mode=0o700)
     wrapper = temp / "keygen-fixture"
     # Paths are generated locally and passed as argv; no user data is interpolated.
-    wrapper.write_text('#!/bin/sh\nprintf invoked > "$DESKBRIDGE_FIXTURE_MARKER"\nexec /usr/bin/ssh-keygen "$@"\n')
+    wrapper.write_text('''#!/bin/sh
+printf invoked > "$DESKBRIDGE_FIXTURE_MARKER"
+umask "${DESKBRIDGE_FIXTURE_UMASK:-022}"
+/usr/bin/ssh-keygen "$@" || exit $?
+if [ "${DESKBRIDGE_FIXTURE_EXTRA:-0}" = 1 ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = -f ]; then printf synthetic > "${2%/*}/unexpected"; break; fi
+    shift
+  done
+fi
+if [ "${DESKBRIDGE_FIXTURE_FAIL:-0}" = 1 ]; then exit 1; fi
+''')
     wrapper.chmod(0o700)
     identity = (ROOT / "Vendor/Glimmer/GlimmerEngine/Network/Identity.swift").read_text()
     extracted = identity.split("// MARK: - IdentityManager", 1)[0]
     extracted = extracted.replace("private enum IdentityPrivateStorage", "enum IdentityPrivateStorage")
+    # Compile the actual public error cases too; do not mirror their taxonomy.
+    extracted += "\npublic enum IdentityStorageError" + identity.split("public enum IdentityStorageError", 1)[1]
     loading = (ROOT / "Vendor/Glimmer/GlimmerEngine/Network/Identity+Loading.swift").read_text()
     loading = loading.replace("UserDefaults", "FixtureDefaults")
     ssh = (ROOT / "Sources/DeskBridgeCore/SSHKeyManager.swift").read_text()

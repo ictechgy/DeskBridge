@@ -45,7 +45,7 @@ public enum MacHostPolicy {
     }
     public static let desktopApplications = Data("{\"env\":{},\"apps\":[{\"name\":\"Desktop\",\"cmd\":\"\"}]}\n".utf8)
     public enum Failure: Error, LocalizedError {
-        case invalidConfiguration, installationRequired, untrustedApplication, existingHost, privateStorage, exited, download, collision
+        case invalidConfiguration, installationRequired, untrustedApplication, existingHost, privateStorage, helperUnavailable, exited, download, collision
         public var errorDescription: String? {
             switch self {
             case .invalidConfiguration: "이 Mac의 공유 설정을 만들 수 없습니다. Mac 이름과 앱 저장 위치를 확인하세요."
@@ -53,6 +53,7 @@ public enum MacHostPolicy {
             case .untrustedApplication: "Sunshine의 버전 또는 공식 서명을 확인하지 못했습니다. 안내된 공식 DMG로 다시 설치하세요. 보안 설정을 해제하지 마세요."
             case .existingHost: "Sunshine이 이미 실행 중입니다. 기존 Sunshine을 직접 종료한 뒤 다시 시작하세요. 기존 설정과 프로세스는 변경하지 않습니다."
             case .privateStorage: "공유 설정 폴더의 소유권 또는 접근 권한을 확인하지 못했습니다. 공유를 시작하지 않았습니다."
+            case .helperUnavailable: "Knot 공유 도우미를 안전하게 시작하지 못했습니다. 공식 Knot 패키지와 macOS·조직의 실행 정책을 확인한 뒤 다시 설치하거나 실행하세요. 공유를 시작하지 않았습니다."
             case .exited: "Sunshine이 종료되었습니다. 화면 기록·손쉬운 사용 권한, 설치 버전과 포트 충돌을 확인한 뒤 다시 시작하세요."
             case .download: "공식 Sunshine 다운로드를 확인하지 못했습니다. 네트워크를 확인하고 다시 받으세요."
             case .collision: "같은 이름의 파일이 이미 있습니다. 다른 위치나 이름을 선택하세요."

@@ -81,6 +81,7 @@
 - Minimum 880x620, split sidebar/detail; streaming window fits selected remote resolution with letterboxing.
 - Native fullscreen Primary only, no all-Spaces borderless window.
 - The fullscreen window shows a small top-center, semantic-color text card while connecting, waiting for video or reconnecting. Reconnecting identifies the frozen picture as the last frame; a recovered transport still waits for a fresh frame. The card exposes readable accessibility text, uses no animation and never takes keyboard or pointer focus. First frame/finished recovery clears it; termination and teardown remove it.
+- A nonfatal audio failure keeps the persistent connected-status warning and shows one eight-second fullscreen notice per connection attempt. Video stalls do not replay a consumed audio notice; expiration never hides connecting, waiting or reconnecting guidance.
 - Pointer default free/absolute, native scroll.
 
 ## Interaction states

@@ -154,8 +154,10 @@ extension NativeBackend {
         receiver.onReceiveFailed = { [weak self, weak receiver] in
             guard let self, let receiver,
                   self.withState({ !interrupted && videoReceiver === receiver }) else { return }
-            self.stopConnection()
+            // Queue recovery before a receiver/decoder join can delay its UI edge.
+            // Teardown still completes before this callback returns.
             events.connectionTerminated(code: -1)
+            self.stopConnection()
         }
         guard adoptWhileConnecting({ videoReceiver = receiver }) else {
             // Stop may have cleaned this sink before setup/start finished.
@@ -190,8 +192,8 @@ extension NativeBackend {
         // Wire the host TERMINATION → connectionTerminated + teardown.
         enet.onTerminated = { [weak self] code in
             Diag.error("native backend: host terminated session (code \(code))", Self.logCategory)
-            self?.stopConnection()
             events.connectionTerminated(code: code)
+            self?.stopConnection()
         }
 
         // HDR engagement pulls mastering metadata through this channel;

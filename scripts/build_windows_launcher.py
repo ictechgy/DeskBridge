@@ -110,6 +110,9 @@ def verify_virtual_display_inputs(root):
         raise ValueError('Native virtual display verification version differs from installation pins')
     backend = (folder / 'HeadlessSetup.psm1').read_text(encoding='utf-8-sig')
     ui = (folder / 'Show-HeadlessSetup.ps1').read_text(encoding='utf-8-sig')
+    # Literal-drift lint only: this text search does not establish executable
+    # PowerShell semantics. The backend's actual manifest reader and archive
+    # verifier enforce pins; inert PowerShell contract tests exercise rejection.
     for source, variable, fields in ((backend, 'dependency', ('bytes', 'sha256', 'driverVersion', 'catalogSignerCertificateSha256')),
                                      (ui, 'dep', ('url', 'bytes'))):
         for field in fields:

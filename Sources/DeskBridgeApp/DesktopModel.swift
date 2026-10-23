@@ -64,6 +64,7 @@ final class DesktopModel: ObservableObject {
     private var operation: Task<Void, Never>?
     private var generation = UUID()
     private var settingsReadable = true
+    private var storageReadFailure: String?
     private var shuttingDown = false
     private var targetBinding = TargetBinding()
     let stream: DesktopStreamController
@@ -104,7 +105,13 @@ final class DesktopModel: ObservableObject {
         identity = IdentityManager(defaultsSuite: identitySuite ?? (platform == .linux ? "org.deskbridge.app.linux.identity" : "org.deskbridge.app.identity"), supportBase: base,
                                    protectedDataAvailable: { true })
         do { settings = try store.load() }
-        catch { settings = SavedSettings(); settingsReadable = false; errorMessage = "설정을 읽지 못했습니다. 저장된 인증 정보를 자동으로 대체하지 않습니다. 설정 파일을 복구한 뒤 앱을 다시 여세요." }
+        catch {
+            settings = SavedSettings(); settingsReadable = false
+            let message = error is CorePrivateStorageFailure
+                ? error.localizedDescription + " 저장된 인증 정보를 자동으로 대체하지 않습니다. 확인한 뒤 앱을 다시 여세요."
+                : "설정을 읽지 못했습니다. 저장된 인증 정보를 자동으로 대체하지 않습니다. 기존 설정을 보존하고 파일 형식·크기와 저장 폴더의 접근 권한을 확인한 뒤 앱을 다시 여세요."
+            storageReadFailure = message; errorMessage = message
+        }
         status = "근처 PC를 선택하거나 \(platform.displayName)의 연결 QR을 가져오세요."
         address = settings.address
         stream.onEngagementChanged = { [weak self] in
@@ -161,8 +168,14 @@ final class DesktopModel: ObservableObject {
         if let storage = error as? CorePrivateStorageFailure {
             return storage.localizedDescription
         }
-        if let storage = error as? IdentityStorageError, case .unsafeStorage = storage {
-            return CorePrivateStorageFailure.unsafeStorage.localizedDescription
+        if let storage = error as? IdentityStorageError {
+            switch storage {
+            case .unsafeStorage:
+                return CorePrivateStorageFailure.unsafeStorage.localizedDescription
+            case .incompleteIdentity:
+                return "이 Mac의 연결 인증 파일이 없거나 일부가 누락되었습니다. 기존 파일을 자동으로 대체하지 않습니다. 원래 인증 파일을 백업에서 복원한 뒤 앱을 다시 여세요. 복원할 수 없다면 대상 PC의 연결 권한을 취소한 뒤 수동으로 새 연결을 설정하세요."
+            default: break
+            }
         }
         if error is StreamSecurityPolicy.Failure {
             return "필수 화면 암호화를 확인하지 못했습니다. Windows의 Sunshine을 업데이트하고 Network의 LAN/WAN 암호화를 Mandatory로 저장한 뒤 다시 연결하세요."
@@ -197,7 +210,7 @@ final class DesktopModel: ObservableObject {
         case .decoderFailed:
             return "화면을 표시하지 못했습니다. 화면 연결을 끊고 해상도를 낮춰 다시 연결하세요."
         case .audioFailed:
-            return "오디오를 시작하지 못했습니다. Mac과 Windows의 오디오 출력 장치를 확인하세요."
+            return "오디오를 사용할 수 없습니다. Mac과 PC의 오디오 장치·네트워크를 확인한 뒤 다시 연결하세요."
         case .crypto:
             return "화면 보안 연결을 확인하지 못해 중단했습니다. Sunshine의 암호화 설정을 확인하고 다시 연결하세요."
         default:
@@ -210,7 +223,7 @@ final class DesktopModel: ObservableObject {
     }
     func assertStorageReady() throws {
         guard !shuttingDown else { throw AppFailure("앱을 종료하는 중입니다. 새 연결과 설정 변경을 시작하지 않습니다.") }
-        guard settingsReadable else { throw AppFailure("기존 설정을 읽을 수 없어 연결과 저장을 중단했습니다. 설정 파일을 복구한 뒤 앱을 다시 여세요.") }
+        guard settingsReadable else { throw AppFailure(storageReadFailure ?? "기존 설정을 읽을 수 없어 연결과 저장을 중단했습니다. 기존 인증 정보를 보존하고 저장 폴더의 접근 권한을 확인한 뒤 앱을 다시 여세요.") }
     }
     func startNearbySearch() {
         guard canChoosePC else { return }
@@ -220,6 +233,9 @@ final class DesktopModel: ObservableObject {
         try assertStorageReady()
         guard canChoosePC else { throw AppFailure("화면·파일 연결을 마친 뒤 PC 연결 정보를 가져오세요.") }
         guard invitation.platform == platform || (invitation.platform == nil && platform == .windows) else {
+            if invitation.platform == .macos {
+                throw AppFailure("이 QR·링크는 Windows의 Knot에서 ‘Mac 화면 열기’로 가져오세요. Mac 앱에서는 Windows·Linux 호스트의 화면에 연결할 수 있습니다.")
+            }
             throw AppFailure("연결 QR의 대상 OS가 다릅니다. 해당 PC의 탭에서 새 연결 QR을 가져오세요.")
         }
         pendingInvitation = invitation

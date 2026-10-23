@@ -57,7 +57,7 @@ function Show-HeadlessFailure($Record,[switch] $StatusProbe) {
     if ($StatusProbe) {
         $status.Text='가상 화면 상태를 확인하지 못했습니다. Knot을 다시 실행하고 Windows 보안 정책에서 상태 확인을 허용하는지 확인하세요. 기존 복구 기록과 설정은 보존했습니다.'; return
     }
-    $status.Text='완료하지 못했습니다. 네트워크와 관리자 권한을 확인한 뒤 상태를 다시 확인하세요. 기존 드라이버나 변경된 설정은 자동으로 덮어쓰지 않습니다.'
+    $status.Text=Get-SetupFailureText $Record -Context VirtualDisplay
 }
 function Update-HeadlessState {
     $script:canInstall=$false; $script:canRemove=$false
@@ -125,7 +125,8 @@ $null=Add-HeadlessText $script:installHoldText
 $null=Add-HeadlessText '이 버전은 드라이버를 설치하지 않습니다. 아래 화면 지정 안내는 이미 사용할 수 있는 화면이 있는 경우에 적용됩니다. Knot 설치 기록이 있는 가상 화면의 상태 확인과 제거는 별도로 사용할 수 있습니다.'
 $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
     # Refresh policy before any confirmation, network activity, or elevation.
-    try { $availability=Get-KnotHeadlessAvailability } catch { $availability=$null }
+    try { $availability=Get-KnotHeadlessAvailability }
+    catch { $script:canInstall=$false; Set-HeadlessBusy $false; Show-HeadlessFailure $_; return }
     if (-not $availability -or -not $availability.Enabled) {
         $script:canInstall=$false; Set-HeadlessBusy $false
         $reason=if ($availability) {$availability.Reason} else {'manifest-invalid'}

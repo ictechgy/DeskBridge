@@ -69,6 +69,7 @@ namespace DeskBridge.Reverse
             cancel.Click += delegate { CancelOwned(); };
             status.ReadOnly = true; status.Multiline = true; status.ScrollBars = ScrollBars.Vertical; status.Dock = DockStyle.Fill;
             status.BorderStyle = BorderStyle.None; status.BackColor = SystemColors.Window; status.ForeColor = SystemColors.WindowText; status.AccessibleName = "현재 작업 상태";
+            status.AccessibleDescription = "현재 작업 상태와 다음 단계 안내입니다. 내용을 선택해 복사할 수 있습니다.";
             footer.Controls.Add(status); footer.Controls.Add(cancel); Controls.Add(footer);
             var sidebar = new Panel { Dock = DockStyle.Left, Width = 168, BackColor = SystemColors.Control, ForeColor = SystemColors.ControlText, Padding = new Padding(20, 26, 12, 0) };
             sidebar.Controls.Add(new Label { Dock = DockStyle.Top, AutoSize = true, Text = HostText(ClientMessage.Sidebar), Font = new Font(Font, FontStyle.Bold) });
@@ -165,10 +166,19 @@ namespace DeskBridge.Reverse
         }
         private void PreviewInvitation(ReverseInvitation invitation)
         {
+            ClearSelectedTarget();
             candidates.Items.Clear();
             foreach (string address in invitation.Addresses) candidates.Items.Add(new CandidateItem(invitation.Name, address));
             candidates.SelectedIndex = 0;
             SetStatus(HostText(ClientMessage.LinkPreview));
+        }
+        private void ClearSelectedTarget()
+        {
+            selectedAddress = null;
+            selectionGeneration++;
+            target.Text = HostText(ClientMessage.NoTarget);
+            target.AccessibleDescription = target.Text;
+            UpdateControls();
         }
         private async Task ImportQrAsync()
         {
@@ -243,6 +253,7 @@ namespace DeskBridge.Reverse
             {
                 IList<ReverseCandidate> found = await ReverseDiscovery.FindAsync(operation.Token);
                 if (closing) return;
+                ClearSelectedTarget();
                 candidates.Items.Clear();
                 foreach (ReverseCandidate item in found)
                     if (ConnectionPolicy.ValidName(item.Name)) candidates.Items.Add(new CandidateItem(item.Name, ConnectionPolicy.Address(item.Address)));
@@ -342,7 +353,7 @@ namespace DeskBridge.Reverse
         {
             internal void SetMessage(string text)
             {
-                Text = text; AccessibleDescription = text;
+                Text = text;
                 // Framework 4.8 supports MSAA value changes; no newer UIA live-region
                 // API is required. Actual Narrator behavior remains a device check.
                 if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);

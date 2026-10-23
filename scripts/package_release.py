@@ -8,6 +8,7 @@ from windows_resources import NativePE, validate_bootstrap
 from windows_check_record import validate_windows_check_record
 from linux_check_record import validate_linux_check_record, validate_payload_sources
 from test_linux_host import archive_inventory
+from system_dependencies import SystemDependencyError, parse_system_dependencies
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
@@ -105,9 +106,11 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
     helper_entitlements = run("inspect-staged-host-supervisor-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(supervisor)])
     if helper_entitlements.strip() and plistlib.loads(helper_entitlements) != {}:
         raise SystemExit("The packaged host supervisor must have no entitlements.")
-    dependencies = run("inspect-staged-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]).decode().splitlines()[1:]
-    if not dependencies or any(not line.strip().startswith(("/System/Library/", "/usr/lib/")) for line in dependencies):
-        raise SystemExit("Unexpected non-system dynamic dependency in packaged host supervisor")
+    try:
+        dependencies = parse_system_dependencies(
+            run("inspect-staged-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]), supervisor)
+    except SystemDependencyError as error:
+        raise SystemExit(str(error))
     host_supervisor_snapshot(app)
     run("verify-staged-app", ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     entitlements = run("inspect-staged-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(app)])

@@ -276,9 +276,12 @@ class BuildSnapshotTests(unittest.TestCase):
         (self.build / "synthetic-checks.stdout").write_text('{"status":"passed"}')
         (self.build / "synthetic-model-checks.stdout").write_text('{"status":"passed"}')
         (self.build / "mac-host-lifetime-checks.stdout").write_text(json.dumps({
-            "status": "passed", "checks": 37, "productionHostLaunched": False,
+            "status": "passed", "checks": 41, "productionHostLaunched": False,
+            "testedSupervisorSHA256": host_supervisor_snapshot(self.root / "dist/Knot.app")["sha256"],
             **{key: True for key in ("actualMacHostChild", "nativeSupervisor", "freshSyntheticOnly", "appAbruptDeath",
-                "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup")}}))
+                "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup",
+                "pinnedRestartForkDenied", "forkVforkSpawnDenied", "normalThreadsAndFiles",
+                "unrestrictedChildModeRefused", "wrapperAndProfileUnavailableRefused")}}))
         self.record = {"schema": 1, "configuration": "release", "checksPassed": True,
                        "appManifest": tree_snapshot(self.root / "dist/Knot.app"),
                        "hostSupervisor": host_supervisor_snapshot(self.root / "dist/Knot.app")}
@@ -375,11 +378,29 @@ class BuildSnapshotTests(unittest.TestCase):
     def test_lifetime_proof_is_required(self):
         path = self.build / "mac-host-lifetime-checks.stdout"
         valid = json.loads(path.read_text())
-        for key, value in (("checks", 36), ("checks", True), ("status", "failed"), ("appAbruptDeath", False),
-                           ("writerNotInherited", False), ("supervisorCrashCleanup", False), ("productionHostLaunched", True)):
+        for key, value in (("checks", 40), ("checks", True), ("status", "failed"), ("appAbruptDeath", False),
+                           ("writerNotInherited", False), ("supervisorCrashCleanup", False), ("productionHostLaunched", True),
+                           ("pinnedRestartForkDenied", False), ("forkVforkSpawnDenied", False), ("normalThreadsAndFiles", False),
+                           ("unrestrictedChildModeRefused", False), ("wrapperAndProfileUnavailableRefused", False)):
             path.write_text(json.dumps({**valid, key: value}))
             with self.subTest(key=key, value=value), self.assertRaisesRegex(BuildSnapshotError, "lifetime proof"):
                 self.validate()
+
+    def test_lifetime_proof_digest_must_match_completed_helper(self):
+        path = self.build / "mac-host-lifetime-checks.stdout"
+        valid = json.loads(path.read_text())
+        for value in (None, "0" * 64, "not-a-digest"):
+            path.write_text(json.dumps({**valid, "testedSupervisorSHA256": value}))
+            with self.subTest(digest=value), self.assertRaisesRegex(BuildSnapshotError, "proof belongs to a different helper"):
+                self.validate()
+
+    def test_new_bundle_inventory_and_helper_digest_do_not_reuse_old_lifetime_proof(self):
+        self.supervisor.write_bytes(self.supervisor.read_bytes() + b"CHANGED SYNTHETIC")
+        self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app")
+        self.record["hostSupervisor"] = host_supervisor_snapshot(self.root / "dist/Knot.app")
+        self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "proof belongs to a different helper"):
+            self.validate()
 
     def test_replaced_helper_with_updated_bundle_inventory_is_rejected(self):
         self.supervisor.write_bytes(self.supervisor.read_bytes() + b"CHANGED SYNTHETIC")

@@ -284,4 +284,5 @@ public enum IdentityStorageError: Error, Sendable {
     case unavailable
     case defaultsUnavailable
     case unsafeStorage
+    case incompleteIdentity
 }

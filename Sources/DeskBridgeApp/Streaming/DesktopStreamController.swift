@@ -34,6 +34,9 @@ struct StreamConfiguration: Sendable {
     private var decoder: VideoDecoder?
     private var audioPlatform: DesktopAudio?
     private var events: Task<Void, Never>?
+    private var recovery = DesktopRecoveryPresentation()
+    private var audioNoticeTask: Task<Void, Never>?
+    private var timedAudioNotice: UUID?
     private var generation = UUID()
     private var opening = false { didSet { onEngagementChanged?() } }
     private var openRequest: UUID?
@@ -68,7 +71,7 @@ struct StreamConfiguration: Sendable {
         window = win
         view = picture
         picture.keyboardMode = keyboardMode
-        var recovery = DesktopRecoveryPresentation()
+        recovery = DesktopRecoveryPresentation()
         picture.showRecovery(recovery.message)
         let video = VideoDecoder(configuration: configuration, displayInfo: { [weak picture] in
             guard let screen = picture?.window?.screen else { return nil }
@@ -111,14 +114,15 @@ struct StreamConfiguration: Sendable {
         }, tickOffMain: { true }, prepareTickThread: {}), configuredFps: Int32(dimensions.2))
         let updates = pair.session.events
         events = Task { [weak self] in
-            var publishedStatus = recovery.status
+            var publishedStatus = self?.recovery.status
             for await update in updates {
                 guard let self, self.generation == epoch else { break }
-                recovery.receive(update.event)
-                picture.showRecovery(recovery.message)
-                if recovery.status != publishedStatus {
-                    publishedStatus = recovery.status
-                    self.onStatus?(publishedStatus)
+                self.recovery.receive(update.event)
+                picture.showRecovery(self.recovery.message)
+                self.refreshAudioNoticeTimer(epoch: epoch)
+                if self.recovery.status != publishedStatus {
+                    publishedStatus = self.recovery.status
+                    self.onStatus?(self.recovery.status)
                 }
                 switch update.event {
                 case .connectionEstablished:
@@ -160,6 +164,7 @@ struct StreamConfiguration: Sendable {
         let oldWindow = window
         let oldView = view
         let oldAudioPlatform = audioPlatform
+        audioNoticeTask?.cancel(); audioNoticeTask = nil; timedAudioNotice = nil
         // Revoke and detach before the await. An older teardown never owns replacement resources.
         session = nil; events = nil; window = nil; view = nil; decoder = nil; audioPlatform = nil
         oldEvents?.cancel()
@@ -172,6 +177,25 @@ struct StreamConfiguration: Sendable {
         withExtendedLifetime(oldAudioPlatform) {}
         oldWindow?.close()
         if reportDisconnected, generation == stoppedEpoch { onStatus?("화면 연결을 끊었습니다.") }
+    }
+    private func refreshAudioNoticeTimer(epoch: UUID) {
+        guard let notice = recovery.audioNoticeID else {
+            audioNoticeTask?.cancel(); audioNoticeTask = nil; timedAudioNotice = nil
+            return
+        }
+        // Start the single bounded notice when fresh video makes it visible.
+        // A stall does not restart this timer or replay a consumed notice.
+        guard recovery.phase == .live, timedAudioNotice != notice else { return }
+        audioNoticeTask?.cancel()
+        timedAudioNotice = notice
+        audioNoticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            guard let self, !Task.isCancelled, self.generation == epoch,
+                  self.timedAudioNotice == notice, self.recovery.audioNoticeID == notice else { return }
+            self.recovery.acknowledgeAudioNotice(notice)
+            self.timedAudioNotice = nil; self.audioNoticeTask = nil
+            self.view?.showRecovery(self.recovery.message)
+        }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         Task { await disconnect() }

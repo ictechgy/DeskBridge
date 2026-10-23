@@ -20,12 +20,16 @@ package final class StreamBridgeContext: @unchecked Sendable {
     private var attemptID = UUID()
     private let sourceLock = NSLock()
     private var eventSource: ObjectIdentifier?
+    // A self-initiated reconnect emits its UI edge before stopping the old
+    // receiver. Fence its late audio failure in the same lock as event delivery.
+    private var audioEventsQuiesced = false
 
     package var currentAttempt: UUID { sourceLock.withLock { attemptID } }
 
     package func beginAttempt(_ id: UUID) {
         sourceLock.withLock {
             attemptID = id
+            audioEventsQuiesced = false
             publicEvents?.beginAttempt(id)
         }
     }
@@ -34,6 +38,7 @@ package final class StreamBridgeContext: @unchecked Sendable {
         sourceLock.withLock {
             eventSource = ObjectIdentifier(backend)
             attemptID = attempt
+            audioEventsQuiesced = false
             publicEvents?.beginAttempt(attempt)
         }
     }
@@ -85,6 +90,14 @@ package final class StreamBridgeContext: @unchecked Sendable {
         sourceLock.withLock {
             guard source == nil || eventSource == source.map(ObjectIdentifier.init),
                   attempt == nil || attempt == attemptID else { return }
+            switch event {
+            case .reconnecting:
+                audioEventsQuiesced = true
+            case .audioFailed where audioEventsQuiesced:
+                return
+            default:
+                break
+            }
             if let publicEvents { publicEvents.yield(event, attempt: attemptID) } else { eventContinuation?.yield(event) }
         }
     }

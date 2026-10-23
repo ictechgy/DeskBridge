@@ -34,6 +34,7 @@ audio_decrypt = (ENGINE / "Network/RtpAudioReceiver+Decrypt.swift").read_text()
 video = (ENGINE / "Network/VideoRtpReceiver.swift").read_text()
 pipeline = (ENGINE / "Session/NativeBackend+Pipeline.swift").read_text()
 backend = (ENGINE / "Session/NativeBackend.swift").read_text()
+bridge = (ENGINE / "Session/StreamBridgeContext.swift").read_text()
 
 # Bind the extracted methods to their real production consumers as well as
 # executing them. These checks prevent an unused fixed helper from passing.
@@ -42,6 +43,7 @@ assert "self?.publishReceiveFailure(receiveFailure, callback: onReceiveFailed)" 
 assert "if receiveFailed { self?.publishReceiveFailure(callback: onReceiveFailed) }" in video
 assert "if receiveFailed { onReceiveFailed?() }" not in video
 assert "events.audioFailed(\"audio receive failed (errno " in pipeline
+assert video.index("try Self.configureReceiveTimeout(sock)") < video.index("fd = sock")
 
 fixture = r'''
 import Foundation
@@ -57,17 +59,31 @@ final class Locked<Value>: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }; return body(&value)
     }
 }
+enum EnetError: Error { case socketFailure(String) }
+let timeoutFailure = Locked(false)
+let closedSockets = Locked<[Int32]>([])
+let timeoutSockets = Locked<[Int32]>([])
+func setsockopt(_ socket: Int32, _ level: Int32, _ option: Int32, _ bytes: UnsafeRawPointer?, _ length: socklen_t) -> Int32 {
+    precondition(level == SOL_SOCKET && option == SO_RCVTIMEO && length == MemoryLayout<timeval>.size)
+    precondition(bytes!.load(as: timeval.self).tv_usec == 100_000)
+    timeoutSockets.use { $0.append(socket) }
+    if timeoutFailure.use({ $0 }) { errno = EIO; return -1 }
+    return 0
+}
+func close(_ socket: Int32) -> Int32 { closedSockets.use { $0.append(socket) }; return 0 }
 final class Flag: @unchecked Sendable {
     let state = Locked(false)
     var isSet: Bool { state.use { $0 } }
     func set() { state.use { $0 = true } }
 }
 let sleeps = Locked<[useconds_t]>([])
+let sleepHook = Locked<(@Sendable (useconds_t) -> Void)?>(nil)
 @discardableResult func usleep(_ delay: useconds_t) -> Int32 {
-    sleeps.use { $0.append(delay) }; return 0
+    sleeps.use { $0.append(delay) }; sleepHook.use { $0 }?(delay); return 0
 }
 final class Script: @unchecked Sendable {
     let errors: Locked<[Int32]>
+    let calls = Locked(0)
     let entered = DispatchSemaphore(value: 0)
     let release: DispatchSemaphore?
     init(_ errors: [Int32], parked: Bool = false) {
@@ -75,22 +91,26 @@ final class Script: @unchecked Sendable {
         release = parked ? DispatchSemaphore(value: 0) : nil
     }
     func next() -> Int32 {
+        calls.use { $0 += 1 }
         entered.signal(); release?.wait()
         return errors.use { $0.isEmpty ? EIO : $0.removeFirst() }
     }
 }
 let script = Locked(Script([EIO]))
+let receiveModes = Locked<[String]>([])
 final class DatagramBatch {
     let storage = UnsafeMutablePointer<UInt8>.allocate(capacity: 1500)
     let activeScript: Script
-    init(capacity: Int, stride: Int) { activeScript = script.use { $0 } }
+    init(capacity: Int, stride: Int, receiveBatch: TransportPlatform.ReceiveBatch? = nil) { activeScript = script.use { $0 } }
     deinit { storage.deallocate() }
-    func receiveOne(from: Int32) -> Int { errno = activeScript.next(); return -1 }
-    func datagram(_ index: Int) -> (bytes: UnsafeMutablePointer<UInt8>, length: Int) { (storage, 0) }
+    private func result() -> Int { errno = activeScript.next(); return errno == 0 ? 1 : -1 }
+    func receiveOne(from: Int32) -> Int { receiveModes.use { $0.append("one") }; return result() }
+    func receive(from: Int32) -> Int { receiveModes.use { $0.append("batch") }; return result() }
+    func datagram(_ index: Int) -> (bytes: UnsafeMutablePointer<UInt8>, length: Int) { (storage, 1) }
     func isExpectedPeer(at: Int, expected: Int, expectedLength: Int) -> Bool { true }
 }
 struct ReceiveTiming {
-    enum Kind { case audio }
+    enum Kind { case audio, video }
     init(telemetry: Kind) {}
     mutating func note(_ batch: DatagramBatch, index: Int, count: Int, socket: Int32, stream: String) {}
 }
@@ -148,11 +168,27 @@ final class FrameTimingTracker: Sendable {
 enum Diag {
     static func info(_ message: String, _ category: String) {}
     static func warn(_ message: String, _ category: String) {}
+    static func notice(_ message: String, _ category: String) {}
+    static func error(_ message: String, _ category: String) {}
+}
+enum TransportPlatform { typealias ReceiveBatch = @Sendable () -> Void }
+struct VideoDecryptor: Sendable { init?(key: [UInt8]) {} }
+struct SyntheticVideoQueue {
+    let flushes = Locked(0)
+    func flushDeferredIfWindowElapsed(nowUs: UInt64) { flushes.use { $0 += 1 } }
 }
 final class VideoRtpReceiver: @unchecked Sendable {
     static let cat = "synthetic.video"
     let interrupted = Atomic<Bool>(false)
     let recvQueue = DispatchQueue(label: "synthetic.video.receive")
+    let fd: Int32 = -1, packetSize = 1400
+    let encrypted = false, aesKey = [UInt8]()
+    let receiveBatch: TransportPlatform.ReceiveBatch? = nil
+    let destAddr = 0, destAddrLen = 0
+    var onReceiveFailed: (@Sendable () -> Void)?
+    var loggedReceivePressure = false
+    let rtpQueue = SyntheticVideoQueue()
+    let received = Locked(0)
     let sink: Sink?
     var lossEpisode = Episode()
     let depacketizer = Depacketizer()
@@ -160,12 +196,26 @@ final class VideoRtpReceiver: @unchecked Sendable {
     func noteKeyFrame(_ unit: DecodeUnit, tracker: FrameTimingTracker) {}
     func closeLossEpisode(at unit: DecodeUnit, isIDR: Bool) {}
     func isExpectedPostGateResync(isIDR: Bool) -> Bool { false }
+    func receive(_ bytes: UnsafeMutablePointer<UInt8>, count: Int, decryptor: VideoDecryptor?) { received.use { $0 += 1 } }
     __VIDEO_METHODS__
 }
 final class LeafResource: @unchecked Sendable {
+    var onTerminated: (@Sendable (Int32) -> Void)?
+    var onHdrMode: (@Sendable (Bool) -> Void)?
     func stop() {}
     func interrupt() {}
     func close() {}
+}
+typealias EnetControlChannel = LeafResource
+protocol ConnectionEvents: Sendable {
+    func connectionTerminated(code: Int32)
+    func setHdrMode(_ enabled: Bool)
+}
+final class RecordedEvents: ConnectionEvents, @unchecked Sendable {
+    let codes = Locked<[Int32]>([])
+    let notified = DispatchSemaphore(value: 0)
+    func connectionTerminated(code: Int32) { codes.use { $0.append(code) }; notified.signal() }
+    func setHdrMode(_ enabled: Bool) {}
 }
 final class LifecycleSink: @unchecked Sendable {
     let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
@@ -185,7 +235,30 @@ final class NativeBackend: @unchecked Sendable {
     var audioSink: LeafResource?, inputBatcher: LeafResource?
     var videoReceiver: VideoRtpReceiver?
     var videoSink: LifecycleSink?
+    func withState<T>(_ body: () -> T) -> T { stateLock.lock(); defer { stateLock.unlock() }; return body() }
+    func checkInterrupted() -> Bool { withState { interrupted } }
+    func wireVideoFailure(receiver: VideoRtpReceiver, events: any ConnectionEvents) {
+        __VIDEO_FAILURE_CLOSURE__
+    }
     __BACKEND_METHODS__
+}
+enum StreamEvent: Equatable, Sendable { case reconnecting, audioFailed(String), firstFrame }
+final class SessionEventSource: @unchecked Sendable {
+    let events = Locked<[StreamEvent]>([])
+    let didBegin = Locked<[UUID]>([])
+    var onYield: (@Sendable (StreamEvent) -> Void)?
+    func beginAttempt(_ id: UUID) { didBegin.use { $0.append(id) } }
+    func yield(_ event: StreamEvent, attempt: UUID) { events.use { $0.append(event) }; onYield?(event) }
+}
+final class StreamBridgeContext: @unchecked Sendable {
+    private var attemptID = UUID()
+    private let sourceLock = NSLock()
+    private var eventSource: ObjectIdentifier?
+    private var audioEventsQuiesced = false
+    let publicEvents: SessionEventSource?
+    var eventContinuation: AsyncStream<StreamEvent>.Continuation?
+    init(events: SessionEventSource? = nil) { publicEvents = events }
+    __BRIDGE_METHODS__
 }
 func encrypt(_ bytes: [UInt8], receiver: RtpAudioReceiver, sequence: UInt16, padding: Bool) -> [UInt8] {
     var iv = ((receiver.avRiKeyId &+ UInt32(sequence)).bigEndian, UInt32(0), UInt32(0), UInt32(0))
@@ -219,6 +292,13 @@ func packet(_ payload: [UInt8], sequence: UInt16) -> [UInt8] {
         func wait(_ signal: DispatchSemaphore, _ label: String) throws {
             try expect(signal.wait(timeout: .now() + 3) == .success, label)
         }
+        try VideoRtpReceiver.configureReceiveTimeout(701)
+        try expect(timeoutSockets.use { $0 } == [701] && closedSockets.use { $0.isEmpty }, "successful timeout retains local socket")
+        timeoutFailure.use { $0 = true }
+        var failedTimeout = false
+        do { try VideoRtpReceiver.configureReceiveTimeout(702) }
+        catch EnetError.socketFailure { failedTimeout = true }
+        try expect(failedTimeout && closedSockets.use { $0 } == [702], "failed timeout must close unpublished socket and refuse startup")
 
         // Real CBC and real queue bookkeeping: bad in-order padding cannot
         // consume the sequence, so its valid retransmission still plays.
@@ -279,6 +359,98 @@ func packet(_ payload: [UInt8], sequence: UInt16) -> [UInt8] {
         cancelledAudio.recvQueue.sync {}
         try expect(cancelledFailures.use { $0 } == 0, "stop excludes terminal event")
 
+        // Execute the full video loop with scripted buffer pressure, an idle
+        // poll and a successful datagram. No descriptor is used by the stub.
+        let pressuredVideo = VideoRtpReceiver(sink: Sink())
+        let videoFailure = DispatchSemaphore(value: 0)
+        pressuredVideo.onReceiveFailed = { videoFailure.signal() }
+        sleeps.use { $0.removeAll() }
+        script.use { $0 = Script([ENOBUFS, ENOMEM, ENOBUFS, ENOMEM, ENOBUFS, ENOMEM,
+                                  EAGAIN, ENOBUFS, 0, ENOBUFS, EIO]) }
+        pressuredVideo.startReceiveLoop()
+        try wait(videoFailure, "video terminal error delivered off receive queue")
+        pressuredVideo.recvQueue.sync {}
+        try expect(sleeps.use { $0 } == [1_000, 2_000, 4_000, 8_000, 16_000, 16_000, 1_000, 1_000],
+                   "video pressure is capped and resets after idle and successful batch")
+        try expect(pressuredVideo.received.use { $0 } == 1, "successful datagram reaches production loop consumer")
+        try expect(pressuredVideo.rtpQueue.flushes.use { $0 } == 1, "idle poll still flushes reorder hold")
+
+        let interruptedVideo = VideoRtpReceiver(sink: Sink())
+        let interruptScript = Script([ENOBUFS, EIO])
+        let interruptFailures = Locked(0)
+        interruptedVideo.onReceiveFailed = { interruptFailures.use { $0 += 1 } }
+        script.use { $0 = interruptScript }
+        sleeps.use { $0.removeAll() }
+        sleepHook.use { $0 = { _ in interruptedVideo.interrupted.store(true, ordering: .relaxed) } }
+        interruptedVideo.startReceiveLoop()
+        interruptedVideo.recvQueue.sync {}
+        sleepHook.use { $0 = nil }
+        try expect(interruptScript.calls.use { $0 } == 1, "interrupt after pressure sleep excludes another syscall")
+        try expect(sleeps.use { $0 } == [1_000] && interruptFailures.use { $0 } == 0,
+                   "pressure cancellation is quiet and bounded")
+
+        let fallbackVideo = VideoRtpReceiver(sink: Sink())
+        let fallbackFailure = DispatchSemaphore(value: 0)
+        fallbackVideo.onReceiveFailed = { fallbackFailure.signal() }
+        script.use { $0 = Script([ENOSYS, ENOBUFS, EIO]) }
+        receiveModes.use { $0.removeAll() }
+        fallbackVideo.startReceiveLoop()
+        try wait(fallbackFailure, "batch syscall fallback remains operational")
+        fallbackVideo.recvQueue.sync {}
+        try expect(receiveModes.use { $0 } == ["batch", "one", "one"], "unsupported batch syscall switches subsequent receives to recvmsg")
+
+        // A callback may have passed NativeConnectionEvents.isCurrent before
+        // recovery starts. The real bridge must fence it at actual delivery.
+        let bridgeEvents = SessionEventSource()
+        let bridge = StreamBridgeContext(events: bridgeEvents)
+        let oldBackend = NativeBackend(), oldAttempt = UUID()
+        bridge.setEventSource(oldBackend, attempt: oldAttempt)
+        try expect(bridge.acceptsEvent(from: oldBackend, attempt: oldAttempt), "old callback passes precheck")
+        bridge.emit(.reconnecting)
+        bridge.emit(.audioFailed("old failure during backoff"), source: oldBackend, attempt: oldAttempt)
+        try expect(bridgeEvents.events.use { $0 } == [.reconnecting], "backoff fences old audio event after precheck")
+        let newAttempt = UUID(), newBackend = NativeBackend()
+        bridge.beginAttempt(newAttempt)
+        bridge.emit(.audioFailed("old generation"), source: oldBackend, attempt: oldAttempt)
+        bridge.setEventSource(newBackend, attempt: newAttempt)
+        bridge.emit(.audioFailed("new receiver before first picture"), source: newBackend, attempt: newAttempt)
+        bridge.emit(.firstFrame, source: newBackend, attempt: newAttempt)
+        try expect(bridgeEvents.events.use { $0 } == [.reconnecting, .audioFailed("new receiver before first picture"), .firstFrame],
+                   "new receiver failure survives first frame while old generation stays rejected")
+
+        // Park the actual reconnect yield while sourceLock is held. A competing
+        // audio delivery cannot pass between quiescing and publishing that edge.
+        let raceEvents = SessionEventSource()
+        let orderedBridge = StreamBridgeContext(events: raceEvents)
+        orderedBridge.setEventSource(oldBackend, attempt: oldAttempt)
+        let reconnectEntered = DispatchSemaphore(value: 0), reconnectRelease = DispatchSemaphore(value: 0)
+        let reconnectDone = DispatchSemaphore(value: 0), racedAudioDone = DispatchSemaphore(value: 0)
+        raceEvents.onYield = { event in
+            if event == .reconnecting { reconnectEntered.signal(); reconnectRelease.wait() }
+        }
+        DispatchQueue.global().async { orderedBridge.emit(.reconnecting); reconnectDone.signal() }
+        try wait(reconnectEntered, "reconnect delivery entered under bridge source lock")
+        DispatchQueue.global().async {
+            orderedBridge.emit(.audioFailed("raced old event"), source: oldBackend, attempt: oldAttempt)
+            racedAudioDone.signal()
+        }
+        try expect(racedAudioDone.wait(timeout: .now() + 0.02) == .timedOut, "audio emission waits for reconnect boundary")
+        reconnectRelease.signal()
+        try wait(reconnectDone, "reconnect event released")
+        try wait(racedAudioDone, "racing audio delivery completed")
+        try expect(raceEvents.events.use { $0 } == [.reconnecting], "raced audio is rejected after ordered reconnect yield")
+        // Both attempt entry points reset the same latch; beginAttempt also
+        // serves the legacy continuation path before a backend is installed.
+        let resetEvents = SessionEventSource(), resetBridge = StreamBridgeContext(events: resetEvents)
+        resetBridge.emit(.reconnecting)
+        resetBridge.beginAttempt(newAttempt)
+        resetBridge.emit(.audioFailed("fresh attempt"), attempt: newAttempt)
+        try expect(resetEvents.events.use { $0 } == [.reconnecting, .audioFailed("fresh attempt")], "beginAttempt independently resets audio fence")
+        resetBridge.emit(.reconnecting)
+        resetBridge.setEventSource(newBackend, attempt: newAttempt)
+        resetBridge.emit(.audioFailed("fresh source"), source: newBackend, attempt: newAttempt)
+        try expect(resetEvents.events.use { $0.last } == .audioFailed("fresh source"), "setEventSource independently resets audio fence")
+
         // Park an old receive before submit. Stop cannot finish until it
         // drains; releasing it after cancellation cannot reach the shared sink.
         let sink = Sink()
@@ -330,6 +502,31 @@ func packet(_ payload: [UInt8], sequence: UInt16) -> [UInt8] {
         try wait(firstStop, "first backend stop completed")
         try wait(secondStop, "second backend stop completed")
         try expect(lifecycleSink.cleanups.use { $0 } == 1, "backend cleans sink exactly once")
+
+        // Run each production termination closure. Notification is queued
+        // before teardown can block, while stop still drains the shared sink.
+        for hostTermination in [false, true] {
+            let terminatingBackend = NativeBackend(), parkedSink = LifecycleSink()
+            let receiver = VideoRtpReceiver(sink: Sink()), events = RecordedEvents()
+            terminatingBackend.videoSink = parkedSink
+            terminatingBackend.videoReceiver = receiver
+            let callbackDone = DispatchSemaphore(value: 0)
+            if hostTermination {
+                let control = EnetControlChannel()
+                terminatingBackend.wireVideoControl(enet: control, events: events)
+                DispatchQueue.global().async { control.onTerminated?(42); callbackDone.signal() }
+            } else {
+                terminatingBackend.wireVideoFailure(receiver: receiver, events: events)
+                DispatchQueue.global().async { receiver.onReceiveFailed?(); callbackDone.signal() }
+            }
+            try wait(events.notified, "termination notification precedes parked cleanup")
+            try wait(parkedSink.entered, "termination teardown entered cleanup")
+            try expect(callbackDone.wait(timeout: .now() + 0.02) == .timedOut, "termination callback still waits for decoder cleanup")
+            try expect(events.codes.use { $0 } == [hostTermination ? 42 : -1], "termination code preserved")
+            parkedSink.release.signal()
+            try wait(callbackDone, "termination teardown completes after cleanup release")
+            try expect(parkedSink.cleanups.use { $0 } == 1, "termination cleanup remains singular")
+        }
         print("{\"status\":\"passed\",\"mediaLifecycleChecks\":\(checks),\"scope\":\"exact production receive/drain/CBC methods and audio queue; scripted syscalls, inert display/FEC recovery, no network or device\"}")
     }
 }
@@ -339,12 +536,20 @@ audio_methods = [block(audio_receive, "func " + name) for name in (
     "startReceiveLoop()", "shouldContinueReceiving(after", "publishReceiveFailure(")]
 audio_methods += [block(audio_decrypt, "func " + name) for name in ("acceptsAudioPayload(", "decryptCbc(")]
 video_methods = [block(video, signature).replace("private func", "func", 1) for signature in (
-    "func stop()", "private func publishReceiveFailure(", "func depacketizerDidAssembleFrame(")]
+    "func stop()", "private func publishReceiveFailure(", "func depacketizerDidAssembleFrame(",
+    "private func startReceiveLoop()", "private func shouldContinueReceiving(")]
+video_methods.append(block(video, "private static func configureReceiveTimeout(").replace("private static func", "static func", 1))
 fixture = fixture.replace("__AUDIO_METHODS__", "\n".join(audio_methods))
 fixture = fixture.replace("__VIDEO_METHODS__", "\n".join(video_methods))
 fixture = fixture.replace("__BACKEND_METHODS__", "\n".join(
     block(backend, signature).replace("package func", "func", 1)
     for signature in ("package func stopConnection()", "package func interruptConnection()")))
+fixture = fixture.replace("__VIDEO_FAILURE_CLOSURE__", block(pipeline, "receiver.onReceiveFailed ="))
+fixture = fixture.replace("__BRIDGE_METHODS__", "\n".join(
+    block(bridge, signature).replace("package func", "func", 1)
+    for signature in ("package func beginAttempt(", "package func setEventSource(",
+                      "package func acceptsEvent(", "package func emit(")))
+fixture = fixture.replace("    func wireVideoFailure", block(pipeline, "func wireVideoControl(") + "\n    func wireVideoFailure", 1)
 queue_sources = [ENGINE / "Network" / name for name in ("RtpAudioQueue.swift", "RtpAudioQueue+Fec.swift")]
 with tempfile.TemporaryDirectory(prefix="knot-media-lifecycle-", dir="/tmp") as directory:
     temporary = Path(directory)
@@ -360,7 +565,7 @@ with tempfile.TemporaryDirectory(prefix="knot-media-lifecycle-", dir="/tmp") as 
     source_paths = [ENGINE / "Network/RtpAudioReceiver+Receive.swift",
                     ENGINE / "Network/RtpAudioReceiver+Decrypt.swift",
                     ENGINE / "Network/VideoRtpReceiver.swift", ENGINE / "Session/NativeBackend.swift",
-                    ENGINE / "Session/NativeBackend+Pipeline.swift", *queue_sources]
+                    ENGINE / "Session/NativeBackend+Pipeline.swift", ENGINE / "Session/StreamBridgeContext.swift", *queue_sources]
     print(json.dumps({"fixtureSHA256": hashlib.sha256(fixture.encode()).hexdigest(),
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                                  for path in source_paths},

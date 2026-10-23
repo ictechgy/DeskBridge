@@ -133,8 +133,13 @@ extension EnetControlChannel {
     ) -> Bool {
         switch command {
         case Enet.cmdVerifyConnect:
-            handleVerifyConnect(&reader)
-            // VERIFY_CONNECT has FLAG_ACKNOWLEDGE → must ACK it.
+            // VERIFY_CONNECT is peer control, never an authenticated data-channel
+            // command. Consume its exact fixed body even on a wrong channel so a
+            // following coalesced command still has a known offset.
+            guard let body = reader.take(40) else { return false }
+            guard channelID == Enet.peerChannelID else { return true }
+            var verification = ByteReader(body)
+            handleVerifyConnect(&verification)
             ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
                            flags: flags, sentTime: sentTime)
         case Enet.cmdAcknowledge:
@@ -145,9 +150,12 @@ extension EnetControlChannel {
             declarePeerDead(code: -1, reason: "ENet received DISCONNECT during/after handshake")
             return false
         case Enet.cmdPing:
-            // PING has no body; ACK if requested.
-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
-                           flags: flags, sentTime: sentTime)
+            // Unencrypted peer commands must not retire an outstanding encrypted
+            // reliable with the same (data channel, sequence) transport labels.
+            if channelID == Enet.peerChannelID {
+                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+                               flags: flags, sentTime: sentTime)
+            }
         case Enet.cmdSendReliable:
             guard let dataLength = reader.u16BE(),
                   let inner = reader.take(Int(dataLength)) else { return false }
@@ -166,8 +174,14 @@ extension EnetControlChannel {
             // often follows, and losing it stalls the PC's reliable backlog. A fragment
             // can't be authenticated, so it takes no turn; control messages never fragment.
             guard skipCommandBody(command: command, reader: &reader) else { return false }
-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
-                           flags: flags, sentTime: sentTime)
+            // Only these supported peer-control commands have an unencrypted ACK
+            // path. Ignored unreliable/unsequenced/fragment data is never ACKed,
+            // even if its unauthenticated command byte carries ACKNOWLEDGE.
+            if channelID == Enet.peerChannelID,
+               command == Enet.cmdBandwidthLimit || command == Enet.cmdThrottleConfigure {
+                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+                               flags: flags, sentTime: sentTime)
+            }
         }
         return true
     }
@@ -235,8 +249,9 @@ extension EnetControlChannel {
         return true
     }
 
-    /// Send an ACK for a received command iff it requested one AND the datagram
-    /// carried a sent-time (ENet's ACK echoes the sender's serviceTime).
+    /// Send an ACK for an admitted reliable or allowlisted peer-control command
+    /// iff it requested one. Callers enforce admission; sent-time only selects
+    /// the timestamp to echo and is not an additional ACK requirement.
     func ackIfRequested(_ commandByte: UInt8, channelID: UInt8, relSeq: UInt16,
                         flags: UInt16, sentTime: UInt16) {
         guard commandByte & Enet.flagAcknowledge != 0 else { return }

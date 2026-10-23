@@ -148,6 +148,16 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
 
     // MARK: - Socket
 
+    private static func configureReceiveTimeout(_ socket: Int32) throws {
+        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            let failure = errno
+            _ = close(socket) // Still local: fd ownership has not been published.
+            throw EnetError.socketFailure("video receive timeout unavailable (errno \(failure))")
+        }
+    }
+
     private func openSocket() throws {
         guard let (dest, destLen, family) = UdpPinger.makeSockaddr(for: host, port: videoPort) else {
             throw EnetError.socketFailure("could not build video host address for \(host)")
@@ -204,8 +214,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
         }
         // 100ms recv timeout so the receive loop polls `interrupted` and exits
         // (UDP_RECV_POLL_TIMEOUT_MS in Limelight-internal.h).
-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        try Self.configureReceiveTimeout(sock)
 
         // Bind to a wildcard ephemeral local port - UNCONNECTED, so recvfrom
         // accepts RTP from any source port (Sunshine does NOT source video from
@@ -289,8 +298,10 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             var batched = true
             var receiveFailed = false
             var foreignPeerNoted = false
+            var pressureDelay: useconds_t = 1_000
             while let self, !self.interrupted.load(ordering: .relaxed) {
                 let count = batched ? batch.receive(from: sock) : batch.receiveOne(from: sock)
+                if count >= 0 { pressureDelay = 1_000 }
                 for index in 0..<max(count, 0) {
                     guard !self.interrupted.load(ordering: .relaxed) else { break }
                     guard batch.isExpectedPeer(at: index, expected: self.destAddr,
@@ -306,7 +317,9 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
                 if count < 0 {
                     let err = errno
                     guard !self.interrupted.load(ordering: .relaxed) else { break }
-                    if self.shouldContinueReceiving(after: err, batched: &batched) { continue }
+                    if self.shouldContinueReceiving(after: err, batched: &batched,
+                                                    pressureDelay: &pressureDelay) { continue }
+                    guard !self.interrupted.load(ordering: .relaxed) else { break }
                     receiveFailed = true
                     break
                 }
@@ -326,9 +339,11 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
 
     /// Returning false ends the receive loop. A poll timeout also serves as the idle tick that expires
     /// the reorder hold, so deferred packets are flushed here.
-    private func shouldContinueReceiving(after err: Int32, batched: inout Bool) -> Bool {
+    private func shouldContinueReceiving(after err: Int32, batched: inout Bool,
+                                        pressureDelay: inout useconds_t) -> Bool {
         switch err {
         case EAGAIN, EWOULDBLOCK, EINTR:
+            pressureDelay = 1_000
             rtpQueue.flushDeferredIfWindowElapsed(nowUs: DispatchTime.now().uptimeNanoseconds / 1000)
         case ENOSYS where batched, EOPNOTSUPP where batched:
             Diag.notice("recvmsg_x unavailable errno \(err) - falling back to recvmsg", Self.cat)
@@ -338,13 +353,15 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
                 loggedReceivePressure = true
                 Diag.warn("NativeVideo receive buffer pressure errno \(err) (will keep trying)", Self.cat)
             }
-            // These fail at once instead of waiting out SO_RCVTIMEO, so pause before retrying.
-            usleep(1_000)
+            // These fail at once instead of waiting out SO_RCVTIMEO. Bound
+            // wakeups under sustained pressure while keeping stop responsive.
+            usleep(pressureDelay)
+            pressureDelay = min(pressureDelay * 2, 16_000)
         default:
             Diag.error("NativeVideo receive failed errno \(err) - ending the connection", Self.cat)
             return false
         }
-        return true
+        return !interrupted.load(ordering: .relaxed)
     }
 
     /// Copies one datagram out of the socket buffer, opening it on the way when video is encrypted.

@@ -107,6 +107,12 @@ import Foundation
     let failed = MacHostModel(operations: .init(installed: { true }, addresses: { addresses }, start: { _, _, _ in exited }, download: { _ in }))
     failed.refresh(); failed.acknowledged = true; failed.start(); try await settle { failed.phase == .running }
     exited.finish(); try expect(failed.phase == .stopped && failed.errorMessage != nil && failed.invitation == nil, "unexpected exit retained success status")
+    let unavailable = MacHostModel(operations: .init(installed: { true }, addresses: { addresses },
+        start: { _, _, _ in throw MacHostPolicy.Failure.helperUnavailable }, download: { _ in }))
+    unavailable.refresh(); unavailable.acknowledged = true; unavailable.start()
+    try await settle { unavailable.phase == .stopped && unavailable.errorMessage != nil }
+    try expect(unavailable.errorMessage == MacHostPolicy.Failure.helperUnavailable.localizedDescription && unavailable.invitation == nil,
+               "helper startup failure was misreported as a running Sunshine exit")
     var continuation: CheckedContinuation<any MacHostOwnedProcess, Never>?
     let suspendedChild = SyntheticMacHostChild()
     let cancelled = MacHostModel(operations: .init(installed: { true }, addresses: { addresses }, start: { _, _, _ in await withCheckedContinuation { continuation = $0 } }, download: { _ in }))
