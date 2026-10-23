@@ -11,17 +11,19 @@ $deployment=Get-ManagedDeployment -Revoke
 $state=$deployment.State; $record=$deployment.Record; $config=$deployment.Config
 if (-not $deployment.ConfigExists) {
     if ($deployment.User.Enabled -or $deployment.Service.State -ne 'Stopped') { throw 'The retained deployment is not fully disabled. Review manually; no service/account changes were made.' }
-} else {
-    Stop-Service -Name sshd
-    Disable-LocalUser -SID $deployment.User.SID
 }
-# This helper owns a dedicated system OpenSSH deployment. Stop existing session workers too;
-# disabling a user/key by itself only prevents future authentication.
-Stop-ManagedSessionWorkers
+# Prove the live service ancestry and hold process handles before changing access.
+# A stopped service with unproven remnants requires manual recovery, never a name-based kill.
+Stop-ManagedSessionWorkers -BeforeStop {
+    if ($deployment.ConfigExists) {
+        Disable-LocalUser -SID $deployment.User.SID
+        Stop-Service -Name sshd
+    }
+}
 Remove-ManagedFirewallAccess
 if (-not $deployment.ConfigExists) {
     Set-Service -Name sshd -StartupType $record.StartupBefore
-    Write-Output ('DeskBridge access is already disabled. Verified retained metadata/account and terminated any remaining owned sessions. OpenSSH service is currently stopped; restored startup type: ' + $record.StartupBefore + '. The default OpenSSH firewall rule was not changed during this call.')
+    Write-Output ('DeskBridge access is already disabled. Verified retained metadata/account and confirmed no remaining OpenSSH workers. OpenSSH service is currently stopped; restored startup type: ' + $record.StartupBefore + '. The default OpenSSH firewall rule was not changed during this call.')
     return
 }
 Move-Item -LiteralPath $config -Destination (Join-Path $state ('sshd_config.disabled-' + (Get-Date -Format 'yyyyMMddTHHmmss'))) 

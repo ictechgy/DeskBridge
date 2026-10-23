@@ -175,54 +175,176 @@ function Invoke-ProtectedCompilation([string] $TypeDefinition) {
         }
     }
 }
-function Stop-ManagedSessionWorkers {
-    param([string] $WindowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows),
-          [scriptblock] $Inventory = { @(Get-CimInstance -ClassName Win32_Process -Filter "Name='sshd.exe' OR Name='sshd-session.exe' OR Name='sshd-auth.exe'" -ErrorAction Stop) },
-          [scriptblock] $Terminate)
-    $workers=@(& $Inventory)
-    foreach ($worker in $workers) {
-        if (-not (Test-SystemOpenSSHWorkerPath $worker $WindowsDirectory) -or
-            -not ($worker.ProcessId -is [uint32] -or $worker.ProcessId -is [int]) -or $worker.ProcessId -le 0) {
-            throw 'Unknown OpenSSH worker identity. Access remains disabled; review the dedicated service manually.'
-        }
-    }
-    if (-not $Terminate -and $workers.Count -gt 0) {
-        if (-not ('DeskBridge.ManagedWorkerStop' -as [type])) {
-            Invoke-ProtectedCompilation -TypeDefinition @'
+function Initialize-ManagedWorkerHandle {
+    if ('DeskBridge.ManagedWorkerHandle' -as [type]) { return }
+    Invoke-ProtectedCompilation -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 namespace DeskBridge {
- public static class ManagedWorkerStop {
-  [DllImport("kernel32.dll", SetLastError=true)] static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
+ public sealed class ManagedWorkerHandle : IDisposable {
+  [StructLayout(LayoutKind.Sequential)] struct BasicInformation {
+   public int ExitStatus; public IntPtr PebBaseAddress; public UIntPtr AffinityMask;
+   public int BasePriority; public UIntPtr UniqueProcessId; public UIntPtr InheritedFromUniqueProcessId;
+  }
+  [DllImport("kernel32.dll", SetLastError=true)] static extern SafeProcessHandle OpenProcess(uint access, bool inherit, uint pid);
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, StringBuilder name, ref uint size);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetProcessTimes(SafeProcessHandle process, out long created, out long exited, out long kernel, out long user);
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(SafeProcessHandle process, int kind, out BasicInformation information, int size, out int returned);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(SafeProcessHandle process, uint code);
-  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
-  public static void Stop(int pid, string expected) {
-   // Bind identity and termination to the SAME kernel handle, never a reused PID.
-   using (var process=OpenProcess(0x00101001, false, pid)) {
-    if (process.IsInvalid) { int error=Marshal.GetLastWin32Error(); if (error==87) return; throw new Win32Exception(error); }
-    var name=new StringBuilder(32768); uint size=32768;
-    if (!QueryFullProcessImageName(process, 0, name, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error());
-    if (!String.Equals(name.ToString(), expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("OpenSSH worker identity changed.");
-    if (!TerminateProcess(process, 1)) {
-     int error=Marshal.GetLastWin32Error();
-     if (WaitForSingleObject(process, 0)!=0) throw new Win32Exception(error);
-    }
-    if (WaitForSingleObject(process, 5000)!=0) throw new InvalidOperationException("OpenSSH worker did not stop.");
+  [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(SafeProcessHandle process, uint milliseconds);
+  SafeProcessHandle process;
+  public uint ProcessId { get; private set; }
+  public uint ParentProcessId { get; private set; }
+  public long CreatedFileTime { get; private set; }
+  public string ExecutablePath { get; private set; }
+  public bool Alive {
+   get {
+    if (process == null || process.IsClosed || process.IsInvalid) throw new InvalidOperationException("OpenSSH ownership handle is closed.");
+    uint state=WaitForSingleObject(process, 0);
+    if (state==0) return false;
+    if (state==258) return true;
+    throw new Win32Exception(Marshal.GetLastWin32Error());
    }
   }
+  public static ManagedWorkerHandle Capture(uint pid, string expected) {
+   var result=new ManagedWorkerHandle();
+   try {
+    // Hold this object from ancestry inspection through termination. Stop never reopens a PID.
+    result.process=OpenProcess(0x00101401, false, pid);
+    if (result.process.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+    var name=new StringBuilder(32768); uint size=32768;
+    if (!QueryFullProcessImageName(result.process, 0, name, ref size)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    if (!String.Equals(name.ToString(), expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("OpenSSH worker identity changed.");
+    long created, exited, kernel, user;
+    if (!GetProcessTimes(result.process, out created, out exited, out kernel, out user)) throw new Win32Exception(Marshal.GetLastWin32Error());
+    BasicInformation info; int returned; int length=Marshal.SizeOf(typeof(BasicInformation));
+    int status=NtQueryInformationProcess(result.process, 0, out info, length, out returned);
+    if (status!=0 || returned!=length || info.UniqueProcessId.ToUInt64()!=pid || info.InheritedFromUniqueProcessId.ToUInt64()>UInt32.MaxValue || created<=0)
+     throw new InvalidOperationException("OpenSSH native ancestry could not be verified.");
+    result.ProcessId=pid; result.ParentProcessId=(uint)info.InheritedFromUniqueProcessId.ToUInt64();
+    result.CreatedFileTime=created; result.ExecutablePath=name.ToString();
+    if (!result.Alive) throw new InvalidOperationException("OpenSSH worker exited during ownership inspection.");
+    return result;
+   } catch { result.Dispose(); throw; }
+  }
+  public void Stop() {
+   if (!Alive) return;
+   if (!TerminateProcess(process, 1)) {
+    int error=Marshal.GetLastWin32Error();
+    if (WaitForSingleObject(process, 0)!=0) throw new Win32Exception(error);
+   }
+   if (WaitForSingleObject(process, 5000)!=0) throw new InvalidOperationException("Owned OpenSSH worker did not stop.");
+  }
+  public void Dispose() { if (process!=null) { process.Dispose(); process=null; } }
  }
 }
 '@
-        }
-        $Terminate={param($worker) [DeskBridge.ManagedWorkerStop]::Stop([int]$worker.ProcessId,[string]$worker.ExecutablePath)}
+}
+function Stop-ManagedSessionWorkers {
+    param([Parameter(Mandatory=$true)][scriptblock] $BeforeStop,
+          [string] $WindowsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows),
+          [scriptblock] $Inventory = { @(Get-CimInstance -ClassName Win32_Process -Filter "Name='sshd.exe' OR Name='sshd-session.exe' OR Name='sshd-auth.exe'" -ErrorAction Stop) },
+          [scriptblock] $ServiceInventory = { @(Get-CimInstance -ClassName Win32_Service -Filter "Name='sshd'" -ErrorAction Stop) },
+          [scriptblock] $Capture,[scriptblock] $Terminate,[scriptblock] $Release)
+    # The verified deployment caller supplies the account/service stop transaction. No mutation
+    # may occur until every worker is proven to descend from this live service instance.
+    $services=@(& $ServiceInventory)
+    if ($services.Count -ne 1) { throw 'The dedicated OpenSSH service could not be inspected. Review manually.' }
+    $service=$services[0]
+    foreach ($field in @('Name','State','ProcessId','PathName')) {
+        if (-not $service.PSObject.Properties[$field]) { throw 'Incomplete OpenSSH service identity. Review manually.' }
     }
-    foreach ($worker in $workers) { & $Terminate $worker }
-    # A successful stop call is not evidence that no child/session remains.
-    if (@(& $Inventory).Count -ne 0) { throw 'OpenSSH workers remain. Access stays disabled; review manually before resuming.' }
+    $expected=$WindowsDirectory+'\System32\OpenSSH\sshd.exe'
+    Assert-OpenSSHServicePath $service $expected
+    if ($service.Name -ine 'sshd' -or $service.State -cnotin @('Running','Stopped') -or
+        -not ($service.ProcessId -is [uint32] -or $service.ProcessId -is [int]) -or $service.ProcessId -lt 0 -or
+        ($service.State -ceq 'Stopped' -and $service.ProcessId -ne 0) -or ($service.State -ceq 'Running' -and $service.ProcessId -le 0)) {
+        throw 'OpenSSH service lifetime is ambiguous. Review manually before changing access.'
+    }
+    $workers=@(& $Inventory)
+    foreach ($worker in $workers) {
+        if (-not (Test-SystemOpenSSHWorkerPath $worker $WindowsDirectory) -or
+            -not $worker.PSObject.Properties['ProcessId'] -or
+            -not ($worker.ProcessId -is [uint32] -or $worker.ProcessId -is [int]) -or $worker.ProcessId -le 0) {
+            throw 'Unknown OpenSSH worker identity. Review the dedicated service manually.'
+        }
+    }
+    if ($service.State -ceq 'Stopped' -and $workers.Count -gt 0) {
+        # A persisted PID, executable path or orphan's parent PID cannot prove service ownership.
+        throw 'OpenSSH workers remain without a live managed service ancestor. No workers were stopped; manual recovery is required.'
+    }
+    if ($service.State -ceq 'Running' -and @($workers | Where-Object {$_.ProcessId -eq $service.ProcessId -and $_.Name -ieq 'sshd.exe'}).Count -ne 1) {
+        throw 'The live OpenSSH service process was not found. No workers were stopped; review manually.'
+    }
+    if (($Capture -or $Terminate -or $Release) -and -not ($Capture -and $Terminate -and $Release)) {
+        throw 'Synthetic worker callbacks must supply capture, termination and release together.'
+    }
+    if (-not $Capture -and $workers.Count -gt 0) {
+        Initialize-ManagedWorkerHandle
+        $Capture={param($worker) [DeskBridge.ManagedWorkerHandle]::Capture([uint32]$worker.ProcessId,[string]$worker.ExecutablePath)}
+        $Terminate={param($identity) $identity.Stop()}
+        $Release={param($identity) $identity.Dispose()}
+    }
+    $handles=New-Object 'Collections.Generic.List[object]'
+    $byPid=@{}
+    try {
+        # Capture the service root first. Native parent PID, time and image all come from
+        # the held process object, not from a stale CIM projection or a command-line guess.
+        foreach ($worker in @($workers | Sort-Object {$_.ProcessId -ne $service.ProcessId})) {
+            $identity=& $Capture $worker
+            if ($null -eq $identity) { throw 'OpenSSH ownership capture returned no handle.' }
+            $handles.Add($identity)
+            foreach ($field in @('ProcessId','ParentProcessId','CreatedFileTime','ExecutablePath','Alive')) {
+                if (-not $identity.PSObject.Properties[$field]) { throw 'Incomplete OpenSSH ownership handle.' }
+            }
+            if ($identity.ProcessId -ne $worker.ProcessId -or $identity.ExecutablePath -ine $worker.ExecutablePath -or
+                $identity.CreatedFileTime -isnot [long] -or $identity.CreatedFileTime -le 0 -or
+                -not ($identity.ParentProcessId -is [uint32] -or $identity.ParentProcessId -is [int]) -or $identity.ParentProcessId -lt 0 -or
+                $identity.Alive -isnot [bool] -or -not $identity.Alive -or $byPid.ContainsKey([string]$identity.ProcessId)) {
+                throw 'OpenSSH ownership changed during capture. No workers were stopped; review manually.'
+            }
+            $byPid[[string]$identity.ProcessId]=$identity
+        }
+        foreach ($identity in $handles) {
+            $cursor=$identity; $visited=@{}
+            while ($cursor.ProcessId -ne $service.ProcessId) {
+                $key=[string]$cursor.ProcessId
+                $parentKey=[string]$cursor.ParentProcessId
+                if ($visited.ContainsKey($key) -or -not $byPid.ContainsKey($parentKey)) {
+                    throw 'An OpenSSH worker has no proven managed service ancestry. No workers were stopped; review unrelated deployments manually.'
+                }
+                $visited[$key]=$true; $parent=$byPid[$parentKey]
+                if ($parent.CreatedFileTime -ge $cursor.CreatedFileTime) {
+                    throw 'OpenSSH parent identity was reused or ambiguous. No workers were stopped; review manually.'
+                }
+                $cursor=$parent
+            }
+        }
+        $current=@(& $ServiceInventory)
+        if ($current.Count -ne 1 -or $current[0].Name -ine 'sshd' -or $current[0].State -cne $service.State -or
+            $current[0].ProcessId -ne $service.ProcessId -or $current[0].PathName -cne $service.PathName) {
+            throw 'OpenSSH service changed during ownership inspection. No workers were stopped; review manually.'
+        }
+        foreach ($identity in $handles) {
+            if (-not $identity.Alive) { throw 'OpenSSH ancestry exited during inspection. No workers were stopped; review manually.' }
+        }
+        & $BeforeStop | Out-Null
+        # Descendants first, using only the captured handles. A later PID reuse cannot
+        # retarget termination, and a newly observed worker is never adopted here.
+        foreach ($identity in @($handles | Sort-Object CreatedFileTime -Descending)) { & $Terminate $identity }
+        # Stop success is not inactivity evidence: new/unknown workers force manual review.
+        if (@(& $Inventory).Count -ne 0) { throw 'OpenSSH workers remain. Access inactivity is unproven; review manually before resuming.' }
+        $stopped=@(& $ServiceInventory)
+        if ($stopped.Count -ne 1 -or $stopped[0].Name -ine 'sshd' -or $stopped[0].State -cne 'Stopped' -or
+            $stopped[0].ProcessId -ne 0 -or $stopped[0].PathName -cne $service.PathName) {
+            throw 'OpenSSH service inactivity could not be verified. Review manually before resuming.'
+        }
+    } finally {
+        foreach ($identity in $handles) { & $Release $identity }
+    }
 }
 function Save-DeskBridgeConnectionReply([object] $Reply,[object] $Dialog) {
     # Only local export is recoverable here. Backend/reply identity validation stays with the caller.

@@ -153,7 +153,7 @@ try {
     Assert-OpenSSHServicePath (Get-CimInstance Win32_Service -Filter "Name='sshd'" -ErrorAction Stop) $sshd
     # Installation must not start a partially configured endpoint.
     $service = Get-Service -Name sshd
-    if ($service.Status -ne 'Stopped') { Stop-Service sshd }
+    if ($service.Status -ne 'Stopped') { throw 'OpenSSH became active during setup. This helper will not stop an unproven deployment.' }
     # Recovery/key metadata must never pass through an inherited writable-directory window.
     New-PrivateDirectory $state (New-PrivateDirectoryAcl $null 'ReadAndExecute') | Out-Null
     Assert-ProtectedDirectory $state
@@ -250,9 +250,13 @@ Match User $UserName
     Get-Content -LiteralPath $hostKey
     Write-Output 'Rollback: run Disable-DeskBridgeSFTP.ps1 -Apply. Shared files are retained.'
 } catch {
-    if ($createdState -or $startedService -or $wroteConfig) { Stop-Service sshd -ErrorAction SilentlyContinue }
     if ($createdFirewall) { Remove-NetFirewallRule -Name 'DeskBridge-SFTP-In-TCP' -ErrorAction SilentlyContinue }
     if ($createdUser) { Disable-LocalUser -SID $user.SID -ErrorAction SilentlyContinue }
+    if ($startedService -or $wroteConfig) {
+        # A newly created state directory alone never authorizes stopping an SSH server.
+        Assert-ManagedConfig $config $rollback.ConfigSha256
+        Stop-ManagedSessionWorkers -BeforeStop {Stop-Service -Name sshd}
+    }
     if ($wroteConfig -and (Test-Path -LiteralPath $config)) { Move-Item -LiteralPath $config -Destination (Join-Path $state 'sshd_config.failed') -Force }
     if (-not $recordCommitted) {
         # Only compensate resources created by THIS invocation, matching the actual account SID.
