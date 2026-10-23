@@ -6,7 +6,7 @@ REQUIRED_WINDOWS_SUITES = ['native-pe', 'managed-payload', 'native-arguments',
                           'reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup', 'headless-status']
 MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 242, 'native-arguments': 1278,
                         'reverse-client': 124, 'reverse-discovery': 195, 'reverse-qr': 65,
-                        'headless-native': 370, 'headless-setup': 284, 'headless-status': 75}
+                        'headless-native': 370, 'headless-setup': 291, 'headless-status': 82}
 HEADLESS_SOURCE_PATHS = ['host/windows/HeadlessNative.cs', 'host/windows/HeadlessSetup.psm1',
                          'host/windows/Invoke-DeskBridgeHeadless.ps1', 'host/windows/tests/Test-HeadlessNative.ps1',
                          'host/windows/tests/Test-HeadlessSetup.ps1', 'scripts/tests/HeadlessNativeChecks.cs',

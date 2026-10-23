@@ -108,7 +108,7 @@ internal static class Checks
         foreach (bool rebootRequired in new[] { false, true })
         foreach (bool recoveryBlocked in new[] { false, true })
         {
-            bool accepted = !recoveryBlocked && ((code == 0 && completed && !rebootRequired) || (code == 3010 && completed && rebootRequired) || (code == 12 && !completed && rebootRequired) || (code == 2 && !completed)) || (code == 13 && !completed && !rebootRequired && recoveryBlocked);
+            bool accepted = !recoveryBlocked && ((code == 0 && completed && !rebootRequired) || (code == 3010 && completed && rebootRequired) || (code == 12 && !completed && rebootRequired) || (code == 2 && !completed && !rebootRequired)) || (code == 13 && !completed && !rebootRequired && recoveryBlocked);
             try
             {
                 int interpreted = (int)headlessResult.Invoke(null, new object[] { code, completed, rebootRequired, recoveryBlocked })!;

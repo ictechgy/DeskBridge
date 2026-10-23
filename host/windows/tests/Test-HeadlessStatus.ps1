@@ -5,7 +5,7 @@ $ErrorActionPreference='Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'HeadlessStatus.psm1') -Force
 $count=0
 function Check([bool] $Condition,[string] $Message) { if (-not $Condition) { throw $Message }; $script:count++ }
-foreach ($state in @('Unsupported','BootEvidenceUnavailable','Absent','Installed','InstalledPendingRestart','RemovalPending','LegacyRecoveryRequired','RecoveryRequired','Conflict','unknown','installed','')) {
+foreach ($state in @('Unsupported','DeviceIdentityUnavailable','BootEvidenceUnavailable','Absent','Installed','InstalledPendingRestart','RemovalPending','LegacyRecoveryRequired','RecoveryRequired','Conflict','unknown','installed','')) {
     $text=Get-KnotHeadlessStatusText $state
     Check (-not [string]::IsNullOrWhiteSpace($text)) ('Missing state text: '+$state)
 }
@@ -39,6 +39,7 @@ try {
         @{Status='RemovalPending';Completed=$false;Reboot=$true;Code=12;Receipts=@('reboot-required')},
         @{Status='LegacyRecoveryRequired';Completed=$false;Reboot=$false;Code=13;Receipts=@('recovery-blocked')},
         @{Status='BootEvidenceUnavailable';Completed=$false;Reboot=$false;Code=13;Receipts=@('recovery-blocked')},
+        @{Status='DeviceIdentityUnavailable';Completed=$false;Reboot=$false;Code=13;Receipts=@('recovery-blocked')},
         @{Status='LegacyRecoveryRequired';Completed=$false;Reboot=$true;Code=1;Receipts=@()},
         @{Status='RecoveryRequired';Completed=$false;Reboot=$false;Code=1;Receipts=@()}
     )

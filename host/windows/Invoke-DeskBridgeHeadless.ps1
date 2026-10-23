@@ -20,10 +20,10 @@ function Write-HeadlessReceipt([string] $Name) {
 try {
     if ($Operation -ceq 'InstallVirtualDisplay') { $result=Install-KnotVirtualDisplay }
     else { $result=Remove-KnotVirtualDisplay }
-    if (-not $result.Completed -and $result.Status -cin @('LegacyRecoveryRequired','BootEvidenceUnavailable')) {
+    if (-not $result.Completed -and $result.Status -cin @('LegacyRecoveryRequired','BootEvidenceUnavailable','DeviceIdentityUnavailable')) {
         if ($result.RebootRequired) { throw 'Blocked recovery must not request another restart.' }
         Write-HeadlessReceipt 'recovery-blocked'
-        Write-Host '자동 복구를 진행할 수 없습니다. 관리자에게 복구 기록과 부팅 정보 점검을 요청하세요. 재시작만 반복하거나 복구 파일을 삭제하지 마세요.' -ForegroundColor Red
+        Write-Host '자동 복구를 진행할 수 없습니다. 관리자에게 복구 기록과 장치·부팅 정보 점검을 요청하세요. 재시작만 반복하거나 복구 파일을 삭제하지 마세요.' -ForegroundColor Red
         if (-not $NoPause) { [void](Read-Host '안내를 확인했습니다. Enter 키를 누르면 관리자 창이 닫힙니다') }
         exit 13
     }

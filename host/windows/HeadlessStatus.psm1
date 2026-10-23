@@ -4,6 +4,7 @@
 function Get-KnotHeadlessStatusText([string] $Status) {
     switch -CaseSensitive ($Status) {
         'Unsupported' { return '이 상태 확인은 64비트 Windows PowerShell에서만 사용할 수 있습니다. 배포용 Knot Windows EXE를 실행하세요.' }
+        'DeviceIdentityUnavailable' { return '설치 기록에 맞는 장치 식별 정보를 확인하지 못해 자동 제거를 중단했습니다. 기존 기록과 설정을 보존했습니다. Windows 관리자에게 장치와 복구 기록 점검을 요청하세요.' }
         'BootEvidenceUnavailable' { return '부팅 정보를 안전하게 확인하지 못해 자동 복구를 중단했습니다. 기존 기록은 보존했습니다. Windows 관리자에게 부팅 정보와 복구 기록 점검을 요청하세요.' }
         'Absent' { return 'Knot 가상 화면이 없습니다. 외부 드라이버 보안 검토로 자동 설치는 보류 중입니다.' }
         'Installed' { return '설치 기록을 확인했습니다. 실제 장치와 화면 상태는 추가로 확인해야 합니다.' }
@@ -21,7 +22,7 @@ function Get-KnotHeadlessOperationText([ValidateSet('InstallVirtualDisplay','Rem
         return 'Knot 가상 화면 제거를 완료했습니다. Windows 드라이버 저장소 캐시는 유지됩니다.'
     }
     if ($Code -eq 3010 -and $Operation -ceq 'InstallVirtualDisplay') { return '설치는 완료됐지만 Windows 재시작이 필요합니다. 재시작 후 실제 화면과 원격 연결을 확인하세요.' }
-    if ($Code -eq 13) { return '자동 복구를 진행할 수 없습니다. Windows 관리자에게 복구 기록과 부팅 정보 점검을 요청하세요. 재시작만 반복하거나 복구 파일을 삭제하지 마세요.' }
+    if ($Code -eq 13) { return '자동 복구를 진행할 수 없습니다. Windows 관리자에게 복구 기록과 장치·부팅 정보 점검을 요청하세요. 재시작만 반복하거나 복구 파일을 삭제하지 마세요.' }
     if ($Code -eq 12) {
         if ($Operation -ceq 'InstallVirtualDisplay') { return '설치를 완료하지 못했고 복구가 남아 있습니다. Windows 재시작 후 관리형 제거를 실행하세요. 복구 파일은 보존됩니다.' }
         return '제거가 아직 완료되지 않았습니다. Windows 재시작 후 여기에서 제거를 다시 실행하세요. 복구 파일은 보존됩니다.'

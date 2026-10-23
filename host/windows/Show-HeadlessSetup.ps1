@@ -66,7 +66,7 @@ function Update-HeadlessState {
         $state=Get-KnotHeadlessState
         $recordText=Get-KnotHeadlessStatusText $state.Status
         $status.Text=$recordText+' 장치 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
-        if ($state.Status -cin @('Conflict','LegacyRecoveryRequired','Unsupported','BootEvidenceUnavailable') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
+        if ($state.Status -cin @('Conflict','LegacyRecoveryRequired','Unsupported','BootEvidenceUnavailable','DeviceIdentityUnavailable') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
         Initialize-KnotHeadlessNative
         if ($null -eq $script:scan) { $script:scan=[Knot.Headless.Native]::ScanAsync() }
         $timer=[Diagnostics.Stopwatch]::StartNew()
@@ -93,7 +93,7 @@ function Update-HeadlessState {
         }
         $devices=@($inventory.Devices | Where-Object { $_.InstanceId -ieq $state.InstanceId })
         $screens=@($inventory.Displays | Where-Object { $_.AdapterInstanceId -ieq $state.InstanceId })
-        if ($devices.Count -ne 1) { $status.Text='설치 기록은 있지만 장치를 확인하지 못했습니다. 재시작 후에도 같으면 “Knot 가상 화면 제거”를 실행하세요. 자동 설치는 계속 보류되며 이 버전에서는 다시 설치할 수 없습니다.'; return }
+        if ($devices.Count -ne 1) { $script:canRemove=$false; $status.Text=$recordText+[Environment]::NewLine+(Get-KnotHeadlessStatusText 'DeviceIdentityUnavailable'); return }
         $active=@($screens | Where-Object { $_.Active })
         if ($active.Count -gt 0) {
             $names=($active | ForEach-Object { 'name: '+$_.Name+', display_name: '+$_.DisplayName }) -join '; '

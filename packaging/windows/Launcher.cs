@@ -286,7 +286,7 @@ internal static class Launcher
         // Receipts distinguish completed installation from incomplete rollback/removal.
         if (result == 3010 && completed && rebootRequired) return 3010;
         if (result == 12 && !completed && rebootRequired) return 12;
-        if (result == 2 && !completed) return 2;
+        if (result == 2 && !completed && !rebootRequired) return 2;
         throw new InvalidOperationException("가상 화면 작업을 완료하지 못했습니다. 상태를 다시 확인한 뒤 복구 안내를 따르세요.");
     }
 

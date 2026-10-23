@@ -609,6 +609,7 @@ function Invoke-KnotHeadlessRemoval([object] $Journal,[hashtable] $Operations) {
     $hasDevice=[bool](& $Operations.Validate $Journal)
     if ($Journal.schema -eq 2 -and $Journal.removalPhase -cne 'None') { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='LegacyRecoveryRequired';InstanceId=$Journal.instanceId} }
     if ($Journal.schema -ne 3) { throw 'Legacy recovery requires exact trusted migration before removal.' }
+    if ($Journal.PSObject.Properties['status'] -and $Journal.status -ceq 'Installed' -and $Journal.removalPhase -ceq 'None' -and -not $hasDevice) { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='DeviceIdentityUnavailable';InstanceId=$Journal.instanceId} }
     try { $evidence=& $Operations.BootEvidence } catch { $evidence=$null }
     $knownBoot=Test-KnotBootEvidence $evidence
     if ($Journal.removalPhase -cin @('Started','PendingReboot')) {
@@ -694,12 +695,14 @@ function Convert-KnotLegacyJournal([object] $Journal,[object[]] $Devices) {
 function Test-KnotOwnedDeployment([object] $Planned) {
     try { $owned=Read-KnotJournal $null; return ($owned.deploymentId -ceq $Planned.deploymentId -and $owned.instanceId -ceq $Planned.instanceId) } catch { return $false }
 }
+function Read-KnotDriverDevices { return [Knot.Headless.Native]::ReadDriverDevices() }
 function Remove-KnotOwnedDeployment([object] $Journal,[object] $Pins=$null) {
     # Validate every resource before the first removal. Never sweep devices or the driver store.
     $current=Read-KnotJournal $Pins -Recover -ExpectedDeploymentId $Journal.deploymentId
     if ($current.deploymentId -cne $Journal.deploymentId) { throw 'The virtual display deployment changed during recovery.' }
-    $devices=@([Knot.Headless.Native]::ReadDriverDevices())
+    $devices=@(Read-KnotDriverDevices)
     Assert-KnotDevices $devices $current -Installed:($current.status -ceq 'Installed' -and -not $current.removalPending -and $devices.Count -gt 0)
+    if ($current.schema -eq 3 -and $current.status -ceq 'Installed' -and $current.removalPhase -ceq 'None' -and $devices.Count -eq 0) { return [pscustomobject]@{Completed=$false;RebootRequired=$false;Status='DeviceIdentityUnavailable';InstanceId=$current.instanceId} }
     $base=Open-KnotRegistry; $key=$null
     try {
         Assert-KnotRegistryParents $base
@@ -718,13 +721,13 @@ function Remove-KnotOwnedDeployment([object] $Journal,[object] $Pins=$null) {
         Save={ param($j,$step) Write-KnotJournal $j }
         RemoveDevice={ param($j) [Knot.Headless.Native]::RemoveDevice($j.instanceId) }
         Remaining={ param($j)
-            $remaining=@([Knot.Headless.Native]::ReadDriverDevices())
+            $remaining=@(Read-KnotDriverDevices)
             Assert-KnotDevices $remaining $j
             return ($remaining.Count -gt 0)
         }
         RemoveRegistry={ param($j)
             # A foreign device created after initial validation also blocks teardown.
-            Assert-KnotDevices @([Knot.Headless.Native]::ReadDriverDevices()) $j
+            Assert-KnotDevices @(Read-KnotDriverDevices) $j
             $base=Open-KnotRegistry; $key=$null; $vendor=$null
             try {
                 Assert-KnotRegistryParents $base
@@ -769,7 +772,7 @@ function Invoke-KnotHeadlessTransaction([object] $Journal,[hashtable] $Operation
                 $cleanup=& $Operations.Cleanup $Journal
                 if (-not $cleanup.Completed) {
                     $status='RecoveryRequired'
-                    if ($cleanup.PSObject.Properties['Status'] -and $cleanup.Status -cin @('RemovalPending','LegacyRecoveryRequired','BootEvidenceUnavailable','RecoveryRequired')) { $status=$cleanup.Status }
+                    if ($cleanup.PSObject.Properties['Status'] -and $cleanup.Status -cin @('RemovalPending','LegacyRecoveryRequired','BootEvidenceUnavailable','DeviceIdentityUnavailable','RecoveryRequired')) { $status=$cleanup.Status }
                     return [pscustomobject]@{Completed=$false;RebootRequired=[bool]$cleanup.RebootRequired;Status=$status;InstanceId=$Journal.instanceId}
                 }
             } catch { throw 'Virtual display setup failed and exact owned recovery data was retained. Run managed removal after restarting, or review the recovery folder if its contents changed.' }

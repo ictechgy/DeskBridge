@@ -441,6 +441,37 @@ try {
         $result=Invoke-KnotHeadlessRemoval $persisted (Make-RemovalOperations $state)
         Assert (-not $result.Completed -and $result.Status -ceq 'RemovalPending' -and $state.record) 'An absent devnode on the same boot cannot bypass a failed removal verification.'
     }
+    $j=New-RemovalJournal; Add-Member -InputObject $j -NotePropertyName status -NotePropertyValue 'Installed'
+    $state=New-TestState; $state.record=$true; $state.registry=$true; $state.files=$true
+    $ops=Make-RemovalOperations $state; $ops.BootEvidence={ throw 'missing installed identity must refuse before querying boot evidence' }
+    $result=Invoke-KnotHeadlessRemoval $j $ops
+    Assert (-not $result.Completed -and -not $result.RebootRequired -and $result.Status -ceq 'DeviceIdentityUnavailable' -and $state.events.Count -eq 0 -and $state.record -and $state.registry -and $state.files) 'An installed nonpending schema 3 deployment with no exact devnode preserves all recovery resources and reports manual device-identity recovery.'
+    $state.instance=$j.instanceId; $result=Invoke-KnotHeadlessRemoval $j (Make-RemovalOperations $state)
+    Assert ($result.Completed -and $result.Status -ceq 'Absent' -and -not $state.record) 'An installed nonpending schema 3 deployment with its exact devnode still follows managed removal.'
+    foreach ($phase in @('Started','PendingReboot','Ready')) {
+        $j=New-RemovalJournal; Add-Member -InputObject $j -NotePropertyName status -NotePropertyValue 'Installed'
+        $j.removalPending=$true; $j.removalPhase=$phase; $j.removalBootId='boot:2026-01-01T00:00:00.0000000Z'; $j.removalBootSession='a'*32; $j.rebootRequired=($phase -cne 'Ready')
+        $state=New-TestState; $state.record=$true; $state.registry=$true; $state.files=$true
+        $result=Invoke-KnotHeadlessRemoval $j (Make-RemovalOperations $state)
+        if ($phase -ceq 'Ready') { Assert ($result.Completed -and $result.Status -ceq 'Absent') 'Previously verified Ready removal can complete after its devnode is absent.' }
+        else { Assert (-not $result.Completed -and $result.RebootRequired -and $result.Status -ceq 'RemovalPending' -and $state.events.Count -eq 0 -and $state.record -and $state.files -and $state.registry) ('An already removed devnode still preserves the independent reboot barrier: '+$phase) }
+    }
+    # Exercise the real production removal guard before registry access, replacing
+    # only its disk-reader and device-inventory adapters with fresh objects.
+    $productionJournal=[pscustomobject]@{schema=3;status='Installed';deploymentId=('A'*32);instanceId=('ROOT\KNOTVDD\'+('A'*32));driverVersion='11.30.4.434';publishedInfName='oem42.inf';removalPending=$false;removalPhase='None'}
+    $guardState=[pscustomobject]@{RegistryCalls=0;InventoryCalls=0}
+    & $module {
+        param($j,$state)
+        $script:SyntheticProductionJournal=$j; $script:SyntheticMissingIdentityState=$state
+        $script:SavedProductionJournalReader=${function:Read-KnotJournal}; $script:SavedProductionDevices=${function:Read-KnotDriverDevices}; $script:SavedProductionRegistry=${function:Open-KnotRegistry}
+        function script:Read-KnotJournal([object]$Pins,[switch]$WithoutNative,[switch]$Recover,[hashtable]$FileSystem=$null,[string]$ExpectedDeploymentId='') { if ($ExpectedDeploymentId -cne $script:SyntheticProductionJournal.deploymentId) { throw 'unexpected synthetic deployment' }; return $script:SyntheticProductionJournal }
+        function script:Read-KnotDriverDevices { $script:SyntheticMissingIdentityState.InventoryCalls++; return @() }
+        function script:Open-KnotRegistry { $script:SyntheticMissingIdentityState.RegistryCalls++; throw 'missing installed identity must refuse before registry access' }
+    } $productionJournal $guardState
+    try {
+        $result=& $module { param($j) Remove-KnotOwnedDeployment $j } $productionJournal
+        Assert ($result.Status -ceq 'DeviceIdentityUnavailable' -and -not $result.Completed -and -not $result.RebootRequired -and $guardState.InventoryCalls -eq 1 -and $guardState.RegistryCalls -eq 0) 'The production removal path refuses an absent nonpending installed devnode before opening registry state or attempting cleanup.'
+    } finally { & $module { Set-Item Function:script:Read-KnotJournal $script:SavedProductionJournalReader; Set-Item Function:script:Read-KnotDriverDevices $script:SavedProductionDevices; Set-Item Function:script:Open-KnotRegistry $script:SavedProductionRegistry } }
     foreach ($change in @('boot-only','session-only','missing-session','invalid-session','missing-boot')) {
         $j=New-RemovalJournal; $j.removalPending=$true; $j.removalPhase='PendingReboot'; $j.rebootRequired=$true; $j.removalBootId='boot:2026-01-01T00:00:00.0000000Z'; $j.removalBootSession='a'*32
         $state=New-TestState; $state.record=$true; $state.registry=$true; $state.files=$true
@@ -461,7 +492,7 @@ try {
     $result=Invoke-KnotHeadlessRemoval $j (Make-RemovalOperations $state)
     Assert ($result.Status -ceq 'LegacyRecoveryRequired' -and -not $result.Completed -and -not $result.RebootRequired -and $state.events.Count -eq 0) 'A legacy pending record never invents missing volatile reboot evidence.'
 
-    foreach ($status in @('BootEvidenceUnavailable','LegacyRecoveryRequired','RemovalPending')) {
+    foreach ($status in @('BootEvidenceUnavailable','LegacyRecoveryRequired','DeviceIdentityUnavailable','RemovalPending')) {
         $state=New-TestState; $ops=Make-Operations $state 'driver'
         $restart=($status -ceq 'RemovalPending')
         $ops.Cleanup={ param($j) return [pscustomobject]@{Completed=$false;RebootRequired=$restart;Status=$status} }.GetNewClosure()
@@ -613,7 +644,7 @@ try {
         # Any path-based reopen of its held operation.lock fails this adapter.
         $control=Join-Path $root ('held-control-'+[Guid]::NewGuid().ToString('N'))
         & $module { param($path) $script:SyntheticControlDirectory=$path } $control
-        $state=New-SyntheticFileState; $heldState=[pscustomobject]@{Open=$false;Stream=$null;HandleChecks=0;ReopenAttempts=0}
+        $state=New-SyntheticFileState; $heldState=[pscustomobject]@{Open=$false;Stream=$null;Handle=$null;HandleChecks=0;ReopenAttempts=0}
         $heldFs=New-SyntheticFileSystem $state
         $ordinaryFileGuard=$heldFs.AssertFile
         $heldLockPath=Join-Path $control 'operation.lock'
@@ -623,7 +654,7 @@ try {
         }.GetNewClosure()
         $heldFs.OpenLock={ param($path)
             $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-            $heldState.Open=$true; $heldState.Stream=$stream; return $stream
+            $heldState.Open=$true; $heldState.Stream=$stream; $heldState.Handle=$stream.SafeFileHandle; return $stream
         }.GetNewClosure()
         $heldFs.ValidateHeldLock={ param($context,$path)
             $heldState.HandleChecks++
@@ -660,7 +691,7 @@ try {
             }.GetNewClosure()
             $read=& $module { param($action) Invoke-KnotExclusive $action } $action
             Assert $composition.SecondOpenRejected 'A second actual FileStream open remains excluded while composed recovery holds its lock.'
-            Assert ($read.generation -eq 1 -and -not [IO.File]::Exists($fixture.Pending) -and $heldState.HandleChecks -gt 0 -and $heldState.ReopenAttempts -eq 0 -and $heldState.Stream.SafeFileHandle.IsClosed) 'Exclusive recovery preserves evidence through the same live handle and clears/disposes its context after completion.'
+            Assert ($read.generation -eq 1 -and -not [IO.File]::Exists($fixture.Pending) -and $heldState.HandleChecks -gt 0 -and $heldState.ReopenAttempts -eq 0 -and $heldState.Handle.IsClosed) 'Exclusive recovery preserves evidence through the same live handle and clears/disposes its context after completion.'
             $contextCleared=& $module { $null -eq $script:HeldControlLock }
             $quarantines=@([IO.Directory]::EnumerateDirectories($control,'quarantine-*'))
             Assert ($contextCleared -and $quarantines.Count -eq 1 -and (Hash ([IO.File]::ReadAllBytes((Join-Path $quarantines[0] 'recovery.new')))) -ceq $pendingHash -and (Hash ([IO.File]::ReadAllBytes($fixture.Record))) -ceq $recordHash) 'The composed wrapper retains exact original evidence and predecessor bytes without an operation.lock path reopen.'
@@ -678,7 +709,7 @@ try {
             $action={ & $module { param($path,$p,$fs) $script:SyntheticDirectory=$path; Read-KnotJournal $p -FileSystem $fs -Recover } $fixture.Directory $pins $fixture.FileSystem }.GetNewClosure()
             Reject { & $module { param($action) Invoke-KnotExclusive $action } $action } 'A full protected evidence inventory refuses another quarantine before creating a stage.'
             Assert ([IO.File]::Exists($fixture.Pending) -and (Hash ([IO.File]::ReadAllBytes($fixture.Pending))) -ceq $pendingHash -and @([IO.Directory]::EnumerateFileSystemEntries($control)).Count -eq 102 -and $state.Created.Count -eq $createdBefore -and $state.Flushes -eq $flushBefore -and $heldState.ReopenAttempts -eq 0) 'Capacity refusal leaves the original interrupted bytes untouched and writes no new stage or evidence.'
-            Assert ($heldState.Stream.SafeFileHandle.IsClosed -and (& $module { $null -eq $script:HeldControlLock })) 'Failed composed recovery still disposes and clears the exact held lock context.'
+            Assert ($heldState.Handle.IsClosed -and (& $module { $null -eq $script:HeldControlLock })) 'Failed composed recovery still disposes and clears the exact held lock context.'
         } finally {
             & $module { Set-Item Function:script:New-KnotControlFileSystem $script:SavedControlFactory; Set-Item Function:script:Assert-KnotElevatedRuntime $script:SavedElevatedRuntime; $script:HeldControlLock=$null }
         }
