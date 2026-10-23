@@ -18,6 +18,7 @@ extension RtpAudioReceiver {
     func startReceiveLoop() {
         let sock = fd
         let bufSize = Self.maxPacketSize
+        let onReceiveFailed = onReceiveFailed
         recvQueue.async { [weak self] in
             // Session-long owned loop: name it so the per-thread CPU telemetry
             // resolves it (cleared at exit; same medicine as the video loop).
@@ -26,9 +27,12 @@ extension RtpAudioReceiver {
             let batch = DatagramBatch(capacity: 1, stride: bufSize)
             var timing = ReceiveTiming(telemetry: .audio)
             var foreignPeerNoted = false
+            var pressureDelay: useconds_t = 1_000
+            var receiveFailure: Int32?
             while let self, !self.interrupted.isSet {
                 let count = batch.receiveOne(from: sock)
                 let received = count > 0 ? batch.datagram(0).length : -1
+                if received >= 0 { pressureDelay = 1_000 }
                 if received >= 0, !batch.isExpectedPeer(at: 0, expected: self.destAddr,
                                                       expectedLength: self.destAddrLen) {
                     UdpPinger.noteForeignPeer(&foreignPeerNoted, stream: "Audio", category: Self.cat)
@@ -50,17 +54,39 @@ extension RtpAudioReceiver {
                     self.decodeWorker.enqueue([], count: 0, arrival: DispatchTime.now().uptimeNanoseconds)
                 } else {
                     let err = errno
-                    if err == EAGAIN || err == EWOULDBLOCK || err == EINTR {
-                        // Poll timeout (100ms of recv silence): same quiet-socket
-                        // proof as above - whatever arrives NEXT is delayed LIVE
-                        // audio (a radio-coalesced clump), not a host backlog,
-                        // and must not be eaten by the startup gate.
-                        self.decodeWorker.enqueue([], count: 0, arrival: DispatchTime.now().uptimeNanoseconds)
-                        continue
-                    }
-                    break // socket closed (stop) or fatal
+                    guard !self.interrupted.isSet else { break }
+                    if self.shouldContinueReceiving(after: err, pressureDelay: &pressureDelay) { continue }
+                    receiveFailure = err
+                    break
                 }
             }
+            if let receiveFailure { self?.publishReceiveFailure(receiveFailure, callback: onReceiveFailed) }
+        }
+    }
+
+    /// Buffer pressure can fail immediately rather than respecting SO_RCVTIMEO.
+    /// Cap the backoff at 16ms to avoid a busy loop while keeping stop responsive.
+    func shouldContinueReceiving(after err: Int32, pressureDelay: inout useconds_t) -> Bool {
+        switch err {
+        case EAGAIN, EWOULDBLOCK, EINTR:
+            pressureDelay = 1_000
+            // A quiet socket resolves the startup pacing measurement to its live edge.
+            decodeWorker.enqueue([], count: 0, arrival: DispatchTime.now().uptimeNanoseconds)
+        case ENOBUFS, ENOMEM:
+            usleep(pressureDelay)
+            pressureDelay = min(pressureDelay * 2, 16_000)
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Publish once after the receive loop ends, on a different queue. A consumer
+    /// may stop/join receivers from its callback; it must never run on recvQueue.
+    func publishReceiveFailure(_ error: Int32, callback: (@Sendable (Int32) -> Void)?) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, !self.interrupted.isSet else { return }
+            callback?(error)
         }
     }
 

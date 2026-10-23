@@ -137,8 +137,12 @@ class Window(Gtk.Window):
         try:
             if dialog.run() == Gtk.ResponseType.OK:
                 destination = dialog.get_filename()
-                self.run(lambda: save_package(self.pin, self.package, destination), self.got_package)
+                self.run(lambda: save_package(self.pin, self.package, destination), self.exported_package)
         finally: dialog.destroy()
+
+    def exported_package(self, destination):
+        self.install_command.set_text('sudo apt install ' + shlex.quote(str(destination)))
+        self.status.set_text('검증된 설치 패키지 사본을 저장했습니다. 아래 명령을 터미널에서 직접 실행해 설치할 수 있습니다. 설치 후 이 Linux 공유 시작을 누르세요.')
 
     def start(self):
         name = self.name.get_text()

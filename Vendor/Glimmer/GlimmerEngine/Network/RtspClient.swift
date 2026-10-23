@@ -65,6 +65,8 @@ struct RtspHandshakeResult {
 enum RtspError: Error, CustomStringConvertible {
     case interrupted
     case connectTimeout(UInt16)
+    /// Only failures before a TCP connection is ready may resubmit this request.
+    case connectionNotReady(String)
     case transportFailure(String)
     case badResponse(String)
     case nonOK(step: String, code: Int)
@@ -77,6 +79,7 @@ enum RtspError: Error, CustomStringConvertible {
         switch self {
         case .interrupted: return "RTSP interrupted"
         case .connectTimeout(let port): return "TCP connect to RTSP port \(port) timed out"
+        case .connectionNotReady(let reason): return "RTSP TCP connection not ready: \(reason)"
         case .transportFailure(let reason): return "RTSP transport failure: \(reason)"
         case .badResponse(let reason): return "RTSP bad response: \(reason)"
         case .nonOK(let step, let code): return "RTSP \(step) returned \(code)"
@@ -307,19 +310,22 @@ final class RtspClient: @unchecked Sendable {
     }
 
     /// One TCP round trip with ECONNREFUSED retry (500ms, up to 10s).
-    func sendAndReceive(_ bytes: Data) async throws -> Data {
+    func sendAndReceive(_ bytes: Data,
+                        exchange: (@Sendable (Data) async throws -> Data)? = nil) async throws -> Data {
         let deadline = Date().addingTimeInterval(10)
         var attempt = 0
         while true {
             if interrupted.isSet { throw RtspError.interrupted }
             do {
+                // The optional internal seam exercises the actual retry loop offline.
+                if let exchange { return try await exchange(bytes) }
                 return try await oneShot(bytes)
             } catch let rtspError as RtspError {
                 // Connection-refused-style failures get retried until the
                 // deadline, then name the port that never took us; everything
                 // else propagates.
                 if interrupted.isSet { throw RtspError.interrupted }
-                guard case .transportFailure = rtspError else { throw rtspError }
+                guard case .connectionNotReady = rtspError else { throw rtspError }
                 guard Date() < deadline else {
                     Diag.error("RTSP port \(rtspPort) still failing after \(attempt) retries: "
                         + "\(rtspError, privacy: .private)",
@@ -363,7 +369,8 @@ final class RtspClient: @unchecked Sendable {
         }
 
         // 2-3) Send, then read to EOF. The deadline cancels the connection, which ends the pending receive
-        // (an error or a bare EOF); the flag tells that apart from a transport failure sendAndReceive retries.
+        // (an error or a bare EOF). Send/receive failures propagate without replaying a request
+        // the host may already have processed.
         let timedOut = ManagedAtomicFlag()
         let deadline = DispatchWorkItem { timedOut.set(); connection.cancel() }
         queue.asyncAfter(deadline: .now() + responseTimeout, execute: deadline)
@@ -407,8 +414,8 @@ final class RtspClient: @unchecked Sendable {
     static func connectVerdict(_ state: NWConnection.State) -> Result<Void, RtspError>? {
         switch state {
         case .ready: return .success(())
-        case .failed(let err): return .failure(.transportFailure("\(err)"))
-        case .waiting(let err): return .failure(.transportFailure("waiting: \(err)"))
+        case .failed(let err): return .failure(.connectionNotReady("\(err)"))
+        case .waiting(let err): return .failure(.connectionNotReady("waiting: \(err)"))
         case .cancelled: return .failure(.interrupted)
         default: return nil
         }

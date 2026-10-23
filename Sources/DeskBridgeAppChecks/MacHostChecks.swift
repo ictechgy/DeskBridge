@@ -68,6 +68,14 @@ import Foundation
     let stateMode = try FileManager.default.attributesOfItem(atPath: state.path)[.posixPermissions] as? Int
     try expect(stateMode == 0o600, "upstream-created state permissions were not tightened")
     try expect(try Data(contentsOf: state) == syntheticState, "host preparation replaced stored pairing state")
+    let customConfig = Data("# Synthetic user preference\nencoder=software\n".utf8)
+    let customApps = Data("{\"apps\":[{\"name\":\"Desktop\",\"cmd\":\"\"},{\"name\":\"Synthetic\",\"cmd\":\"\"}]}".utf8)
+    let configURL = directory.appendingPathComponent("sunshine.conf")
+    let appsURL = directory.appendingPathComponent("apps.json")
+    try customConfig.write(to: configURL); try customApps.write(to: appsURL)
+    try MacHostStorage.prepare(directory: directory)
+    try expect(try Data(contentsOf: configURL) == customConfig, "host restart overwrote app-owned user preferences")
+    try expect(try Data(contentsOf: appsURL) == customApps, "host restart overwrote app-owned applications")
     let outside = fixture.appendingPathComponent("untouched")
     try Data("SYNTHETIC UNTOUCHED".utf8).write(to: outside)
     try FileManager.default.removeItem(at: directory.appendingPathComponent("apps.json"))
@@ -86,7 +94,9 @@ import Foundation
     try await settle { model.phase == .running }
     try expect(starts == 1 && model.invitation != nil, "duplicate host start or missing running invitation")
     let invitation = model.invitation!
-    try expect(try ConnectionInvitation(text: invitation.url.absoluteString) == invitation, "host invitation incompatible with v1 decoder")
+    try expect(invitation.platform == .macos, "Mac host invitation lost its explicit OS role")
+    try expect(try ConnectionInvitation(text: invitation.url.absoluteString) == invitation,
+               "Mac host invitation lost its roundtrip")
     guard let png = MacHostQR.png(invitation) else { throw ModelCheckFailure(message: "synthetic host QR not generated") }
     try expect(try ConnectionQRReader.decode(data: png) == invitation, "host QR not decoded by actual QR reader")
     model.stop(); try expect(child.stops == 1 && model.phase == .stopping && model.invitation == nil, "stop did not revoke published invitation")
@@ -156,6 +166,7 @@ import Foundation
     releaseQuit?.resume(); try await settle { quitReplied }
     count += try await runMacHostDownloadChecks(temporary: fixture)
     count += try await runMacHostFileWorkChecks(temporary: fixture)
+    count += try runMacHostSigningChecks(temporary: fixture)
     count += try await runOwnedMacHostProcessChecks(temporary: fixture)
     return count
 }

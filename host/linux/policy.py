@@ -23,6 +23,9 @@ class Failure(Exception):
         'download_collision': '기존 다운로드 파일의 크기·해시 또는 권한을 확인하지 못했습니다. README의 다운로드 복구 안내에 따라 downloads 안의 해당 sunshine-버전-ubuntu24.04-amd64.deb 파일만 별도로 확인하고 옮긴 뒤 다시 받으세요. 앱이 자동으로 지우거나 덮어쓰지 않습니다.',
         'cancel': '작업을 취소했습니다.',
         'configuration': 'PC 이름·주소·앱 저장 경로를 확인하세요. 이름에 제어 문자나 # [ ] =를 사용할 수 없습니다.',
+        'name_length': 'PC 이름이 너무 깁니다. 한글은 42자 이내, 영문·숫자는 64자 이내로 줄여 다시 시도하세요.',
+        'no_address': '연결 QR에 사용할 LAN 또는 Tailscale IPv4 주소를 찾지 못했습니다. Wi-Fi·유선 LAN 또는 Tailscale에 연결한 뒤 다시 만드세요. IPv6만 있는 연결과 컨테이너·링크 로컬 주소는 QR 주소로 제안하지 않습니다.',
+        'export_destination': '설치 패키지 사본을 저장하지 못했습니다. 쓰기 권한과 새 파일 저장·이름 변경을 지원하는 다른 로컬 폴더를 선택하세요. 기존 파일은 덮어쓰지 않습니다.',
         'exit': '공유 프로세스가 종료되었습니다. X11 세션·GPU 인코더·입력 권한·포트 충돌을 확인하고 다시 시작하세요.',
         'operation': '작업을 완료하지 못했습니다. 설치·권한·네트워크 상태를 확인하고 다시 시도하세요.',
         'collision': '같은 이름의 파일이 있습니다. 다른 이름으로 저장하세요.',
@@ -37,6 +40,15 @@ def valid_name(name):
     return (isinstance(name, str) and bool(name) and name == name.strip() and
             len(name.encode('utf-16-le')) // 2 <= 64 and len(name.encode('utf-8')) <= 128 and
             not any(unicodedata.category(c) in ('Cc', 'Cf', 'Cs') for c in name))
+
+
+def validate_name(name):
+    try:
+        if isinstance(name, str) and (len(name.encode('utf-16-le')) // 2 > 64 or len(name.encode('utf-8')) > 128):
+            raise Failure('name_length')
+        if not valid_name(name): raise Failure('configuration')
+    except UnicodeError:
+        raise Failure('configuration') from None
 
 
 def web_credentials(username, password, salt=None):
@@ -71,7 +83,9 @@ def address(value):
 
 
 def invitation(name, addresses):
-    if not valid_name(name) or not 1 <= len(addresses) <= 8 or len(set(addresses)) != len(addresses):
+    validate_name(name)
+    if not addresses: raise Failure('no_address')
+    if len(addresses) > 8 or len(set(addresses)) != len(addresses):
         raise Failure('configuration')
     values = [('v', '2'), ('name', name)] + [('address', address(a)) for a in addresses] + [('platform', 'linux')]
     text = 'deskbridge://connect?' + urllib.parse.urlencode(values, quote_via=urllib.parse.quote, safe='')
@@ -126,7 +140,8 @@ def validate_session(os_release, machine, uid, env):
 
 def arguments(root, name):
     text = str(root)
-    if not valid_name(name) or any(c in name for c in '#[]=') or any(c in text for c in '\r\n\x00#[]=') or not text.startswith('/'):
+    validate_name(name)
+    if any(c in name for c in '#[]=') or any(c in text for c in '\r\n\x00#[]=') or not text.startswith('/'):
         raise Failure('configuration')
     paths = {'file_apps': 'apps.json', 'file_state': 'state.json', 'credentials_file': 'web-credentials.json',
              'pkey': 'credentials/cakey.pem', 'cert': 'credentials/cacert.pem'}

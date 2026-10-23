@@ -4,6 +4,7 @@
 from pathlib import Path
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 
@@ -28,6 +29,23 @@ def block(source, signature):
 lifecycle = (ENGINE / "Video/VideoDecoder+Decode.swift").read_text()
 output = (ENGINE / "Video/VideoDecoder+Session.swift").read_text()
 presentation = (ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift").read_text()
+types = (ENGINE / "Models/Types.swift").read_text()
+failure = (ENGINE / "Models/StreamFailure.swift").read_text()
+failure_copy = (ENGINE / "Models/StreamFailureCopy.swift").read_text()
+connection = (ENGINE / "Session/StreamConnection.swift").read_text()
+takeover = (ENGINE / "Session/StreamSession+Attempt.swift").read_text()
+constants = "\n".join(re.findall(r"^    package static let (?:deadPeer|protectedContent|frameConversion|noVideoTraffic|noVideoFrame)TerminationCode[^\n]*",
+    (ENGINE / "Session/StreamSession.swift").read_text() + "\n" +
+    (ENGINE / "Session/StreamSession+FrameWatchdog.swift").read_text(), re.M))
+assert len(constants.splitlines()) == 5
+model_contract = "\n".join([
+    block(types, "public enum StreamEvent:"), block(types, "public enum ConnectionQuality:"),
+    block(types, "public enum StreamError:"), failure, failure_copy,
+    "enum StreamSession {\n" + constants + "\n}",
+    "public enum StreamConnection {\n" + block(connection, "public enum Failure:") + "\n}",
+    block(takeover, "package struct TakeoverRequired:"),
+    "public enum StreamInput { public enum Event: Sendable {} }",
+])
 methods = "\n".join(block(lifecycle, "nonisolated func " + name + "()")
                     for name in ("handleStart", "handleStop", "handleCleanup"))
 gate = block(output, "if !decoder.didFireFirstDecodedFrame")
@@ -40,11 +58,7 @@ struct SilentLog: Sendable { func info(_ value: String) {} }
 let log = SilentLog()
 func VTDecompressionSessionInvalidate(_ session: Int) {}
 final class Stats: @unchecked Sendable { func resetForConnection() {} }
-enum StreamEvent {
-    case firstFrame, reconnecting, reconnected, stopped
-    case waitingForVideo(Bool), stageFailed(name: String, errorCode: Int32)
-    case connectionTerminated(errorCode: Int32)
-}
+__ACTUAL_MODEL_CONTRACT__
 final class VideoDecoder: @unchecked Sendable {
     var isStreaming = false
     var didFireFirstDecodedFrame = false
@@ -103,13 +117,14 @@ __ACTUAL_PRESENTATION__
 }
 '''
 fixture = fixture.replace("__ACTUAL_FIRST_FRAME_GATE__", gate).replace("__ACTUAL_LIFECYCLE_METHODS__", methods)
+fixture = fixture.replace("__ACTUAL_MODEL_CONTRACT__", model_contract)
 fixture = fixture.replace("__ACTUAL_PRESENTATION__", presentation.replace("import GlimmerEngine\n", ""))
 with tempfile.TemporaryDirectory(prefix="deskbridge-decoder-lifecycle-", dir="/tmp") as directory:
     temporary = Path(directory)
     source = temporary / "Checks.swift"
     source.write_text(fixture)
     executable = temporary / "checks"
-    subprocess.run(["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O",
+    subprocess.run(["/usr/bin/swiftc", "-swift-version", "6", "-package-name", "Glimmer", "-parse-as-library", "-O",
                     "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)], check=True)
     subprocess.run([str(executable)], check=True)
     print(json.dumps({"fixtureSHA256": hashlib.sha256(fixture.encode()).hexdigest(),

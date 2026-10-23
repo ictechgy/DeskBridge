@@ -6,8 +6,10 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -18,7 +20,7 @@ from unittest.mock import Mock, patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from policy import Failure, address, allowed_download_url, arguments, child_environment, invitation, select_addresses, validate_session, web_credentials, validate_web_credentials
-from runtime import OwnedHost, Store, StrictRedirect, TransferControl, cleanup_owned, digest_file, download, publish_new, save_package, trusted_program
+from runtime import OwnedHost, Store, StrictRedirect, TransferControl, cleanup_owned, digest_file, download, publish_new, resolve_pinned_binary, save_package, trusted_program
 import hashlib
 
 
@@ -65,6 +67,19 @@ class HostChecks(unittest.TestCase):
                 row('veth123', '10.2.0.1'), row('eno1', '192.168.1.8'), row('tailscale0', '100.80.1.8'),
                 row('br0', '10.20.0.8'), row('eno2', '172.20.0.8', ['UP', 'NO-CARRIER'])]
         self.assertEqual(select_addresses(json.dumps(rows)), ['10.20.0.8', '192.168.1.8', '100.80.1.8'])
+
+    def test_empty_address_and_overlong_name_have_specific_guidance(self):
+        rows = [dict(ifname='docker0', flags=['UP'], addr_info=[dict(family='inet', local='172.17.0.1')]),
+                dict(ifname='eno1', flags=['UP'], addr_info=[dict(family='inet', local='169.254.1.1')])]
+        with self.assertRaises(Failure) as caught: invitation('Linux', select_addresses(json.dumps(rows)))
+        self.assertEqual(caught.exception.key, 'no_address')
+        self.assertIn('Tailscale IPv4', str(caught.exception))
+        for build in (lambda name: invitation(name, ['10.0.0.1']), lambda name: arguments('/synthetic', name)):
+            with self.assertRaises(Failure) as caught: build('가' * 43)
+            self.assertEqual(caught.exception.key, 'name_length')
+            build('가' * 42)
+            with self.assertRaises(Failure) as caught: build('bad\nname')
+            self.assertEqual(caught.exception.key, 'configuration')
 
     def test_mandatory_cli(self):
         args = arguments(self.store.root, 'Linux Desktop')
@@ -176,6 +191,60 @@ class HostChecks(unittest.TestCase):
     def test_missing_system_program_is_install_error(self):
         with self.assertRaises(Failure) as caught: trusted_program(self.base / 'missing-program')
         self.assertEqual(caught.exception.key, 'install')
+
+    def test_pinned_executable_resolves_every_trusted_symlink_hop(self):
+        target = self.base / 'sunshine-version'; target.write_bytes(b'synthetic executable'); target.chmod(0o755)
+        intermediate = self.base / 'sunshine-current'; intermediate.symlink_to(target.name)
+        link = self.base / 'sunshine'; link.symlink_to(intermediate.name)
+        pin = dict(binary=str(link), binarySHA256=hashlib.sha256(target.read_bytes()).hexdigest())
+        real_lstat, real_fstat = Path.lstat, os.fstat
+        def projected(s, uid=0):
+            values = list(s); values[0] &= ~0o022; values[4] = uid
+            return os.stat_result(values)
+        for untrusted in (None, link, intermediate, target):
+            with self.subTest(untrusted=untrusted):
+                def lstat(path): return projected(real_lstat(path), 1000 if path == untrusted else 0)
+                with patch.object(Path, 'lstat', new=lstat), patch('runtime.os.fstat', side_effect=lambda fd: projected(real_fstat(fd))):
+                    if untrusted is None:
+                        self.assertEqual(resolve_pinned_binary(pin), str(target))
+                        with self.assertRaises(Failure) as caught: resolve_pinned_binary(dict(pin, binarySHA256='0' * 64))
+                    else:
+                        with self.assertRaises(Failure) as caught: resolve_pinned_binary(pin)
+                    self.assertEqual(caught.exception.key, 'install')
+
+    def test_owned_host_executes_the_exact_verified_canonical_path(self):
+        host, storage = OwnedHost(), Mock(root=self.store.root)
+        program = '/synthetic/root-controlled/sunshine-version'
+        with patch('runtime.preflight', return_value=({'DISPLAY': ':1'}, program)), patch.object(host, '_spawn') as spawn:
+            host.start(dict(binary='/synthetic/symlink'), storage, 'Linux', 'synthetic', 'Synthetic-password-42!')
+        self.assertEqual(spawn.call_args.args[0][:4], ['/usr/bin/setpriv', '--no-new-privs', '--', program])
+
+    def test_public_export_accepts_destination_modes_but_keeps_private_source_policy(self):
+        pin, opener = self.fixture_download(b'fixture!', 8)
+        package = download(pin, self.store, threading.Event(), opener=opener)
+        real_fstat, real_mkstemp, exported_inode = os.fstat, tempfile.mkstemp, []
+        def mkstemp(*args, **kwargs):
+            fd, path = real_mkstemp(*args, **kwargs)
+            exported_inode.append(real_fstat(fd).st_ino)
+            return fd, path
+        def fstat(fd):
+            s = real_fstat(fd)
+            if s.st_ino in exported_inode:
+                values = list(s); values[0] = stat.S_IFREG | 0o644
+                return os.stat_result(values)
+            return s
+        with patch('runtime.tempfile.mkstemp', side_effect=mkstemp), patch('runtime.os.fstat', side_effect=fstat):
+            exported = save_package(pin, package, self.base / 'public-copy.deb')
+        self.assertEqual(exported.read_bytes(), b'fixture!')
+        for error in (PermissionError('synthetic denied'), OSError(errno.EOPNOTSUPP, 'synthetic unsupported rename')):
+            with patch('runtime.publish_new', side_effect=error), self.assertRaises(Failure) as caught:
+                save_package(pin, package, self.base / 'never-published.deb')
+            self.assertEqual(caught.exception.key, 'export_destination')
+        self.assertEqual(list(self.base.glob('.deskbridge-package-*')), [])
+        package.chmod(0o644)
+        with self.assertRaises(Failure) as caught: save_package(pin, package, self.base / 'private-source-refused.deb')
+        self.assertEqual(caught.exception.key, 'storage')
+        package.chmod(0o600)
 
     def test_nonreaping_child_retains_ownership_and_failed_cleanup(self):
         events = []; host = OwnedHost()
@@ -382,6 +451,53 @@ class HostChecks(unittest.TestCase):
         finally:
             tls.close(); control.close()
 
+    def test_blackholed_ipv6_falls_back_to_ipv4_without_extending_setup_budget(self):
+        control = TransferControl(threading.Event()); clock = [time.monotonic()]
+        pending = Mock(connect_ex=Mock(return_value=errno.EINPROGRESS))
+        raw = Mock(connect_ex=Mock(return_value=0))
+        tls = Mock(do_handshake=Mock(return_value=None)); context = Mock(wrap_socket=Mock(return_value=tls))
+        rows = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::1', 443, 0, 0]),
+                (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::2', 443, 0, 0]),
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443])]
+        began = clock[0]
+        def not_ready(readers, writers, exceptional, timeout):
+            self.assertEqual((readers, writers, exceptional), ([], [pending], []))
+            clock[0] += timeout
+            return [], [], []
+        try:
+            with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                 patch('runtime.socket.socket', side_effect=[pending, raw]) as create, patch('runtime.select.select', side_effect=not_ready):
+                self.assertIs(control.connect('github.com', 443, context, 20), tls)
+            self.assertAlmostEqual(clock[0] - began, control.CONNECT_ATTEMPT_SECONDS)
+            self.assertEqual([call.args[0] for call in create.call_args_list], [socket.AF_INET6, socket.AF_INET])
+            pending.close.assert_called_once(); raw.connect_ex.assert_called_once_with(('192.0.2.1', 443))
+            context.wrap_socket.assert_called_once_with(raw, server_hostname='github.com', do_handshake_on_connect=False)
+            tls.settimeout.assert_called_once_with(20)
+        finally: control.close()
+
+    def test_candidate_timeouts_keep_shared_deadline_and_cancellation_authoritative(self):
+        for cancel in (False, True):
+            with self.subTest(cancel=cancel):
+                control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
+                rows = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::' + str(i), 443, 0, 0]) for i in range(1, 13)]
+                context = Mock(); created = []
+                def socket_fixture(*_):
+                    sock = Mock(connect_ex=Mock(return_value=errno.EINPROGRESS)); created.append(sock); return sock
+                def not_ready(_readers, _writers, _exceptional, timeout):
+                    clock[0] += timeout
+                    if cancel: control.cancel.set()
+                    return [], [], []
+                try:
+                    with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                         patch('runtime.socket.socket', side_effect=socket_fixture), patch('runtime.select.select', side_effect=not_ready), self.assertRaises(Failure) as caught:
+                        control.connect('github.com', 443, context, 20)
+                    self.assertEqual(caught.exception.key, 'cancel' if cancel else 'download')
+                    self.assertLessEqual(clock[0] - began, 20.000001)
+                    self.assertEqual(len(created), 1 if cancel else 8)
+                    for sock in created: sock.close.assert_called_once()
+                    context.wrap_socket.assert_not_called()
+                finally: control.close()
+
     def test_shutdown_finalizes_after_lost_ownership(self):
         events = []
         class Host:
@@ -486,12 +602,12 @@ sys.stdin.read()
         source = Path(__file__).resolve().parents[1] / 'ui.py'
         tree = ast.parse(source.read_text())
         window = next(item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == 'Window')
-        methods = [item for item in window.body if isinstance(item, ast.FunctionDef) and item.name in ('monitor', 'shutdown_failed', 'controls')]
+        methods = [item for item in window.body if isinstance(item, ast.FunctionDef) and item.name in ('monitor', 'shutdown_failed', 'controls', 'exported_package')]
         class Thread:
             def __init__(self, target, **_): self.target = target
             def start(self): self.target()
         namespace = dict(GLib=SimpleNamespace(idle_add=lambda callback, *args: callback(*args)),
-                         threading=SimpleNamespace(Thread=Thread), Failure=Failure)
+                         threading=SimpleNamespace(Thread=Thread), Failure=Failure, shlex=shlex)
         exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), namespace)
         for retained in (False, True):
             def alive(): raise Failure('exit') if not retained else OSError('synthetic')
@@ -512,6 +628,13 @@ sys.stdin.read()
         namespace['controls'](state); self.assertTrue(state.cancel_button.enabled)
         state.operation_kind = None
         namespace['controls'](state); self.assertFalse(state.cancel_button.enabled)
+        values = []
+        state = SimpleNamespace(package='synthetic-private-download', install_command=SimpleNamespace(set_text=values.append),
+                                status=SimpleNamespace(set_text=values.append))
+        namespace['exported_package'](state, Path('/synthetic/public package.deb'))
+        self.assertEqual(state.package, 'synthetic-private-download')
+        self.assertEqual(values[0], "sudo apt install '/synthetic/public package.deb'")
+        self.assertIn('사본을 저장', values[1])
 
 
 if __name__ == '__main__': unittest.main()

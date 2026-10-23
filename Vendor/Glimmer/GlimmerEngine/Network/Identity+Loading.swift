@@ -12,17 +12,20 @@ extension IdentityManager {
         guard protectedDataAvailable() else { throw IdentityStorageError.unavailable }
         guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
         if let cached { return cached }
-        _ = try storageRoot()
+        try FileIdentityStore.validateStorage(base: storageRoot())
 
         // -----------------------------------------------------------------
         // Step 1 - file-store fast path.
         // -----------------------------------------------------------------
+        if let identity = try loadFromFileStore() {
+            // Complete an interrupted migration without replacing the valid file identity.
+            wipeUserDefaultsPlaintext(defaults: defaults)
+            defaults.set(Self.fileStorageVersion, forKey: Self.fileStorageFlag)
+            cached = identity
+            log.info("Loaded identity from file store")
+            return identity
+        }
         if defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion {
-            if let identity = try loadFromFileStore() {
-                cached = identity
-                log.info("Loaded identity from file store")
-                return identity
-            }
             // A missing file store regenerates as before; an actual read failure must throw.
             log.error("identityFileStorageVersion flag set but file store is empty - regenerating")
         }
@@ -107,22 +110,19 @@ extension IdentityManager {
 
     /// Missing material falls through to the next source. IO failures throw instead of regenerating.
     func loadFromFileStore() throws -> Identity? {
-        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
-              let certPEM = String(data: certData, encoding: .utf8),
-              !certPEM.isEmpty else {
-            return nil
-        }
-        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
-              let keyPEM = String(data: keyData, encoding: .utf8),
-              !keyPEM.isEmpty else {
-            return nil
-        }
+        let certificate = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot())
+        let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
+        let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
+        if certificate == nil && privateKey == nil && uniqueID == nil { return nil }
+        guard let certData = certificate, let keyData = privateKey,
+              let certPEM = String(data: certData, encoding: .utf8), !certPEM.isEmpty,
+              let keyPEM = String(data: keyData, encoding: .utf8), !keyPEM.isEmpty
+        else { throw IdentityStorageError.unsafeStorage }
         _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
         let uid: String
-        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
-           let stored = String(data: uidData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-           !stored.isEmpty {
+        if let uidData = uniqueID {
+            guard let stored = String(data: uidData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !stored.isEmpty else { throw IdentityStorageError.unsafeStorage }
             uid = stored
         } else {
             // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
@@ -138,6 +138,7 @@ extension IdentityManager {
     /// `FileIdentityStore.write` which enforces mode 0600 and verifies it
     /// stuck via stat(2).
     func writeIdentityToFileStore(_ identity: Identity) throws {
+        try FileIdentityStore.validateStorage(base: storageRoot())
         _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
         try FileIdentityStore.write(Data(identity.certPEM.utf8),
                                     account: Self.accountCert, base: storageRoot())

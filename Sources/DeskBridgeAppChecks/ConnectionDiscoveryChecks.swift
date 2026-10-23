@@ -26,6 +26,16 @@ func runConnectionDiscoveryChecks(temporary: URL) async throws -> Int {
     CGImageDestinationAddImage(destination, image, nil)
     try expect(CGImageDestinationFinalize(destination), "synthetic PNG fixture generated")
     try expect(try ConnectionQRReader.decode(data: png as Data) == invitation, "actual QR image decoder roundtrip")
+    for (format, accepted) in [("com.microsoft.bmp", true), ("com.compuserve.gif", false)] {
+        let encoded = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(encoded, format as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, image, nil)
+        try expect(CGImageDestinationFinalize(destination), "synthetic image format fixture generated")
+        if accepted {
+            try expect(try ConnectionQRReader.decode(data: encoded as Data) == invitation,
+                       "Windows-compatible BMP QR did not decode")
+        } else { try rejectImage(encoded as Data) }
+    }
     for orientation in [3, 6, 8] {
         let tiff = NSMutableData()
         let destination = CGImageDestinationCreateWithData(tiff, "public.tiff" as CFString, 1, nil)!
@@ -61,7 +71,22 @@ func runConnectionDiscoveryChecks(temporary: URL) async throws -> Int {
     defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
     let model = DesktopModel(storageDirectory: directory, identitySuite: suite)
     let files = FilesModel(desktop: model)
+    let macInvitation = try ConnectionInvitation(name: "Synthetic Mac", addresses: ["192.168.1.20"], platform: .macos)
+    _ = InvitationRouting.review(macInvitation.url.absoluteString, windows: model, linux: nil)
+    try expect(model.pendingInvitation == nil && model.invitationError != nil && model.address == saved.address,
+               "Mac sharing invitation was accepted into the Windows desktop role")
+    model.invitationError = nil
     try expect(!model.nearby.searching && model.nearby.hosts.isEmpty, "constructing models starts no network search")
+    let invalidLinkPage = InvitationRouting.review("deskbridge://connect?v=invalid", windows: model, linux: nil)
+    try expect(invalidLinkPage == .desktop && model.invitationError == ConnectionInvitation.Failure.invalid.localizedDescription,
+               "malformed external link did not show actionable invalid-link guidance")
+    try expect(model.pendingInvitation == nil && model.address == saved.address && !model.busy && !model.nearby.searching,
+               "malformed external link staged a target or started connection/discovery work")
+    try expect(model.settings.host?.certificatePEM == saved.host?.certificatePEM &&
+               model.settings.sshHostPublicKey == saved.sshHostPublicKey &&
+               (try store.load()).host?.uniqueID == saved.host?.uniqueID,
+               "malformed external link changed stored target or trust")
+    model.invitationError = nil
     try model.reviewInvitation(invitation)
     try expect(model.pendingInvitation == invitation && model.address == saved.address, "QR import only stages a user preview")
     for kind in 0..<4 {

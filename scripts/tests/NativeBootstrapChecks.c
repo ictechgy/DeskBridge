@@ -35,6 +35,7 @@ static void completion_matrix(void) {
         {0,0,0,0,0,0,0}, {1,1,1,1,2,1,2}, {2,0,0,2,2,2,2}, {3,1,1,3,2,3,2}, {11,1,1,11,2,11,2},
         {12,1,0,1,2,12,12}, {13,1,0,1,2,13,13}, {14,1,1,14,2,14,2},
         {1602,0,0,1602,1602,1602,1602}, {3010,0,0,3010,3010,3010,3010}, {3011,1,1,3011,2,3011,2},
+        {1618,1,1,1618,2,1618,2}, {1641,1,1,1641,2,1641,2},
         {-1,1,1,-1,2,-1,2}, {INT_MAX,1,1,INT_MAX,2,INT_MAX,2}, {INT_MIN,1,1,INT_MIN,2,INT_MIN,2}
     };
     size_t operation_index,status_index; int silent,acknowledged;
@@ -47,6 +48,9 @@ static void completion_matrix(void) {
                     int dialog=operation.headless?status.headless_dialog:status.generic_dialog;
                     int expected=operation.headless?status.headless_unack:status.generic_unack;
                     if (!silent && acknowledged) expected=operation.headless?status.headless_ack:status.generic_ack;
+                    if (operation.operation==DB_INSTALL && (status.code==1618 || status.code==1641)) {
+                        dialog=0; expected=status.code;
+                    }
                     expect(db_show_failure(status.code,silent,operation.operation)==(!silent && dialog),"operation/result matrix displayed the wrong generic failure guidance");
                     expect(db_complete_exit_code(status.code,silent,operation.operation,acknowledged)==expected,"operation/result matrix changed or accepted an invalid final status");
                 }

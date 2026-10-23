@@ -5,6 +5,7 @@
 // File-backed identities avoid keychain prompts; see docs/SECURITY.md for the same-user threat model.
 
 import Foundation
+import Darwin
 import os.log
 import Security
 
@@ -15,6 +16,95 @@ package enum IdentityKey {
     package static let uniqueID    = "uniqueid"
     package static let certificate = "certificate"
     package static let privateKey  = "key"
+}
+
+private enum IdentityPrivateStorage {
+    static let unsafe = IdentityStorageError.unsafeStorage
+    static func directory(_ url: URL, create: Bool) throws -> Int32? {
+        guard url.isFileURL, !url.lastPathComponent.isEmpty else { throw unsafe }
+        let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard parent >= 0 else {
+            if !create && errno == ENOENT { return nil }
+            throw unsafe
+        }
+        defer { close(parent) }
+        return try child(parent, name: url.lastPathComponent, create: create)
+    }
+    static func child(_ parent: Int32, name: String, create: Bool, exclusive: Bool = false) throws -> Int32? {
+        guard valid(name) else { throw unsafe }
+        if create && mkdirat(parent, name, 0o700) != 0 && (errno != EEXIST || exclusive) { throw unsafe }
+        let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            if !create && errno == ENOENT { return nil }
+            throw unsafe
+        }
+        do { try check(fd, directory: true); return fd }
+        catch { close(fd); throw error }
+    }
+    static func check(_ fd: Int32, directory: Bool, maximumBytes: Int = 0, mode: mode_t? = nil) throws {
+        var value = stat()
+        let expected = mode ?? (directory ? 0o700 : 0o600)
+        guard fstat(fd, &value) == 0, value.st_uid == getuid(),
+              value.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG),
+              value.st_mode & 0o7777 == expected,
+              directory || (value.st_nlink == 1 && value.st_size >= 0 && value.st_size <= maximumBytes)
+        else { throw unsafe }
+        guard let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
+            guard errno == ENOENT else { throw unsafe }; return
+        }
+        defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        guard acl_valid(acl) == 0 else { throw unsafe }
+        var entry: acl_entry_t?
+        errno = 0
+        // Darwin uses EINVAL when a valid ACL has no first entry.
+        guard acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) == -1, errno == EINVAL else { throw unsafe }
+    }
+    static func read(_ parent: Int32, name: String, maximumBytes: Int, mode: mode_t = 0o600) throws -> Data? {
+        guard valid(name), maximumBytes >= 0 else { throw unsafe }
+        let fd = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else {
+            if errno == ENOENT { return nil }
+            throw unsafe
+        }
+        defer { close(fd) }
+        try check(fd, directory: false, maximumBytes: maximumBytes, mode: mode)
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: min(maximumBytes + 1, 16 * 1024))
+        while true {
+            let count = Darwin.read(fd, &buffer, min(buffer.count, maximumBytes + 1 - data.count))
+            if count < 0 && errno == EINTR { continue }
+            guard count >= 0 else { throw unsafe }
+            if count == 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+            guard data.count <= maximumBytes else { throw unsafe }
+        }
+        try check(fd, directory: false, maximumBytes: maximumBytes, mode: mode)
+        return data
+    }
+    static func replace(_ parent: Int32, name: String, data: Data, maximumBytes: Int) throws {
+        guard valid(name), data.count <= maximumBytes else { throw unsafe }
+        _ = try read(parent, name: name, maximumBytes: maximumBytes)
+        let temporary = ".private-" + UUID().uuidString
+        let fd = openat(parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { throw unsafe }
+        defer { close(fd); _ = unlinkat(parent, temporary, 0) }
+        // Inherited ACLs must be refused before the first secret byte is written.
+        try check(fd, directory: false, maximumBytes: maximumBytes)
+        try data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else { throw unsafe }; offset += count
+            }
+        }
+        guard fsync(fd) == 0 else { throw unsafe }
+        try check(fd, directory: false, maximumBytes: maximumBytes)
+        guard renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else { throw unsafe }
+    }
+    private static func valid(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.utf8.contains(0)
+    }
 }
 
 // MARK: - FileIdentityStore
@@ -55,61 +145,50 @@ package enum FileIdentityStore {
         return try directoryURL(base: base).appendingPathComponent(name, isDirectory: false)
     }
 
-    /// Returns the bytes if the file exists, nil if it's absent. Anything
-    /// else (permission denied, IO error mid-read) throws so we don't
-    /// silently fall through to a destructive "regenerate".
+    /// Missing storage is distinct from unsafe storage, which must never regenerate.
     package static func read(account: String, base: URL) throws -> Data? {
-        guard let url = try fileURL(account: account, base: base) else { return nil }
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else { return nil }
-        return try Data(contentsOf: url)
+        guard let name = filename(forAccount: account) else { throw IdentityStorageError.unsafeStorage }
+        guard let root = try openDirectory(base: base, create: false) else { return nil }
+        defer { close(root) }
+        return try IdentityPrivateStorage.read(root, name: name, maximumBytes: limit(account))
     }
 
-    /// Atomic mode-0600 writes under a mode-0700 directory. Verify permissions because some
-    /// filesystems ignore chmod; delete and throw rather than retain an exposed partial identity.
+    /// Validate every existing component, even when another component is missing.
+    /// This also runs before migration/generation when no version flag is present.
+    package static func validateStorage(base: URL) throws {
+        for account in [IdentityManager.accountCert, IdentityManager.accountKey, IdentityManager.accountUID] {
+            _ = try read(account: account, base: base)
+        }
+    }
+
     package static func write(_ data: Data, account: String, base: URL) throws {
-        guard let url = try fileURL(account: account, base: base) else {
-            throw StreamError.crypto("FileIdentityStore: unknown account \(account)")
-        }
-
-        let fm = FileManager.default
-        let dir = try directoryURL(base: base)
-
-        // Creation does not tighten an existing directory, so chmod it again as defense in depth.
-        try fm.createDirectory(at: dir,
-                               withIntermediateDirectories: true,
-                               attributes: [.posixPermissions: 0o700])
-        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
-
-        // Atomic file write. `.atomic` writes to a temp file in the same
-        // directory then renames; that means a crash mid-write can't leave
-        // a torn PEM on disk.
-        try data.write(to: url, options: [.atomic])
-
-        // Apply mode 0600 and verify it stuck.
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-
-        let attrs = try fm.attributesOfItem(atPath: url.path)
-        guard let mode = attrs[.posixPermissions] as? NSNumber else {
-            try? fm.removeItem(at: url)
-            throw StreamError.crypto("FileIdentityStore: missing POSIX permissions for \(url.lastPathComponent)")
-        }
-        // Mask off the SUID/SGID/sticky bits in the comparison - those are
-        // never set by us but a paranoid umask could in theory surface them.
-        let permBits = mode.uint16Value & 0o777
-        guard permBits == 0o600 else {
-            try? fm.removeItem(at: url)
-            let modeOctal = String(permBits, radix: 8)
-            throw StreamError.crypto(
-                "FileIdentityStore: refused to keep \(url.lastPathComponent) with mode \(modeOctal) (expected 600)")
-        }
+        guard let name = filename(forAccount: account), data.count <= limit(account),
+              let root = try openDirectory(base: base, create: true) else { throw IdentityStorageError.unsafeStorage }
+        defer { close(root) }
+        try IdentityPrivateStorage.replace(root, name: name, data: data, maximumBytes: limit(account))
     }
 
-    /// Idempotent unlink. Used by cleanup / future migrations.
+    private static func limit(_ account: String) -> Int {
+        account == IdentityManager.accountUID ? 4096 : 64 * 1024
+    }
+
+    private static func openDirectory(base: URL, create: Bool) throws -> Int32? {
+        guard let root = try IdentityPrivateStorage.directory(base, create: create) else { return nil }
+        defer { close(root) }
+        guard let glimmer = try IdentityPrivateStorage.child(root, name: "Glimmer", create: create) else { return nil }
+        defer { close(glimmer) }
+        return try IdentityPrivateStorage.child(glimmer, name: "Identity", create: create)
+    }
+
+    /// Only known, validated ordinary identity files are eligible for cleanup.
     package static func delete(account: String, base: URL) {
-        guard let url = try? fileURL(account: account, base: base) else { return }
-        try? FileManager.default.removeItem(at: url)
+        guard let name = filename(forAccount: account),
+              let root = try? openDirectory(base: base, create: false) else { return }
+        defer { close(root) }
+        guard (try? IdentityPrivateStorage.read(root, name: name, maximumBytes: limit(account))) != nil else { return }
+        _ = unlinkat(root, name, 0)
     }
+
 }
 
 // MARK: - IdentityManager
@@ -204,4 +283,5 @@ public actor IdentityManager {
 public enum IdentityStorageError: Error, Sendable {
     case unavailable
     case defaultsUnavailable
+    case unsafeStorage
 }

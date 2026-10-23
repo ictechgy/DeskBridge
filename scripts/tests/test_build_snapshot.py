@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Offline regression cases: source additions/removals and binary replacement must invalidate packaging."""
 from pathlib import Path
-import copy, json, os, shlex, subprocess, sys, tempfile, unittest
+import copy, json, os, shlex, struct, subprocess, sys, tempfile, unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
+from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, host_supervisor_snapshot, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
 from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
 from test_windows_launcher import run_headless_checks
 
@@ -262,6 +262,10 @@ class BuildSnapshotTests(unittest.TestCase):
         self.app = self.root / "dist/Knot.app/Contents/MacOS/DeskBridge"
         self.app.parent.mkdir(parents=True); self.app.write_bytes(b"synthetic executable")
         self.app.chmod(0o755)
+        self.supervisor = self.app.parent.parent / "Helpers/KnotHostSupervisor"
+        self.supervisor.parent.mkdir()
+        self.supervisor.write_bytes(struct.pack("<8I", 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0) + b"SYNTHETIC ONLY")
+        self.supervisor.chmod(0o755)
         self.build = self.root / "evidence/synthetic-build"
         self.build.mkdir(parents=True)
         self.snapshot_now()
@@ -271,8 +275,13 @@ class BuildSnapshotTests(unittest.TestCase):
         ]))
         (self.build / "synthetic-checks.stdout").write_text('{"status":"passed"}')
         (self.build / "synthetic-model-checks.stdout").write_text('{"status":"passed"}')
+        (self.build / "mac-host-lifetime-checks.stdout").write_text(json.dumps({
+            "status": "passed", "checks": 37, "productionHostLaunched": False,
+            **{key: True for key in ("actualMacHostChild", "nativeSupervisor", "freshSyntheticOnly", "appAbruptDeath",
+                "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup")}}))
         self.record = {"schema": 1, "configuration": "release", "checksPassed": True,
-                       "appManifest": tree_snapshot(self.root / "dist/Knot.app")}
+                       "appManifest": tree_snapshot(self.root / "dist/Knot.app"),
+                       "hostSupervisor": host_supervisor_snapshot(self.root / "dist/Knot.app")}
         self.write_record()
 
     def write_record(self):
@@ -358,6 +367,30 @@ class BuildSnapshotTests(unittest.TestCase):
     def test_missing_completion_record_is_rejected(self):
         (self.build / "completed-build.json").unlink()
         with self.assertRaises(BuildSnapshotError): self.validate()
+
+    def test_helper_record_is_required(self):
+        del self.record["hostSupervisor"]; self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "Host supervisor"): self.validate()
+
+    def test_lifetime_proof_is_required(self):
+        path = self.build / "mac-host-lifetime-checks.stdout"
+        valid = json.loads(path.read_text())
+        for key, value in (("checks", 36), ("checks", True), ("status", "failed"), ("appAbruptDeath", False),
+                           ("writerNotInherited", False), ("supervisorCrashCleanup", False), ("productionHostLaunched", True)):
+            path.write_text(json.dumps({**valid, key: value}))
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(BuildSnapshotError, "lifetime proof"):
+                self.validate()
+
+    def test_replaced_helper_with_updated_bundle_inventory_is_rejected(self):
+        self.supervisor.write_bytes(self.supervisor.read_bytes() + b"CHANGED SYNTHETIC")
+        self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app"); self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "Host supervisor"): self.validate()
+
+    def test_non_native_or_wrong_architecture_helper_is_rejected(self):
+        for data in (b"#!/bin/sh\nexit 0\n", struct.pack("<8I", 0xFEEDFACF, 0x01000007, 3, 2, 0, 0, 0, 0)):
+            self.supervisor.write_bytes(data)
+            self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app"); self.write_record()
+            with self.assertRaisesRegex(BuildSnapshotError, "native arm64"): self.validate()
 
     def test_failed_checks_are_rejected(self):
         (self.build / "synthetic-checks.stdout").write_text('{"status":"failed"}')

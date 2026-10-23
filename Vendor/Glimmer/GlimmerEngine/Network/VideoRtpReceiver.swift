@@ -134,6 +134,10 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
 
     func stop() {
         interrupted.store(true, ordering: .relaxed)
+        // A caller may reuse the sink immediately after stop. Join any submit
+        // already in flight before returning, so an old receiver cannot feed a
+        // newly started decoder. Failure callbacks are dispatched off this queue.
+        recvQueue.sync {}
     }
 
     /// The only close: both loops hold `self` while they use the fd and exit within 100ms of stop(),
@@ -274,6 +278,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             let decryptor = videoKey.flatMap { VideoDecryptor(key: $0) }
             guard videoKey == nil || decryptor != nil else {
                 Diag.error("NativeVideo couldn't set up video decryption; no video", Self.cat)
+                self?.publishReceiveFailure(callback: onReceiveFailed)
                 return
             }
             // Batched receive: up to 32 datagrams per recvmsg_x into buffers allocated once; receive()
@@ -306,7 +311,16 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
                     break
                 }
             }
-            if receiveFailed { onReceiveFailed?() }
+            if receiveFailed { self?.publishReceiveFailure(callback: onReceiveFailed) }
+        }
+    }
+
+    /// A fatal callback can stop this receiver synchronously. Dispatch it away
+    /// from recvQueue so stop's drain cannot deadlock with the receive loop.
+    private func publishReceiveFailure(callback: (@Sendable () -> Void)?) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, !self.interrupted.load(ordering: .relaxed) else { return }
+            callback?()
         }
     }
 
@@ -399,8 +413,9 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
     private func sendPing() {
         pingCount &+= 1
         let datagram = UdpPinger.datagram(payload: pingPayload, sequence: pingCount)
+        var destination = destAddr
         let sent = datagram.withUnsafeBytes { raw in
-            withUnsafePointer(to: &destAddr) { sp in
+            withUnsafePointer(to: &destination) { sp in
                 sp.withMemoryRebound(to: sockaddr.self, capacity: 1) { sap in
                     sendto(fd, raw.baseAddress, raw.count, 0, sap, destAddrLen)
                 }
@@ -432,7 +447,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
     // MARK: - VideoDepacketizerDelegate
 
     func depacketizerDidAssembleFrame(_ unit: DecodeUnit) {
-        guard let sink else { return }
+        guard !interrupted.load(ordering: .relaxed), let sink else { return }
         let isIDR = unit.frameType == StreamProtocol.FRAME_TYPE_IDR
         // Latency telemetry (opt-in; nil = zero cost). t_receive + t_assemble are
         // both already captured upstream - `receiveTimeUs` is the frame's
@@ -459,6 +474,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             if isIDR { noteKeyFrame(unit, tracker: tracker) }
         }
         if lossEpisode.isOpen { closeLossEpisode(at: unit, isIDR: isIDR) }
+        guard !interrupted.load(ordering: .relaxed) else { return }
         let result = sink.submitDecodeUnit(unit)
         if result == StreamProtocol.DR_NEED_IDR {
             // Three producers share this return (VideoDecoder+Decode.swift

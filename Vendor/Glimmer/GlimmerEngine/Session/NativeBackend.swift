@@ -15,6 +15,12 @@ package final class NativeBackend: StreamingBackend, @unchecked Sendable {
     static let logCategory = "NativeConnection"
 
     let stateLock = NSLock()
+    /// Stop callers must all observe completed receiver drains and sink cleanup,
+    /// even after the first caller has taken/nil'd the resources under stateLock.
+    /// Never hold stateLock while joining. Recursive only for synchronous leaf
+    /// teardown notifications; production receive-failure callbacks run off the
+    /// receive queue and native connection events enqueue session work.
+    private let teardownLock = NSRecursiveLock()
     var rtspClient: RtspClient?
     var enetChannel: EnetControlChannel?
     var videoReceiver: VideoRtpReceiver?
@@ -220,6 +226,8 @@ package final class NativeBackend: StreamingBackend, @unchecked Sendable {
     }
 
     package func stopConnection() {
+        teardownLock.lock()
+        defer { teardownLock.unlock() }
         Diag.info("native backend: stopConnection", Self.logCategory)
         stateLock.lock()
         interrupted = true
@@ -250,6 +258,8 @@ package final class NativeBackend: StreamingBackend, @unchecked Sendable {
     }
 
     package func interruptConnection() {
+        teardownLock.lock()
+        defer { teardownLock.unlock() }
         Diag.info("native backend: interruptConnection", Self.logCategory)
         stateLock.lock()
         interrupted = true

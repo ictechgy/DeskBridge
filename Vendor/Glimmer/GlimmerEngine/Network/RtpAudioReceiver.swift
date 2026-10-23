@@ -99,6 +99,9 @@ final class RtpAudioReceiver: @unchecked Sendable {
         }
     }
     let interrupted = ManagedAtomicFlag()
+    /// Configured before receive starts; a terminal socket failure leaves video
+    /// and audio keepalives alive while surfacing the nonfatal audio-only loss.
+    var onReceiveFailed: (@Sendable (Int32) -> Void)?
     private let lifecycleLock = NSRecursiveLock()
 
     // `internal` so the RtpAudioReceiver+Telemetry extension can read `queue.stats`

@@ -8,7 +8,7 @@ namespace DeskBridge.Reverse
     {
         EngineIntegrity, EngineArchive, EngineDownload, DownloadIdle, DownloadDeadline,
         EnginePolicy, StoragePolicy, LinkedStorage, ProfilePolicy, EngineStart,
-        EngineBusy, BootstrapRequired, AdministratorNotAllowed, WindowsRequired, OperationFailed
+        EngineBusy, BootstrapRequired, AdministratorNotAllowed, WindowsRequired, Discovery, OperationFailed
     }
 
     // Only an enum selects authored messages. No OS exception text, target, file path,
@@ -54,14 +54,19 @@ namespace DeskBridge.Reverse
                     return "관리자 창을 닫고 Knot EXE를 평소처럼 실행하세요. 화면 연결은 관리자 권한이 필요하지 않습니다.";
                 case ReverseFailure.WindowsRequired:
                     return "Windows 11 x64에서 실행하세요.";
+                case ReverseFailure.Discovery:
+                    return "근처 PC 검색을 완료하지 못했습니다. 공유할 PC의 Knot에서 연결 QR 또는 링크를 가져오세요. Tailscale 기기는 Wi-Fi 검색에 나타나지 않을 수 있습니다.";
                 default: return Fallback;
             }
         }
 
-        internal static string ForOperation(Exception error)
+        internal static string ForOperation(Exception error, HostPlatform platform = HostPlatform.Mac)
         {
             if (error is ReverseUserException) return error.Message;
-            if (error is OperationCanceledException) return "작업을 취소했습니다. Mac의 앱·공유 설정에는 종료 요청하지 않았습니다.";
+            if (error is OperationCanceledException)
+                return platform == HostPlatform.Mac ? "작업을 취소했습니다. Mac의 앱·공유 설정에는 종료 요청하지 않았습니다." :
+                    platform == HostPlatform.Linux ? "작업을 취소했습니다. Linux의 앱·공유 설정에는 종료 요청하지 않았습니다." :
+                    "작업을 취소했습니다. Windows의 앱·공유 설정에는 종료 요청하지 않았습니다.";
             if (error is InvalidDataException) return QrGuidance;
             if (error is FormatException || error is ArgumentException)
             {

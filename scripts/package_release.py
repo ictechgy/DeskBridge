@@ -3,7 +3,7 @@
 """Offline packaging. Only explicit release mode calls Apple's notarization service."""
 from pathlib import Path
 import argparse, datetime, gzip, hashlib, io, json, os, plistlib, re, shutil, subprocess, tarfile, tempfile, zipfile
-from build_snapshot import BuildSnapshotError, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
+from build_snapshot import BuildSnapshotError, host_supervisor_snapshot, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
 from windows_resources import NativePE, validate_bootstrap
 from windows_check_record import validate_windows_check_record
 from linux_check_record import validate_linux_check_record, validate_payload_sources
@@ -89,7 +89,11 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
     # Recheck the copied payload before signing to bind this package to the successful build.
     if tree_snapshot(app) != completed["appManifest"]:
         raise SystemExit("App changed while staging; rebuild before packaging")
+    if host_supervisor_snapshot(app) != completed["hostSupervisor"]:
+        raise SystemExit("Host supervisor changed while staging; rebuild before packaging")
+    supervisor = app / "Contents/Helpers/KnotHostSupervisor"
     if args.mode == "release":
+        run("sign-host-supervisor-release", ["/usr/bin/codesign", "--force", "--options", "runtime", "--timestamp", "--sign", args.identity, str(supervisor)])
         run("sign-app-release", ["/usr/bin/codesign", "--force", "--options", "runtime", "--timestamp", "--sign", args.identity,
             "--entitlements", str(ROOT / "packaging/macos/DeskBridge.entitlements"), str(app)])
         notarize_zip = Path(temporary) / "notarize.zip"
@@ -97,6 +101,14 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         run("notarize-app", ["/usr/bin/xcrun", "notarytool", "submit", str(notarize_zip), "--keychain-profile", args.notary_profile, "--wait"])
         run("staple-app", ["/usr/bin/xcrun", "stapler", "staple", str(app)])
         run("validate-app-ticket", ["/usr/bin/xcrun", "stapler", "validate", str(app)])
+    run("verify-staged-host-supervisor", ["/usr/bin/codesign", "--verify", "--strict", str(supervisor)])
+    helper_entitlements = run("inspect-staged-host-supervisor-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(supervisor)])
+    if helper_entitlements.strip() and plistlib.loads(helper_entitlements) != {}:
+        raise SystemExit("The packaged host supervisor must have no entitlements.")
+    dependencies = run("inspect-staged-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]).decode().splitlines()[1:]
+    if not dependencies or any(not line.strip().startswith(("/System/Library/", "/usr/lib/")) for line in dependencies):
+        raise SystemExit("Unexpected non-system dynamic dependency in packaged host supervisor")
+    host_supervisor_snapshot(app)
     run("verify-staged-app", ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     entitlements = run("inspect-staged-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(app)])
     if plistlib.loads(entitlements) != {"com.apple.security.device.camera": True}:

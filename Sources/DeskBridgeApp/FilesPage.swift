@@ -229,7 +229,7 @@ struct FilesPage: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Windows에 등록할 Mac 공개 키").font(.system(size: 12, weight: .medium))
                         Text(model.generatedPublicKey)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -287,7 +287,7 @@ struct FilesPage: View {
                 Text("Windows에서 확인한 호스트 공개 키를 입력하세요. Mac 공개 키와 다른 값입니다.")
                     .foregroundStyle(.secondary)
                 TextEditor(text: $model.pinnedHostKey)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 13, design: .monospaced))
                     .frame(height: 60)
                     .padding(4)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(QuietStyle.border))
@@ -295,7 +295,7 @@ struct FilesPage: View {
                     .disabled(settingsLocked)
                 if !model.keyFingerprint.isEmpty {
                     Text("SSH 호스트 키 지문 · " + model.keyFingerprint)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 13, design: .monospaced))
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }

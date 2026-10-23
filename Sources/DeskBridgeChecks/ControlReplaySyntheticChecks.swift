@@ -19,11 +19,12 @@ private struct ControlReplaySyntheticChecks {
             checks += 1
         }
         func inject(_ peer: EnetControlChannel, _ envelope: [UInt8], channel: UInt8 = 0,
-                    reliable: UInt16, sentTime: Bool = true) throws {
+                    reliable: UInt16, sentTime: Bool = true, acknowledged: Bool = true) throws {
             let before = SyntheticControlIO.shared.ackCount
             peer.onDatagram(datagram(envelope, channel: channel, reliable: reliable, sentTime: sentTime))
-            try require(SyntheticControlIO.shared.ackCount == before + 1,
-                        "every reliable, including rejected replays, must still be ACKed")
+            try require(SyntheticControlIO.shared.ackCount == before + (acknowledged ? 1 : 0),
+                        "only admitted reliable payloads and exact authenticated duplicates may be ACKed")
+            guard acknowledged else { return }
             let high = UInt8(reliable >> 8), low = UInt8(reliable & 0xff)
             try require(SyntheticControlIO.shared.lastAck == [Enet.cmdAcknowledge, channel, high, low,
                                                              high, low, 0, sentTime ? 123 : 0],
@@ -35,8 +36,11 @@ private struct ControlReplaySyntheticChecks {
         let original = try frame(sequence: 7)
         try inject(peer, original, reliable: 1)
         try inject(peer, original, reliable: 1, sentTime: false)
-        try inject(peer, original, reliable: 2)
-        try inject(peer, original, channel: 1, reliable: 1)
+        var alteredDuplicate = original
+        alteredDuplicate[8] ^= 0x80
+        try inject(peer, alteredDuplicate, reliable: 1, acknowledged: false)
+        try inject(peer, original, reliable: 2, acknowledged: false)
+        try inject(peer, original, channel: 1, reliable: 1, acknowledged: false)
         try require(delivered == [7], "same envelope was dispatched more than once after relabeling")
         try require(peer.inboundOrder[0]?.next == 2 && peer.inboundOrder[0]?.held.isEmpty == true,
                     "relabeled replay advanced or occupied the original channel cursor")
@@ -50,7 +54,9 @@ private struct ControlReplaySyntheticChecks {
         reordered.onRumble = { _, value, _ in reorderedDelivery.append(value) }
         let held = try frame(sequence: 12)
         try inject(reordered, held, reliable: 2)
-        try inject(reordered, held, reliable: 3)
+        try inject(reordered, held, reliable: 2, sentTime: false)
+        try inject(reordered, alteredDuplicate, reliable: 2, acknowledged: false)
+        try inject(reordered, held, reliable: 3, acknowledged: false)
         try inject(reordered, try frame(sequence: 10), channel: 1, reliable: 1)
         try require(reorderedDelivery == [10] && reordered.inboundOrder[0]?.next == 1
                     && reordered.inboundOrder[0]?.held.count == 1,
@@ -58,24 +64,103 @@ private struct ControlReplaySyntheticChecks {
         try inject(reordered, try frame(sequence: 11), reliable: 1)
         try require(reorderedDelivery == [10, 11, 12] && reordered.inboundOrder[0]?.next == 3,
                     "valid reordered host counters must drain in reliable order")
-        try inject(reordered, held, channel: 2, reliable: 1)
+        try inject(reordered, held, reliable: 2)
+        try inject(reordered, held, reliable: 1, acknowledged: false)
+        try inject(reordered, held, channel: 2, reliable: 1, acknowledged: false)
         try require(reordered.inboundOrder[2] == nil, "replay of a drained held packet created a new cursor")
 
         var forged = try frame(sequence: .max)
         forged[8] ^= 0x80
-        try inject(peer, forged, reliable: 3)
+        try inject(peer, forged, reliable: 3, acknowledged: false)
         var forgedCounter = try frame(sequence: 9)
         forgedCounter[7] ^= 0x80
-        try inject(peer, forgedCounter, reliable: 3)
+        try inject(peer, forgedCounter, reliable: 3, acknowledged: false)
+        let nextFrame = try frame(sequence: 9)
+        try inject(peer, nextFrame, reliable: 1, acknowledged: false)
         try require(peer.inboundOrder[0]?.next == 3, "forged high counters moved ENet state")
-        try inject(peer, try frame(sequence: 9), reliable: 3)
+        try inject(peer, nextFrame, reliable: 3)
         try require(delivered == [7, 8, 9], "failed authentication poisoned the replay high watermark")
+
+        // A rejected current label cannot ACK away the host's genuine retransmit.
+        // Later authentic traffic waits, then drains when the missing valid frame arrives.
+        let poisoned = try makePeer()
+        var poisonDelivery: [UInt16] = []
+        poisoned.onRumble = { _, value, _ in poisonDelivery.append(value) }
+        for invalid in [[UInt8](arrayLiteral: 0, 0, 0, 0), [1, 0], Array(original.dropLast())] {
+            try inject(poisoned, invalid, reliable: 1, acknowledged: false)
+        }
+        try require(poisoned.inboundOrder.isEmpty && poisoned.inboundReliableHistory.count == 0,
+                    "invalid envelopes created ordering or authenticated duplicate state")
+        try inject(poisoned, try frame(sequence: 33), reliable: 2)
+        try require(poisonDelivery.isEmpty && poisoned.inboundOrder[0]?.next == 1
+                    && poisoned.inboundOrder[0]?.held.count == 1,
+                    "valid future reliable did not wait behind the rejected current label")
+        let missing = try frame(sequence: 32)
+        try inject(poisoned, missing, reliable: 1)
+        try require(poisonDelivery == [32, 33] && poisoned.inboundOrder[0]?.next == 3
+                    && poisoned.inboundOrder[0]?.held.isEmpty == true,
+                    "genuine current retransmit failed to drain future authenticated payloads in order")
+        try inject(poisoned, missing, reliable: 1, sentTime: false)
+
+        let coalesced = try makePeer()
+        var coalescedDelivery: [UInt16] = []
+        coalesced.onRumble = { _, value, _ in coalescedDelivery.append(value) }
+        let beforeCoalesced = SyntheticControlIO.shared.ackCount
+        let rejectedCommand = datagram([0, 0], channel: 0, reliable: 1, sentTime: true)
+        let acceptedCommand = datagram(try frame(sequence: 40), channel: 0, reliable: 1, sentTime: true)
+        coalesced.onDatagram(rejectedCommand + acceptedCommand.dropFirst(4))
+        try require(SyntheticControlIO.shared.ackCount == beforeCoalesced + 1
+                    && coalescedDelivery == [40] && coalesced.inboundOrder[0]?.next == 2,
+                    "a rejected complete command stopped or ACKed a later coalesced valid command")
+
+        // A callback may tear down the transport; its admitted reliable must be ACKed first.
+        let closing = try makePeer()
+        let beforeClose = SyntheticControlIO.shared.ackCount
+        var ackAtClose: Int?
+        closing.onRumble = { _, _, _ in
+            ackAtClose = SyntheticControlIO.shared.ackCount
+            closing.close()
+        }
+        try inject(closing, try frame(sequence: 41), reliable: 1, sentTime: false)
+        try require(ackAtClose == beforeClose + 1 && closing.interrupted.isSet,
+                    "payload callback ran before its ACK or failed to exercise teardown")
+
+        // Rotate the production duplicate history through its entire fixed ring. A
+        // cached ciphertext from a previous UInt16 reliable cycle cannot ACK the
+        // current label, even though its original binding is still retained.
+        let rotating = try makePeer()
+        let width = UInt32(ControlReplayWindow.capacity)
+        let oldest = try frame(sequence: 0)
+        try inject(rotating, oldest, channel: 1, reliable: 1)
+        let beforeRotation = SyntheticControlIO.shared.ackCount
+        for sequence in 1..<width {
+            rotating.onDatagram(datagram(try frame(sequence: sequence), channel: 0,
+                                         reliable: UInt16(sequence), sentTime: true))
+        }
+        try require(SyntheticControlIO.shared.ackCount - beforeRotation == Int(width - 1)
+                    && rotating.inboundOrder[0]?.next == 0,
+                    "valid reliable traffic did not advance to the UInt16 wrap boundary")
+        try require(rotating.inboundReliableHistory.count == EnetAuthenticatedReliableHistory.capacity
+                    && rotating.inboundReliableHistory.retainedSlotCount == EnetAuthenticatedReliableHistory.capacity,
+                    "authenticated duplicate history did not reach its fixed capacity")
+        try inject(rotating, oldest, channel: 1, reliable: 1)
+        try inject(rotating, try frame(sequence: width), reliable: 0)
+        try inject(rotating, oldest, channel: 1, reliable: 1, acknowledged: false)
+        try inject(rotating, try frame(sequence: 1), reliable: 1, acknowledged: false)
+        try require(rotating.inboundOrder[0]?.next == 1 && rotating.inboundOrder[0]?.held.isEmpty == true,
+                    "historical ciphertext ACKed or advanced a new reliable cycle")
+        let wrapped = try frame(sequence: width + 1)
+        try inject(rotating, wrapped, reliable: 1)
+        try inject(rotating, wrapped, reliable: 1, sentTime: false)
+        try inject(rotating, wrapped, channel: 2, reliable: 1, acknowledged: false)
+        try require(rotating.inboundReliableHistory.count <= EnetAuthenticatedReliableHistory.capacity
+                    && rotating.inboundReliableHistory.retainedSlotCount == EnetAuthenticatedReliableHistory.capacity,
+                    "duplicate history grew after ring eviction or reliable-label reuse")
 
         // Fill and rotate the fixed-size window using real AES-GCM envelopes. A missing
         // counter on the oldest live edge remains admissible; crossing that edge expires it.
         let crypto = try ControlCrypto(rikey: key)
         var window = ControlReplayWindow()
-        let width = UInt32(ControlReplayWindow.capacity)
         _ = try crypto.open(try frame(sequence: 0), replayWindow: &window)
         for sequence in 2...width {
             _ = try crypto.open(try frame(sequence: sequence), replayWindow: &window)
@@ -124,7 +209,7 @@ private struct ControlReplaySyntheticChecks {
                         && sender.channelOutgoingUnreliableSeq[0] == unreliableCounter,
                         "counter exhaustion must fail both send modes without nonce reuse or transport mutation")
         }
-        print("Control authenticated replay: \(checks) synthetic checks passed; fixed 8 KiB window; no sockets or app state")
+        print("Control authenticated replay and ACK admission: \(checks) synthetic checks passed; bounded replay/history; no sockets or app state")
     }
 
     static func rejects(_ crypto: ControlCrypto, _ envelope: [UInt8], window: inout ControlReplayWindow) -> Bool {

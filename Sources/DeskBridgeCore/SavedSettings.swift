@@ -44,32 +44,22 @@ public struct SettingsStore: Sendable {
         return next
     }
     public func load() throws -> SavedSettings {
-        let url = directory.appendingPathComponent("settings.json")
-        do {
-            let data = try BoundedRegularFile.read(url, maximumBytes: Self.maximumBytes)
-            let value = try JSONDecoder().decode(SavedSettings.self, from: data)
-            guard value.schema == 1 else { throw CocoaError(.fileReadUnknown) }
-            return value
-        } catch BoundedRegularFile.Failure.missing { return SavedSettings() }
+        guard let root = try CorePrivateStorage.directory(directory, create: false) else { return SavedSettings() }
+        defer { close(root) }
+        guard let data = try CorePrivateStorage.read(root, name: "settings.json", maximumBytes: Self.maximumBytes)
+        else { return SavedSettings() }
+        let value = try JSONDecoder().decode(SavedSettings.self, from: data)
+        guard value.schema == 1 else { throw CocoaError(.fileReadUnknown) }
+        return value
     }
     public func save(_ value: SavedSettings) throws {
         // Every successful write must remain readable on the next launch.
         // Validate before touching the directory or replacing trusted settings.
         let data = try JSONEncoder().encode(value)
         guard data.count <= Self.maximumBytes else { throw Failure.tooLarge }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                attributes: [.posixPermissions: 0o700])
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
-        let temporary = directory.appendingPathComponent(".settings-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        let fd = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw POSIXError(.EIO) }
-        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-        try handle.write(contentsOf: data)
-        try handle.synchronize()
-        try handle.close()
-        guard Darwin.rename(temporary.path, directory.appendingPathComponent("settings.json").path) == 0
-        else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard let root = try CorePrivateStorage.directory(directory, create: true) else { throw CorePrivateStorage.unsafe }
+        defer { close(root) }
+        try CorePrivateStorage.replace(root, name: "settings.json", data: data, maximumBytes: Self.maximumBytes)
     }
 }
 

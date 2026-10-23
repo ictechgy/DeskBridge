@@ -3,7 +3,7 @@
 """Offline build/check path. Does not disable a sandbox or launch the GUI/network."""
 from pathlib import Path
 import argparse, datetime, hashlib, json, os, plistlib, shutil, subprocess, sys
-from build_snapshot import source_snapshot, tree_snapshot
+from build_snapshot import host_supervisor_snapshot, source_snapshot, tree_snapshot
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
 parser.add_argument("--skip-checks", action="store_true")
@@ -64,7 +64,9 @@ if not args.skip_checks:
     run("control-hardening-checks", [sys.executable, str(ROOT / "scripts/tests/test_control_hardening.py")])
     run("desktop-input-backpressure-checks", [sys.executable, str(ROOT / "scripts/tests/test_desktop_input_backpressure.py")])
     run("video-frame-lifecycle-checks", [sys.executable, str(ROOT / "scripts/tests/test_video_frame_lifecycle.py")])
+    run("media-receive-lifecycle-checks", [sys.executable, str(ROOT / "scripts/tests/test_media_lifecycle.py")])
     run("rtsp-replay-checks", [sys.executable, str(ROOT / "scripts/tests/test_rtsp_replay.py")])
+    run("private-storage-checks", [sys.executable, str(ROOT / "scripts/check_private_storage.py")])
 compile_module("GlimmerEngine", ROOT / "Vendor/Glimmer/GlimmerEngine", "Glimmer")
 compile_module("DeskBridgeCore", ROOT / "Sources/DeskBridgeCore", "DeskBridge")
 app = ROOT / "dist/Knot.app"
@@ -72,8 +74,24 @@ if app.exists(): shutil.rmtree(app)
 macos = app / "Contents/MacOS"
 frameworks = app / "Contents/Frameworks"
 resources = app / "Contents/Resources"
+helpers = app / "Contents/Helpers"
 if frameworks.exists(): shutil.rmtree(frameworks)
-for p in [macos, frameworks, resources]: p.mkdir(parents=True, exist_ok=True)
+for p in [macos, frameworks, resources, helpers]: p.mkdir(parents=True, exist_ok=True)
+supervisor = helpers / "KnotHostSupervisor"
+run("compile-host-supervisor", ["/usr/bin/clang", "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+    "-arch", "arm64", "-mmacosx-version-min=26.0", "-isysroot", sdk,
+    str(ROOT / "host/macos/KnotHostSupervisor.c"), "-o", str(supervisor)])
+run("sign-host-supervisor", ["/usr/bin/codesign", "--force", "--sign", "-", "--options", "runtime", str(supervisor)])
+run("verify-host-supervisor", ["/usr/bin/codesign", "--verify", "--strict", str(supervisor)])
+helper_entitlements = run("inspect-host-supervisor-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(supervisor)])
+if helper_entitlements.strip() and plistlib.loads(helper_entitlements) != {}:
+    raise SystemExit("The host supervisor must have no entitlements.")
+helper_dependencies = run("inspect-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]).decode().splitlines()[1:]
+if not helper_dependencies or any(not line.strip().startswith(("/System/Library/", "/usr/lib/")) for line in helper_dependencies):
+    raise SystemExit("Unexpected non-system dynamic dependency in the host supervisor")
+host_supervisor_snapshot(app)
+if not args.skip_checks:
+    run("mac-host-lifetime-checks", [sys.executable, str(ROOT / "scripts/tests/test_mac_host_lifetime.py"), "--supervisor", str(supervisor)])
 app_sources = sorted((ROOT / "Sources/DeskBridgeApp").rglob("*.swift"))
 run("compile-DeskBridge", ["/usr/bin/swiftc", "-parse-as-library", "-module-name", "DeskBridgeApp",
     "-package-name", "DeskBridge", *common, "-I", str(LIB), "-L", str(LIB),
@@ -125,6 +143,8 @@ if not args.skip_checks:
     # Exercise the same static dependency linkage/hardened signing policy, without App.main/UI.
     runtime = BUILD / "runtime-check/Contents"
     (runtime / "MacOS").mkdir(parents=True, exist_ok=True)
+    (runtime / "Helpers").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(supervisor, runtime / "Helpers/KnotHostSupervisor")
     if (runtime / "Frameworks").exists(): shutil.rmtree(runtime / "Frameworks")
     checker = runtime / "MacOS/DeskBridgeChecks"
     shutil.copy2(BUILD / "DeskBridgeChecks", checker)
@@ -148,6 +168,7 @@ if source_snapshot(ROOT) != snapshot:
 (EVIDENCE / "completed-build.json").write_text(json.dumps({
     "schema": 1, "configuration": args.configuration, "checksPassed": not args.skip_checks,
     "appManifest": tree_snapshot(app),
+    "hostSupervisor": host_supervisor_snapshot(app),
 }, indent=2))
 print("Built " + str(app), flush=True)
 print("GUI/capture host not launched. Windows, Mac host permissions, IME, Space and network acceptance remain manual.", flush=True)

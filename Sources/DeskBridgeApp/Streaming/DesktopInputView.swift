@@ -64,7 +64,7 @@ enum DesktopKeyboardMode: String, CaseIterable { case localIME = "Mac input meth
         recoveryLabel.alignment = .center
         recoveryLabel.isSelectable = false
         recoveryLabel.isEditable = false
-        recoveryLabel.maximumNumberOfLines = 2
+        recoveryLabel.maximumNumberOfLines = 3
         recoveryLabel.lineBreakMode = .byWordWrapping
         recoveryCard.addSubview(recoveryLabel)
         recoveryCard.isHidden = true

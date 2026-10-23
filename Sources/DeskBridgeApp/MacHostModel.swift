@@ -36,7 +36,7 @@ import Foundation
     var busy: Bool { phase == .starting || phase == .stopping }
     var invitation: ConnectionInvitation? {
         guard phase == .running, addresses.contains(where: { $0.address == selectedAddress }) else { return nil }
-        return try? ConnectionInvitation(name: name, addresses: [selectedAddress])
+        return try? ConnectionInvitation(name: name, addresses: [selectedAddress], platform: .macos)
     }
     func refresh() {
         installed = operations.installed()

@@ -118,6 +118,13 @@ extension StreamSession {
         }
     }
 
+    /// The shell updates MainActor presentation suppression before requesting this refresh.
+    /// Read the latest decoder state on the session actor; stopped sessions cannot reacquire power.
+    public func refreshPresentationActivity() {
+        guard !publicTerminal else { return }
+        refreshPowerAssertion()
+    }
+
     /// Shared measured evidence only; no sampler or session-retaining closure is introduced.
     public nonisolated static func audioEnvironment(host: String) -> AudioEnvironment {
         AudioEnvironment(host: host, link: EnvSignalController.shared.streamLink,

@@ -8,7 +8,7 @@ Mac 앱의 **이 Mac 공유**에서 준비합니다. 같은 Wi-Fi/LAN 또는 이
 4. macOS의 화면 및 시스템 오디오 기록·손쉬운 사용 권한은 요청에 실제 표시된 앱에 직접 승인합니다. Knot가 자식 프로세스를 시작하므로 책임 앱인 Knot가 권한 대상이 될 수 있습니다. Sunshine만 승인하면 충분하다고 가정하지 말고, 시스템 설정에서 요청에 표시된 Knot 또는 Sunshine 항목을 확인한 뒤 공유를 껐다가 다시 켭니다. 자동 권한 승인, 원격 로그인/SSH 활성화, 전체 디스크 접근, 클립보드 동기화, 로그인 자동 실행은 하지 않습니다.
 5. **Sunshine 초기 설정 / PIN**으로 `https://localhost:47990`을 열어 앱에서 준비한 Sunshine 웹 관리자 계정으로 로그인합니다. 로컬 자체 서명 인증서 경고가 나타날 수 있습니다. 이 Mac의 고정 localhost 주소인지 확인합니다. Windows의 Knot에서 Mac 연결 QR PNG나 링크 파일을 가져오고 페어링합니다. Windows가 표시하는 PIN을 이 Mac의 Sunshine PIN 페이지에 입력한 뒤 Desktop을 엽니다.
 
-연결 QR·링크는 기존 `deskbridge://connect?v=1` 주소 규격입니다. 선택한 LAN/Tailscale 주소 하나와 `Knot Mac` 이름만 포함하며, 비밀번호·인증서·파일 권한을 포함하지 않습니다. 페어링은 별도입니다. 인터페이스 주소는 OS 메타데이터에서만 얻으며 서브넷 스캔·호스트 프로브는 하지 않습니다.
+연결 QR·링크는 `deskbridge://connect?v=2`와 `platform=macos`를 사용합니다. Windows의 Mac 역할에서 열고, Windows·Linux 호스트용 Mac 탭에서는 거부합니다. 선택한 LAN/Tailscale 주소 하나와 `Knot Mac` 이름·OS 안내만 포함하며, 비밀번호·인증서·파일 권한을 포함하지 않습니다. 페어링은 별도입니다. 인터페이스 주소는 OS 메타데이터에서만 얻으며 서브넷 스캔·호스트 프로브는 하지 않습니다.
 
 ## 프로세스·설정 경계
 

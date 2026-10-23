@@ -30,6 +30,7 @@ try {
     $heading.Font=New-Object Drawing.Font('Segoe UI',16,[Drawing.FontStyle]::Bold); $panel.Controls.Add($heading)
     if ($hasQR) {
         $picture=New-Object Windows.Forms.PictureBox
+        $picture.AccessibleName='이 Windows PC의 연결 QR'; $picture.AccessibleDescription='PC 이름과 주소를 담은 QR입니다. 아래 연결 링크를 복사하는 방법도 사용할 수 있습니다.'
         $picture.Image=$bitmap; $picture.SizeMode='Zoom'; $picture.Size=New-Object Drawing.Size(360,360)
         $picture.BackColor=[Drawing.Color]::White; $panel.Controls.Add($picture)
     }
@@ -38,6 +39,7 @@ try {
     if (-not $hasQR) { $help.Text="Mac의 원격 화면에서 연결 링크 입력을 선택하세요.`r`n이 개발자 폴더는 링크만 제공합니다. QR 이미지는 단일 EXE에서 만들 수 있습니다." }
     $help.AutoSize=$true; $help.MaximumSize=New-Object Drawing.Size(630,0); $panel.Controls.Add($help)
     $linkBox=New-Object Windows.Forms.TextBox
+    $linkBox.AccessibleName='Windows 연결 링크'; $linkBox.AccessibleDescription='Mac의 연결 링크 입력에서 사용할 수 있습니다. 내용을 선택하거나 연결 링크 복사 버튼을 누르세요.'
     $linkBox.ReadOnly=$true; $linkBox.Multiline=$true; $linkBox.Size=New-Object Drawing.Size(630,58); $linkBox.Text=$Link
     $panel.Controls.Add($linkBox)
     $actions=New-Object Windows.Forms.FlowLayoutPanel
@@ -56,11 +58,22 @@ try {
         try { [Windows.Forms.Clipboard]::SetText($Link) }
         catch { [Windows.Forms.MessageBox]::Show('링크를 복사하지 못했습니다. 위 링크를 직접 선택해 복사하세요.','Knot','OK','Error') | Out-Null }
     }); $actions.Controls.Add($copy)
+    $script:qrContentWidth=-1
     $panel.Add_SizeChanged({
         $available=[Math]::Max(240,$panel.ClientSize.Width-$panel.Padding.Horizontal-[Windows.Forms.SystemInformation]::VerticalScrollBarWidth-12)
-        $heading.MaximumSize=New-Object Drawing.Size($available,0); $help.MaximumSize=New-Object Drawing.Size($available,0)
-        $linkBox.Width=$available; $actions.MaximumSize=New-Object Drawing.Size($available,0)
-        if ($hasQR) { $picture.Size=New-Object Drawing.Size([Math]::Min(360,$available),[Math]::Min(360,$available)) }
+        if ($available -eq $script:qrContentWidth) { return }
+        $script:qrContentWidth=$available
+        $panel.SuspendLayout()
+        try {
+            if ($heading.MaximumSize.Width -ne $available) { $heading.MaximumSize=New-Object Drawing.Size($available,0) }
+            if ($help.MaximumSize.Width -ne $available) { $help.MaximumSize=New-Object Drawing.Size($available,0) }
+            if ($linkBox.Width -ne $available) { $linkBox.Width=$available }
+            if ($actions.MaximumSize.Width -ne $available) { $actions.MaximumSize=New-Object Drawing.Size($available,0) }
+            if ($hasQR) {
+                $side=[Math]::Min(360,$available)
+                if ($picture.Width -ne $side -or $picture.Height -ne $side) { $picture.Size=New-Object Drawing.Size($side,$side) }
+            }
+        } finally { $panel.ResumeLayout($true) }
     })
     $window.Add_Shown({
         $area=[Windows.Forms.Screen]::FromControl($window).WorkingArea

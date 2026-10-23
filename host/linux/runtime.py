@@ -6,6 +6,7 @@ import errno
 import fcntl
 import hashlib
 import http.client
+import itertools
 import json
 import os
 from pathlib import Path
@@ -53,18 +54,52 @@ def digest_file(path, maximum, uid=None, private=False):
 def trusted_program(path):
     """System symlinks are accepted only when every link/target is root-controlled."""
     p = Path(path)
-    # resolve() could cross a writable symlink directory: inspect both lexical and resolved ancestors.
+    if not p.is_absolute():
+        raise Failure('install')
+    resolved, pending, links = Path(p.anchor), list(p.parts[1:]), 0
     try:
-        for leaf in (p, p.resolve(strict=True)):
-            for item in (leaf, *leaf.parents):
-                s = item.lstat()
-                if s.st_uid != 0 or (not stat.S_ISLNK(s.st_mode) and s.st_mode & 0o022):
-                    raise Failure('install')
+        s = resolved.lstat()
+        if s.st_uid != 0 or not stat.S_ISDIR(s.st_mode) or s.st_mode & 0o022:
+            raise Failure('install')
+        # Walk each hop before resolving it. Checking only the final realpath
+        # could miss a user-controlled link in an otherwise trusted chain.
+        while pending:
+            part = pending.pop(0)
+            if part == '..':
+                resolved = resolved.parent
+                continue
+            item = resolved / part
+            s = item.lstat()
+            if s.st_uid != 0 or (not stat.S_ISLNK(s.st_mode) and s.st_mode & 0o022):
+                raise Failure('install')
+            if stat.S_ISLNK(s.st_mode):
+                links += 1
+                if links > 40: raise Failure('install')
+                target = Path(os.readlink(item))
+                if target.is_absolute():
+                    resolved = Path(target.anchor)
+                    pending = list(target.parts[1:]) + pending
+                else:
+                    pending = list(target.parts) + pending
+            else:
+                if pending and not stat.S_ISDIR(s.st_mode): raise Failure('install')
+                resolved = item
     except OSError:
         raise Failure('install') from None
-    if not p.is_file() or not os.access(p, os.X_OK):
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise Failure('install')
-    return str(p)
+    return str(resolved)
+
+
+def resolve_pinned_binary(pin):
+    program = trusted_program(pin['binary'])
+    try:
+        installed_digest = digest_file(program, 64 * 1024 * 1024, 0)[1]
+    except (OSError, Failure):
+        raise Failure('install') from None
+    if installed_digest != pin['binarySHA256']:
+        raise Failure('install')
+    return program
 
 
 class Store:
@@ -224,6 +259,7 @@ data=json.dumps([[family,kind,protocol,address] for family,kind,protocol,_,addre
 if len(data) > 16384: raise SystemExit(1)
 sys.stdout.buffer.write(data)
 '''
+    CONNECT_ATTEMPT_SECONDS = 2.5
 
     def __init__(self, cancel, seconds=600):
         self.cancel, self.deadline = cancel, time.monotonic() + seconds
@@ -298,9 +334,13 @@ sys.stdout.buffer.write(data)
             finally:
                 child.stdout.close()
 
-    def _ready(self, sock, expires, writing):
+    def _ready(self, sock, expires, writing, attempt_expires=None):
         while True:
             wait = min(0.05, self._remaining(expires))
+            if attempt_expires is not None:
+                attempt_remaining = attempt_expires - time.monotonic()
+                if attempt_remaining <= 0: raise TimeoutError('TCP candidate timed out')
+                wait = min(wait, attempt_remaining)
             try:
                 readable, writable, _ = select.select([] if writing else [sock], [sock] if writing else [], [], wait)
             except InterruptedError:
@@ -309,7 +349,14 @@ sys.stdout.buffer.write(data)
             if readable or writable: return
 
     def _connect_tcp(self, host, port, expires, source_address):
-        for family, kind, protocol, address in self._resolve(host, port, expires):
+        rows = self._resolve(host, port, expires)
+        if not rows: raise Failure('download')
+        # Preserve the resolver's first-family preference, then alternate
+        # families so several unreachable IPv6 rows cannot starve IPv4.
+        first = [row for row in rows if row[0] == rows[0][0]]
+        other = [row for row in rows if row[0] != rows[0][0]]
+        ordered = (row for pair in itertools.zip_longest(first, other) for row in pair if row is not None)
+        for family, kind, protocol, address in ordered:
             self._remaining(expires)
             sock = None
             try:
@@ -325,7 +372,8 @@ sys.stdout.buffer.write(data)
                 if status not in (0, errno.EISCONN):
                     if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
                         raise OSError(status, os.strerror(status))
-                    self._ready(sock, expires, writing=True)
+                    attempt_expires = min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
+                    self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
                     status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
                     if status: raise OSError(status, os.strerror(status))
                 self._remaining(expires)
@@ -447,13 +495,7 @@ def addresses():
 def preflight(pin, env=None):
     env = dict(os.environ if env is None else env)
     validate_session(platform.freedesktop_os_release(), platform.machine(), os.getuid(), env)
-    program = trusted_program(pin['binary'])
-    try:
-        installed_digest = digest_file(program, 64 * 1024 * 1024, 0)[1]
-    except (OSError, Failure):
-        raise Failure('install') from None
-    if installed_digest != pin['binarySHA256']:
-        raise Failure('install')
+    program = resolve_pinned_binary(pin)
     version = metadata_command(['/usr/bin/dpkg-query', '-W', '-f=${Version}', 'sunshine']).decode('ascii')
     if version != pin['packageVersion']:
         raise Failure('install')
@@ -483,7 +525,7 @@ def preflight(pin, env=None):
         raise Failure('existing') from None
     finally:
         for s in ports: s.close()
-    return env
+    return env, program
 
 
 class OwnedHost:
@@ -495,10 +537,10 @@ class OwnedHost:
     def start(self, pin, store, name, username='', password=''):
         with self.lock:
             if self.child is not None: raise Failure('existing')
-            env = preflight(pin)
+            env, program = preflight(pin)
             store.prepare()
             store.prepare_web_credentials(username, password)
-            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', pin['binary']] + arguments(store.root, name)
+            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', program] + arguments(store.root, name)
             self._spawn(argv, child_environment(env, store.root))
 
     def _spawn(self, argv, env):
@@ -568,19 +610,27 @@ def save_package(pin, package, destination):
     if digest_file(package, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
         raise Failure('download')
     destination = Path(destination)
-    fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
+    temporary = None
     try:
+        fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
         with os.fdopen(fd, 'wb') as out, ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
             while data := source.read(65536): out.write(data)
             out.flush(); os.fsync(out.fileno())
-        if digest_file(temporary, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
-            raise Failure('download')
+        # This is a public installer copy, possibly on a mode-less removable
+        # filesystem. The managed source remains private and is never replaced.
+        try:
+            verified = digest_file(temporary, pin['bytes'], os.getuid())
+        except (OSError, Failure):
+            raise Failure('export_destination') from None
+        if verified != (pin['bytes'], pin['sha256']): raise Failure('export_destination')
         publish_new(temporary, destination)
         return destination
     except FileExistsError:
         raise Failure('collision') from None
+    except OSError:
+        raise Failure('export_destination') from None
     finally:
-        if os.path.lexists(temporary): os.unlink(temporary)
+        if temporary is not None and os.path.lexists(temporary): os.unlink(temporary)
 
 
 def cleanup_owned(host, store, finished, failed):

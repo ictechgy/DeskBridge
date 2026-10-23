@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 import GlimmerEngine
+import DeskBridgeCore
 
 /// Exercise the actual operation catch path with typed synthetic failures.
 @MainActor
@@ -14,6 +15,9 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
     let model = DesktopModel(storageDirectory: temporary.appendingPathComponent("desktop-guidance"), identitySuite: suite)
     let raw = "synthetic-untrusted-detail-192.0.2.1-private-path"
     let cases: [(any Error, String)] = [
+        (ConnectionInvitation.Failure.invalid, "새 연결 QR"),
+        (CorePrivateStorageFailure.unsafeStorage, "저장 폴더"),
+        (IdentityStorageError.unsafeStorage, "저장 폴더"),
         (StreamSecurityPolicy.Failure.plaintextSignalling, "필수 화면 암호화"),
         (StreamSecurityPolicy.Failure.missingEncryption(7), "필수 화면 암호화"),
         (PairingFailure.invalidAddress, "IPv4 주소"),
@@ -69,5 +73,7 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
                "file operations exposed raw framework storage details")
     try expect(FilesModel.failureMessage(AppFailure(localMessage)) == localMessage,
                "file operations lost actionable local guidance")
+    try expect(FilesModel.failureMessage(CorePrivateStorageFailure.unsafeStorage).contains("저장 폴더"),
+               "file credential storage refusal lost actionable local guidance")
     return count
 }

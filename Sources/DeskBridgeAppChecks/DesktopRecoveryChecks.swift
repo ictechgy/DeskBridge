@@ -10,12 +10,22 @@ func runDesktopRecoveryChecks() throws -> Int {
     try expect(state.message != nil, "connecting did not show an in-window status")
     state.receive(.connectionEstablished)
     try expect(state.message != nil, "control connection hid video wait before first frame")
+    try expect(!state.status.contains("연결됨"), "transport success falsely published connected before fresh video")
+    state.receive(.waitingForVideo(true)); state.receive(.waitingForVideo(false))
+    try expect(state.phase == .waiting && state.message != nil, "wait reset falsely proved the first video frame")
     state.receive(.firstFrame)
     try expect(state.message == nil, "first frame did not clear connecting status")
+    try expect(state.status == "화면 연결됨", "first frame did not publish connected status")
+    state.receive(.audioFailed("synthetic untrusted network detail"))
+    try expect(state.phase == .live && state.message?.contains("오디오 출력 장치") == true,
+               "nonfatal audio failure is invisible in the fullscreen surface")
+    try expect(!state.status.contains("synthetic") && state.message?.contains("synthetic") == false,
+               "audio diagnostics leaked into shell or accessibility copy")
     state.receive(.waitingForVideo(true))
     try expect(state.phase == .waiting && state.message != nil, "live video stall was invisible")
     state.receive(.waitingForVideo(false))
-    try expect(state.message == nil, "resumed video did not clear waiting status")
+    try expect(state.message?.contains("오디오 출력 장치") == true,
+               "video recovery hid the persistent nonfatal audio warning")
     state.receive(.reconnecting)
     state.receive(.stageFailed(name: "synthetic retry", errorCode: -1))
     state.receive(.stageStarting(name: "synthetic reconnect"))
@@ -24,6 +34,9 @@ func runDesktopRecoveryChecks() throws -> Int {
                "reconnect lost its frozen-picture explanation")
     state.receive(.reconnected)
     try expect(state.phase == .waiting, "transport recovery falsely proved fresh video")
+    try expect(!state.status.contains("연결됨"), "reconnected transport falsely published live video")
+    state.receive(.waitingForVideo(false))
+    try expect(state.phase == .waiting && state.message != nil, "wait reset hid recovery before fresh video")
     state.receive(.firstFrame)
     try expect(state.message == nil, "fresh recovery frame did not clear status")
     state.receive(.reconnecting); state.receive(.firstFrame); state.receive(.reconnected)
@@ -33,6 +46,34 @@ func runDesktopRecoveryChecks() throws -> Int {
         ended.receive(.reconnecting); ended.receive(terminal); ended.receive(.firstFrame); ended.receive(.reconnecting)
         try expect(ended.phase == .ended && ended.message == nil, "terminal presentation accepted stale recovery events")
     }
+    for (code, text): (Int32, String) in [
+        (-100, "영상을 받지 못했습니다"), (-101, "해상도를 낮춰"), (-1, "연결이 끊겼습니다"),
+        (Int32(bitPattern: 0x800E9302), "보호된 콘텐츠"),
+        (Int32(bitPattern: 0x800E9403), "HDR·해상도"), (42, "Sunshine 상태")
+    ] {
+        var ended = DesktopRecoveryPresentation()
+        ended.receive(.connectionTerminated(errorCode: code))
+        let status = ended.status
+        try expect(status.contains(text), "typed termination reason lost its actionable fixed guidance")
+        ended.receive(.stopped); ended.receive(.firstFrame)
+        try expect(ended.status == status, "late stop or stale video replaced the termination guidance")
+    }
+    var resumed = DesktopRecoveryPresentation()
+    resumed.receive(.firstFrame); resumed.receive(.reconnecting)
+    resumed.receive(.connectionTerminated(errorCode: -100))
+    try expect(resumed.status.contains("다시 시작되지"),
+               "termination after a prior frame lost video-resume guidance")
+    for (error, guidance): (StreamError, String) in [
+        (.hostUnreachable("synthetic secret"), "Wi-Fi·Tailscale"),
+        (.hostCertChanged("synthetic secret"), "인증서는 자동으로 교체하지"),
+        (.crypto("synthetic secret"), "암호화 설정")
+    ] {
+        var ended = DesktopRecoveryPresentation()
+        ended.receive(.connectionTerminated(errorCode: -1, error: error))
+        try expect(!ended.status.contains("synthetic") && ended.status.contains(guidance),
+                   "reconnect failure exposed arbitrary error text")
+    }
+    count += try runDesktopVisibilityChecks()
     return count
 }
 

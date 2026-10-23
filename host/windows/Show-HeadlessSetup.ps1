@@ -7,6 +7,7 @@ $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'HeadlessSetup.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'HeadlessStatus.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SetupDownload.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'SetupStatus.psm1') -Force
 $window=New-Object Windows.Forms.Form
 $window.Text='Knot · 모니터 없이 사용'; $window.Size=New-Object Drawing.Size(740,740)
 $window.MinimumSize=New-Object Drawing.Size(600,480); $window.StartPosition='CenterParent'
@@ -22,6 +23,7 @@ $content=New-Object Windows.Forms.FlowLayoutPanel
 $content.Dock='Fill'; $content.FlowDirection='TopDown'; $content.WrapContents=$false; $content.AutoScroll=$true
 $content.Padding=New-Object Windows.Forms.Padding(20); $layout.Controls.Add($content,0,0)
 $status=New-Object Windows.Forms.TextBox
+$status.AccessibleName='가상 화면 설정 상태'; $status.AccessibleDescription='설치 정책, 복구 기록과 장치 확인 결과입니다. 내용을 선택해 복사할 수 있습니다.'
 $status.ReadOnly=$true; $status.Multiline=$true; $status.ScrollBars='Vertical'; $status.BorderStyle='None'
 $status.BackColor=[Drawing.SystemColors]::Control; $status.ForeColor=[Drawing.SystemColors]::HotTrack
 $status.Dock='Fill'; $status.Margin=New-Object Windows.Forms.Padding(20,8,20,8); $layout.Controls.Add($status,0,1)
@@ -65,8 +67,13 @@ function Update-HeadlessState {
         # Read-only recovery state is available even if compilation or device probing fails.
         $state=Get-KnotHeadlessState
         $recordText=Get-KnotHeadlessStatusText $state.Status
-        $status.Text=$recordText+' 장치 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
         if ($state.Status -cin @('Conflict','LegacyRecoveryRequired','Unsupported','BootEvidenceUnavailable','DeviceIdentityUnavailable') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
+        $availability=Get-KnotHeadlessAvailability
+        if (-not (Test-KnotHeadlessDeviceProbeRequired $state.Status ([bool]$availability.Enabled))) {
+            # No install/removal action is available. Avoid compiling/scanning native code just to display policy.
+            $status.Text=Get-KnotHeadlessAvailabilityText $availability.Reason; return
+        }
+        $status.Text=$recordText+' 장치 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
         Initialize-KnotHeadlessNative
         if ($null -eq $script:scan) { $script:scan=[Knot.Headless.Native]::ScanAsync() }
         $timer=[Diagnostics.Stopwatch]::StartNew()
@@ -76,16 +83,12 @@ function Update-HeadlessState {
         if (-not $script:scan.IsCompleted) { $status.Text=$recordText+' 장치 확인이 지연되고 있습니다. 작업 버튼은 잠겨 있습니다. 잠시 뒤 상태 새로고침을 누르세요.'; return }
         try { $inventory=$script:scan.GetAwaiter().GetResult() } finally { $script:scan=$null }
         $foreign=@($inventory.Devices | Where-Object { $_.InstanceId -ine $state.InstanceId })
-        if ($state.Status -eq 'Conflict') {
-            $status.Text='Knot 복구 기록이나 설정을 안전하게 확인하지 못했습니다. 기존 상태는 보존했습니다. 파일을 직접 삭제하거나 재설치하지 말고 Windows 관리자에게 복구 기록 점검을 요청하세요.'; return
-        }
         if ($foreign.Count -gt 0) {
             $status.Text=$recordText+[Environment]::NewLine+'기존 가상 디스플레이 또는 변경된 설정이 있습니다. Knot이 설치하거나 제거하지 않습니다. 기존 드라이버의 관리 도구를 사용하세요.'; return
         }
         if ($state.Status -eq 'Absent') {
-            $availability=Get-KnotHeadlessAvailability
             $script:canInstall=[bool]$availability.Enabled
-            $status.Text=if ($script:canInstall) {'Knot 가상 화면이 없습니다. 설치 후 Sunshine에서 사용할 화면을 한 번 지정하세요.'} else {'가상 화면 자동 설치는 현재 사용할 수 없습니다. 외부 드라이버의 보안 검토가 끝날 때까지 설치를 보류했습니다. 모니터 또는 HDMI 더미 플러그로 기존 화면 연결을 이용할 수 있습니다.'}; return
+            $status.Text='Knot 가상 화면이 없습니다. 설치 후 Sunshine에서 사용할 화면을 한 번 지정하세요.'; return
         }
         $script:canRemove=[bool]$state.Managed
         if ($state.Status -cnotin @('Installed','InstalledPendingRestart')) {
@@ -124,7 +127,9 @@ $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
     # Refresh policy before any confirmation, network activity, or elevation.
     try { $availability=Get-KnotHeadlessAvailability } catch { $availability=$null }
     if (-not $availability -or -not $availability.Enabled) {
-        $script:canInstall=$false; Set-HeadlessBusy $false; $status.Text=$script:installHoldText; return
+        $script:canInstall=$false; Set-HeadlessBusy $false
+        $reason=if ($availability) {$availability.Reason} else {'manifest-invalid'}
+        $status.Text=Get-KnotHeadlessAvailabilityText $reason; return
     }
     if ([Windows.Forms.MessageBox]::Show('가상 디스플레이 드라이버와 화면 하나를 설치합니다. 화면은 제거할 때까지 유지되며 관리자 확인이 필요합니다. 계속할까요?','Knot','OKCancel','Information') -ne 'OK') { return }
     Set-HeadlessBusy $true; $folder=$null; $download=$null; $locked=$null
@@ -138,7 +143,7 @@ $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
         while (-not $download.Completion.IsCompleted) {
             [Windows.Forms.Application]::DoEvents()
             if ($script:cancelHeadlessDownload) { $download.Cancel(); $cancel.Enabled=$false }
-            $status.Text='가상 화면 설치 파일을 내려받는 중… '+[Math]::Min(100,[Math]::Floor(100.0*$download.Bytes/$dep.bytes))+'%'
+            Set-SetupStatusText $status ('가상 화면 설치 파일을 내려받는 중… '+[Math]::Min(100,[Math]::Floor(100.0*$download.Bytes/$dep.bytes))+'%')
             Start-Sleep -Milliseconds 80
         }
         $download.Completion.GetAwaiter().GetResult(); $cancel.Visible=$false
@@ -192,13 +197,23 @@ $remove=Add-HeadlessButton 'Knot 가상 화면 제거…' {
     finally { Set-HeadlessBusy $false }
 }
 if (-not $LauncherPath) { $null=Add-HeadlessText '설치와 제거는 배포용 Knot EXE에서만 사용할 수 있습니다. 이 개발자 폴더에서는 상태만 확인합니다.' }
+$script:headlessContentWidth=-1; $script:headlessContentDpi=0
 $window.Add_Resize({
     $scale=[Math]::Max(1.0,[double]$window.DeviceDpi/96.0)
     $width=[Math]::Max([int][Math]::Round(220*$scale),$content.ClientSize.Width-[int][Math]::Round(60*$scale))
-    foreach ($control in $content.Controls) {
-        if ($control -is [Windows.Forms.Label]) { $control.MaximumSize=New-Object Drawing.Size($width,0) }
-        elseif ($control -is [Windows.Forms.Button]) { $control.Width=[Math]::Min([int][Math]::Round(340*$scale),$width) }
-    }
+    if ($width -eq $script:headlessContentWidth -and $window.DeviceDpi -eq $script:headlessContentDpi) { return }
+    $script:headlessContentWidth=$width; $script:headlessContentDpi=$window.DeviceDpi
+    $content.SuspendLayout()
+    try {
+        foreach ($control in $content.Controls) {
+            if ($control -is [Windows.Forms.Label]) {
+                if ($control.MaximumSize.Width -ne $width) { $control.MaximumSize=New-Object Drawing.Size($width,0) }
+            } elseif ($control -is [Windows.Forms.Button]) {
+                $buttonWidth=[Math]::Min([int][Math]::Round(340*$scale),$width)
+                if ($control.Width -ne $buttonWidth) { $control.Width=$buttonWidth }
+            }
+        }
+    } finally { $content.ResumeLayout($true) }
 })
 $window.Add_FormClosing({ param($sender,$eventArgs) if ($script:headlessBusy) { $eventArgs.Cancel=$true } })
 $window.Add_Shown({ Set-HeadlessBusy $true; try { Update-HeadlessState } finally { Set-HeadlessBusy $false } })

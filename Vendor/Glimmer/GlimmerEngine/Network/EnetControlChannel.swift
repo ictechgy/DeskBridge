@@ -233,6 +233,10 @@ final class EnetControlChannel: @unchecked Sendable {
     /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
     var inboundReplayWindow = ControlReplayWindow()
 
+    /// Exact authenticated envelopes retain duplicate-ACK liveness without ACKing
+    /// forged/relabelled payloads. Receive-queue owned, fixed-size fingerprint history.
+    var inboundReliableHistory = EnetAuthenticatedReliableHistory()
+
     /// Duplicate and gap-skip breadcrumbs fire once per session to avoid floods.
     /// Confined to `queue`, so no lock.
     var loggedFirstDuplicateReliable = false

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Shared build/package provenance checks. Only reads this source tree and its build artifacts."""
 from pathlib import Path
-import hashlib, io, json, stat, subprocess, tarfile
+import hashlib, io, json, stat, struct, subprocess, tarfile
 
 
 class BuildSnapshotError(ValueError):
@@ -9,8 +9,25 @@ class BuildSnapshotError(ValueError):
 
 REQUIRED_CHECK_STAGES = {"synthetic-checks", "synthetic-model-checks", "build-contract-checks",
                          "input-batching-checks", "control-hardening-checks", "desktop-input-backpressure-checks",
-                         "video-frame-lifecycle-checks",
-                         "rtsp-replay-checks", "inspect-app-entitlements", "inspect-dependencies"}
+                         "video-frame-lifecycle-checks", "media-receive-lifecycle-checks",
+                         "rtsp-replay-checks", "inspect-app-entitlements", "inspect-dependencies",
+                         "compile-host-supervisor", "sign-host-supervisor", "verify-host-supervisor",
+                         "inspect-host-supervisor-entitlements", "inspect-host-supervisor-dependencies",
+                         "mac-host-lifetime-checks", "private-storage-checks"}
+
+
+def host_supervisor_snapshot(app):
+    app = Path(app)
+    relative = "Contents/Helpers/KnotHostSupervisor"
+    path = app / relative
+    digest = _ordinary_file(app, path)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    data = path.read_bytes()
+    # Thin arm64 MH_EXECUTE, not a script, library, universal fallback, or link.
+    if (len(data) < 32 or struct.unpack_from("<III", data) != (0xFEEDFACF, 0x0100000C, 0) or
+            struct.unpack_from("<I", data, 12)[0] != 2 or not mode & 0o111 or mode & 0o022):
+        raise BuildSnapshotError("Invalid native arm64 host supervisor")
+    return {"path": relative, "sha256": digest, "mode": mode, "architecture": "arm64", "type": "MH_EXECUTE"}
 
 
 def _ordinary_file(root, path):
@@ -97,6 +114,7 @@ def validate_completed_build(root, build, require_release=False):
         invocations = json.loads((build / "build-invocations.json").read_text())
         checks = json.loads((build / "synthetic-checks.stdout").read_text())
         model_checks = json.loads((build / "synthetic-model-checks.stdout").read_text())
+        lifetime_checks = json.loads((build / "mac-host-lifetime-checks.stdout").read_text())
         expected = json.loads((build / "source-manifest.json").read_text())
         current = source_snapshot(root)
         if expected != current:
@@ -113,10 +131,19 @@ def validate_completed_build(root, build, require_release=False):
                 not REQUIRED_CHECK_STAGES <= labels or
                 checks.get("status") != "passed" or model_checks.get("status") != "passed"):
             raise BuildSnapshotError("A completed build with both check suites is required")
+        if (lifetime_checks.get("status") != "passed" or type(lifetime_checks.get("checks")) is not int or
+                lifetime_checks["checks"] < 37 or
+                any(lifetime_checks.get(key) is not True for key in (
+                    "actualMacHostChild", "nativeSupervisor", "freshSyntheticOnly", "appAbruptDeath",
+                    "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup")) or
+                lifetime_checks.get("productionHostLaunched") is not False):
+            raise BuildSnapshotError("Checked synthetic native host lifetime proof is required")
         if require_release and completed["configuration"] != "release":
             raise BuildSnapshotError("Signed releases require an optimized release build")
         if completed.get("appManifest") != tree_snapshot(root / "dist/Knot.app"):
             raise BuildSnapshotError("App bundle changed after the successful build; rebuild")
+        if completed.get("hostSupervisor") != host_supervisor_snapshot(root / "dist/Knot.app"):
+            raise BuildSnapshotError("Host supervisor differs from its checked build; rebuild")
         return completed, checks
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise BuildSnapshotError("Incomplete or invalid build evidence; rebuild") from error

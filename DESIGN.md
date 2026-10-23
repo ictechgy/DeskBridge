@@ -87,6 +87,7 @@
 - Loading: progress and descriptive phase, prevent duplicate operation.
 - Empty: one actionable instruction.
 - Error: readable error; no raw keys/tokens/protocol dumps.
+- Malformed connection links show how to obtain a new QR/link before any network troubleshooting; parsing failure never changes saved target or trust.
 - Success: confirmed operation and destination.
 - Disabled: show setup prerequisite.
 - Offline: explicit retry, no silent authentication downgrade.

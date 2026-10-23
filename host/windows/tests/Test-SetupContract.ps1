@@ -3,6 +3,7 @@
 # Pure synthetic checks only. Never install software, touch accounts/services/firewall or open the UI.
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'SetupContract.psm1') -Force
+Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'SetupStatus.psm1') -Force
 $count=0
 function Expect([bool] $Condition,[string] $Message) { if (-not $Condition) { throw $Message }; $script:count++ }
 function Reject([scriptblock] $Body) { $rejected=$false; try { & $Body | Out-Null } catch { $rejected=$true }; Expect $rejected 'Invalid input accepted' }
@@ -27,6 +28,11 @@ foreach ($bad in @('ssh-rsa AAAA','ssh-ed25519 AAAA',($key + "`nInjected"))) { R
 $request=@{kind='deskbridge.mac-setup';version=1;requestID='11111111-1111-4111-8111-111111111111';clientPublicKey=$key;allowedClientAddresses=@('192.168.1.10','100.80.1.2')}
 $result=ConvertFrom-MacSetup ($request | ConvertTo-Json)
 Expect ($result.allowedClientAddresses.Count -eq 2 -and $result.clientPublicKey -ceq $key) 'Request roundtrip'
+$single=$request.Clone(); $single.allowedClientAddresses=@('192.168.1.10')
+$singleResult=ConvertFrom-MacSetup ($single | ConvertTo-Json)
+Expect ($singleResult.allowedClientAddresses.Count -eq 1 -and $singleResult.allowedClientAddresses[0] -ceq '192.168.1.10') 'Nested singleton address array must retain the one-address contract'
+$scalar=$request.Clone(); $scalar.allowedClientAddresses='192.168.1.10'
+Reject { ConvertFrom-MacSetup ($scalar | ConvertTo-Json) }
 foreach ($entry in @(@('version',2),@('kind','other'),@('requestID','invalid'),@('command','whoami'),@('allowedClientAddresses',@('8.8.8.8')),@('allowedClientAddresses',@('10.0.0.1','10.0.0.1')))) {
  $invalid=$request.Clone(); $invalid[$entry[0]]=$entry[1]; Reject { ConvertFrom-MacSetup ($invalid | ConvertTo-Json) }
 }
@@ -187,6 +193,36 @@ Expect-SourceOrder $compilerSource '[IO.Directory]::CreateDirectory($compilerDir
 Expect-SourceOrder $compilerSource "SetEnvironmentVariable('TEMP',`$compilerDirectory,'Process')" 'Add-Type -CompilerParameters' 'Compiler child TEMP uses only the private directory'
 Expect ($compilerSource.Contains('TempFiles=New-Object CodeDom.Compiler.TempFileCollection($compilerDirectory,$false)') -and $compilerSource.Contains("SetEnvironmentVariable('TEMP',`$priorTemp,'Process')") -and $compilerSource.Contains("SetEnvironmentVariable('TMP',`$priorTmp,'Process')") -and $compilerSource.Contains('[IO.Directory]::Delete($compilerDirectory,$false)')) 'Compiler tracks private scratch, restores environment, cleans only owned files'
 Expect ($enableSource.Contains('Invoke-ProtectedCompilation -TypeDefinition')) 'Share helper reuses the protected compiler boundary'
+# Pure UI policy fixtures: no form, process, token, installer, or device API is used.
+$syntheticError=[pscustomobject]@{Exception=[Exception]::new('synthetic platform failure')}
+Expect ((Get-SetupFailureText $syntheticError) -notmatch '네트워크') 'Unknown failures must not be classified as network errors'
+$koreanError=[pscustomobject]@{Exception=[Exception]::new('합성 오류 안내')}
+Expect ((Get-SetupFailureText $koreanError) -ceq '합성 오류 안내') 'Actionable Korean failures are preserved'
+Expect ((Get-SetupFailureText $syntheticError -Context DesktopUser) -match '로컬.*Entra') 'Desktop identity refusal explains the supported account type'
+Expect ((Get-SetupFailureText $syntheticError -Context ElevatedToken) -match 'UAC.*Administrator') 'Elevated startup refusal explains environments without a filtered token'
+$cancelledError=[pscustomobject]@{Exception=[Exception]::new('synthetic wrapper',[ComponentModel.Win32Exception]::new(1223))}
+Expect ((Get-SetupFailureText $cancelledError) -match '취소') 'Nested UAC cancellation retains cancellation guidance'
+foreach ($case in @(@(0,'Installed'),@(1602,'Cancelled'),@(1618,'Retry'),@(1641,'RestartInitiated'),@(3010,'RestartRequired'),@(1603,'Failed'),@($null,'Failed'))) {
+    $result=Get-SunshineInstallResult -ExitCode $case[0]
+    Expect ($result.State -ceq $case[1] -and $result.Text -match '[가-힣]') ('MSI outcome: '+$case[0])
+}
+Expect ((Get-SunshineInstallResult 2 -Broker).State -ceq 'HandledFailure') 'Only broker exit 2 means the failure was already displayed'
+Expect ((Get-SunshineInstallResult 2).State -ceq 'Failed') 'Raw MSI exit 2 does not attest a displayed error'
+Expect ((Get-SunshineInstallResult 1618 -Broker).Text -match '다른 Windows 설치') 'Installer contention tells the user which work to wait for'
+$statusFixture=[pscustomobject]@{StoredText='download 0%';WriteCount=0}
+$statusFixture | Add-Member -MemberType ScriptProperty -Name Text -Value {$this.StoredText} -SecondValue {param($value) $this.StoredText=[string]$value; $this.WriteCount++}
+1..50 | ForEach-Object { Set-SetupStatusText $statusFixture 'download 0%' }
+Expect ($statusFixture.WriteCount -eq 0) 'Repeated integer-percent polls preserve the existing status control value'
+Set-SetupStatusText $statusFixture 'download 1%'
+Set-SetupStatusText $statusFixture 'verify 1%'
+Expect ($statusFixture.WriteCount -eq 2 -and $statusFixture.Text -ceq 'verify 1%') 'Percent and phase changes each update status exactly once'
+Expect (-not (Test-KnotHeadlessDeviceProbeRequired 'Absent' $false)) 'Absent and policy-blocked setup skips native initialization/probing'
+Expect (Test-KnotHeadlessDeviceProbeRequired 'Absent' $true) 'An allowed install still requires the native device probe'
+foreach ($state in @('Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired','Conflict','Unknown')) {
+    Expect (Test-KnotHeadlessDeviceProbeRequired $state $false) ('A non-absent state cannot bypass the existing device identity gate: '+$state)
+}
+Expect ((Get-KnotHeadlessAvailabilityText 'manifest-invalid') -match '새 Knot 배포') 'Invalid package metadata has distinct recovery guidance'
+Expect ((Get-KnotHeadlessAvailabilityText 'upstream-ipc-review') -match '보안 검토') 'Driver policy hold keeps its existing explanation'
 # Parse every shipped PowerShell file, without running the GUI or elevated backend.
 foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.Extension -in @('.ps1','.psm1') }) {
  $tokens=$null;$errors=$null

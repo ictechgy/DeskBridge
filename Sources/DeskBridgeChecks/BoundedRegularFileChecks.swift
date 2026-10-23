@@ -48,10 +48,14 @@ func runBoundedRegularFileChecks() throws -> Int {
     for kind in ["oversized", "symlink", "fifo", "not-directory"] {
         let settingsDirectory = directory.appendingPathComponent("settings-" + kind)
         if kind == "not-directory" { try Data([1]).write(to: settingsDirectory) }
-        else { try FileManager.default.createDirectory(at: settingsDirectory, withIntermediateDirectories: true) }
+        else { try FileManager.default.createDirectory(at: settingsDirectory, withIntermediateDirectories: true,
+                                                      attributes: [.posixPermissions: 0o700]) }
         let settingsURL = settingsDirectory.appendingPathComponent("settings.json")
         var settingsRescue: DispatchGroup?
-        if kind == "oversized" { try Data(repeating: 32, count: 128 * 1024 + 1).write(to: settingsURL) }
+        if kind == "oversized" {
+            try Data(repeating: 32, count: 128 * 1024 + 1).write(to: settingsURL)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+        }
         if kind == "symlink" { try FileManager.default.createSymbolicLink(at: settingsURL, withDestinationURL: regular) }
         if kind == "fifo" {
             guard mkfifo(settingsURL.path, 0o600) == 0 else { throw CheckFailure(message: "cannot create synthetic settings FIFO") }
@@ -63,6 +67,7 @@ func runBoundedRegularFileChecks() throws -> Int {
         catch BoundedRegularFile.Failure.tooLarge { settingsRefused = kind == "oversized" }
         catch BoundedRegularFile.Failure.unreadable { settingsRefused = ["symlink", "not-directory"].contains(kind) }
         catch BoundedRegularFile.Failure.invalidFile { settingsRefused = kind == "fifo" }
+        catch is CorePrivateStorageFailure { settingsRefused = true }
         let elapsed = ProcessInfo.processInfo.systemUptime - settingsStart
         settingsRescue?.wait()
         try expect(settingsRefused, "invalid existing settings were treated as fresh trust state")

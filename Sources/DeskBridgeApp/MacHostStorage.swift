@@ -53,8 +53,8 @@ enum MacHostStorage {
         try checkDirectory(credentials)
         for name in ["sunshine.conf", "apps.json", "state.json", "web-credentials.json"] { try checkFile(root, name) }
         for name in ["cakey.pem", "cacert.pem"] { try checkFile(credentials, name) }
-        try replace(root, name: "sunshine.conf", bytes: Data("# Knot owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
-        try replace(root, name: "apps.json", bytes: MacHostPolicy.desktopApplications)
+        try createDefault(root, name: "sunshine.conf", bytes: Data("# Knot owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
+        try createDefault(root, name: "apps.json", bytes: MacHostPolicy.desktopApplications)
     }
     private static func checkDirectory(_ descriptor: Int32) throws {
         var value = stat()
@@ -91,7 +91,13 @@ enum MacHostStorage {
         // POSIX mode alone does not constrain inherited macOS ACL grants.
         guard acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) != 0 else { throw MacHostPolicy.Failure.privateStorage }
     }
-    private static func replace(_ directory: Int32, name: String, bytes: Data) throws {
+    private static func createDefault(_ directory: Int32, name: String, bytes: Data) throws {
+        var existing = stat()
+        if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+            try checkFile(directory, name)
+            return
+        }
+        guard errno == ENOENT else { throw MacHostPolicy.Failure.privateStorage }
         let temporary = ".deskbridge-" + UUID().uuidString
         let descriptor = openat(directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw MacHostPolicy.Failure.privateStorage }
@@ -105,6 +111,6 @@ enum MacHostStorage {
             }
             return fsync(descriptor) == 0
         }
-        guard wrote, renameat(directory, temporary, directory, name) == 0 else { throw MacHostPolicy.Failure.privateStorage }
+        guard wrote, renameatx_np(directory, temporary, directory, name, UInt32(RENAME_EXCL)) == 0 else { throw MacHostPolicy.Failure.privateStorage }
     }
 }

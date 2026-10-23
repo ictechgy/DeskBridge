@@ -151,9 +151,11 @@ extension NativeBackend {
         sink.start()
 
         let receiver = makeVideoReceiver(handshake: handshake, config: config, host: host, sink: sink, enet: enet)
-        receiver.onReceiveFailed = { [weak self] in
+        receiver.onReceiveFailed = { [weak self, weak receiver] in
+            guard let self, let receiver,
+                  self.withState({ !interrupted && videoReceiver === receiver }) else { return }
+            self.stopConnection()
             events.connectionTerminated(code: -1)
-            self?.stopConnection()
         }
         guard adoptWhileConnecting({ videoReceiver = receiver }) else {
             // Stop may have cleaned this sink before setup/start finished.
@@ -188,8 +190,8 @@ extension NativeBackend {
         // Wire the host TERMINATION → connectionTerminated + teardown.
         enet.onTerminated = { [weak self] code in
             Diag.error("native backend: host terminated session (code \(code))", Self.logCategory)
-            events.connectionTerminated(code: code)
             self?.stopConnection()
+            events.connectionTerminated(code: code)
         }
 
         // HDR engagement pulls mastering metadata through this channel;
@@ -314,6 +316,12 @@ extension NativeBackend {
         guard let receiver = withState({ audioReceiver }) else {
             // No early-ping receiver (e.g. no audio sink). Nothing to receive.
             return
+        }
+        receiver.onReceiveFailed = { [weak self, weak receiver] error in
+            guard let self, let receiver,
+                  self.withState({ !interrupted && audioReceiver === receiver }) else { return }
+            TelemetryCounters.shared.audioReceiveFailedTotal.increment()
+            events.audioFailed("audio receive failed (errno \(error))")
         }
         do {
             try receiver.startReceive()

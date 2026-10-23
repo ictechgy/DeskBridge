@@ -155,6 +155,15 @@ final class DesktopModel: ObservableObject {
         nearby.stop(); cancelOperation()
     }
     static func failureMessage(_ error: any Error) -> String {
+        if let invitation = error as? ConnectionInvitation.Failure {
+            return invitation.localizedDescription
+        }
+        if let storage = error as? CorePrivateStorageFailure {
+            return storage.localizedDescription
+        }
+        if let storage = error as? IdentityStorageError, case .unsafeStorage = storage {
+            return CorePrivateStorageFailure.unsafeStorage.localizedDescription
+        }
         if error is StreamSecurityPolicy.Failure {
             return "필수 화면 암호화를 확인하지 못했습니다. Windows의 Sunshine을 업데이트하고 Network의 LAN/WAN 암호화를 Mandatory로 저장한 뒤 다시 연결하세요."
         }
