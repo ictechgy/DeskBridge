@@ -1886,7 +1886,7 @@ live_fixture = live_fixture.replace("        await Task.yield() // Actual route 
             let (backend, events, attempt) = original!, bridge = original!.1.bridge!
             quiesceHook.use { hook in hook = {
                 quiesceHook.use { $0 = nil }
-                precondition(bridge.acceptsEvent(from: backend, attempt: attempt), "self-reconnect keeps original decoder/transport observed until quiesce")
+                precondition(!bridge.acceptsEvent(from: backend, attempt: attempt), "self-reconnect fences original decoder before its first await")
                 backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
                 precondition(bridge.terminationIntent(from: backend, attempt: attempt) == Int32(bitPattern: 0x80030023), "PC intent during actual input quiesce is admitted before retirement")
             } }
@@ -1937,4 +1937,179 @@ with tempfile.TemporaryDirectory(prefix="knot-live-termination-", dir="/tmp") as
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Start.swift", ENGINE / "Session/StreamBridgeContext.swift")}}))
 
 # Compile complete ENet producers as part of the mandatory media lifecycle gate.
-subprocess.run([sys.executable, str(ROOT / "scripts/tests/test_enet_termination.py")], check=True, timeout=120)
+subprocess.run([sys.executable, str(ROOT / "scripts/tests/test_enet_termination.py")], check=True, timeout=150)
+
+# Real wake-task replacement can cancel a producer after its cancellation guard
+# and before the actor consumes its verdict. Exercise those actual Wake bodies,
+# complete LIVE/episode cleanup, and the shell reducer's intermediate phases.
+wake_source = (ENGINE / "Session/StreamSession+Wake.swift").read_text()
+watchdog_source = (ENGINE / "Session/StreamSession+FrameWatchdog.swift").read_text()
+handoff_fixture = live_fixture[:live_fixture.index("@main struct LiveEntryChecks")]
+handoff_fixture = handoff_fixture.replace("case livePCIdle,", "case wakePrecanceled, stopInitialProbe, waitingPCIdle, waitingSameApp, selfEntryPC, livePCIdle,", 1)
+handoff_fixture = handoff_fixture.replace("enum DisconnectReason { case hostClosedClean, hostError }", "enum DisconnectReason { case hostClosedClean, hostError, systemSleep }", 1)
+handoff_fixture = handoff_fixture.replace("    let p2 = P2(), reconnectTotal = Counter()", "    let p2 = P2(), reconnectTotal = Counter(), wakeTotal = Counter()", 1)
+# Rename the actual public contract in this combined fixture so the independent
+# inert transport enum remains small, while presentation executes its real code.
+shell_contract = recovery_contract.replace(block(recovery_contract, "package struct TakeoverRequired:"), "")
+shell_contract = shell_contract.replace("StreamEvent", "ShellStreamEvent").replace("StreamError", "ShellStreamError").replace("package ", "")
+shell_presentation = recovery_sources["presentation"].replace("import GlimmerEngine\n", "").replace("StreamEvent", "ShellStreamEvent").replace("StreamError", "ShellStreamError")
+handoff_fixture = handoff_fixture.replace("import os\n", "import os\n" + shell_contract + "\n" + shell_presentation, 1)
+other_constants = "\n".join(line.replace("package ", "") for line in recovery_constants.splitlines() if "deadPeerTerminationCode" not in line)
+handoff_fixture = handoff_fixture.replace("actor StreamSession {", "actor StreamSession {\n" + other_constants, 1)
+handoff_fixture = handoff_fixture.replace("case hdrActive(Bool), firstFrame,", "case waitingForVideo(Bool), hdrActive(Bool), firstFrame,", 1)
+handoff_fixture = handoff_fixture.replace("    let values = Locked<[String]>([])", "    let values = Locked<[String]>([])\n    let shell = Locked(DesktopRecoveryPresentation())\n    let shellPhases = Locked<[String]>([])", 1)
+handoff_fixture = handoff_fixture.replace("        if let attempt, attempt != currentAttempt { return }\n        values.use", r'''
+        if let attempt, attempt != currentAttempt { return }
+        let publicEvent: ShellStreamEvent
+        switch event {
+        case .waitingForVideo(let value): publicEvent = .waitingForVideo(value)
+        case .hdrActive(let value): publicEvent = .hdrActive(value)
+        case .firstFrame: publicEvent = .firstFrame
+        case .reconnecting: publicEvent = .reconnecting
+        case .reconnected: publicEvent = .reconnected
+        case .connectionTerminated(let code, let error):
+            let typed: ShellStreamError?
+            switch error {
+            case .sessionFailed(let value)?: typed = .sessionFailed(value)
+            case .hostTimedOut?: typed = .hostTimedOut
+            case .hostUnreachable(let value)?: typed = .hostUnreachable(value)
+            case nil: typed = nil
+            }
+            publicEvent = .connectionTerminated(errorCode: code, error: typed)
+        }
+        let phase = shell.use { $0.receive(publicEvent); return String(describing: $0.phase) }
+        shellPhases.use { $0.append(phase) }
+        values.use''', 1)
+handoff_fixture = handoff_fixture.replace("            case .hdrActive:", "            case .waitingForVideo(let value): value ? value.append(\"waiting-true\") : value.append(\"waiting-false\")\n            case .hdrActive:", 1)
+# Avoid shadowing the recorded event array with the waiting payload.
+handoff_fixture = handoff_fixture.replace("case .waitingForVideo(let value): value ? value.append(\"waiting-true\") : value.append(\"waiting-false\")", "case .waitingForVideo(let waiting): value.append(waiting ? \"waiting-true\" : \"waiting-false\")", 1)
+waiting_method = block(watchdog_source, "package func setWaitingForVideo(").replace("package ", "")
+handoff_fixture = handoff_fixture.replace("    func setWaitingForVideo(_ waiting: Bool) {}; func resetStallLatches() {}", "    var waitingForVideo = false\n    " + waiting_method + "\n    func resetStallLatches() { setWaitingForVideo(false) }", 1)
+handoff_fixture = handoff_fixture.replace("final class NativeBackend: @unchecked Sendable {", r'''
+struct InertWakeRTT { let rttMs: Double }
+struct InertWakeHealth { let sinceLastAckMs: UInt32 }
+struct InertWakeServices: Sendable { func stopWake() {} }
+final class WakeHandoff: @unchecked Sendable {
+    private let lock = NSLock(); private var used = false
+    let passed = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
+    func pauseOnce() {
+        guard lock.withLock({ if used { return false }; used = true; return true }) else { return }
+        passed.signal(); wait(release)
+    }
+}
+final class SelfEntryHook: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: (@MainActor @Sendable () -> Void)?
+    func set(_ operation: @escaping @MainActor @Sendable () -> Void) { lock.withLock { self.operation = operation } }
+    @MainActor func fire() {
+        let operation = lock.withLock { let value = self.operation; self.operation = nil; return value }
+        operation?()
+    }
+}
+let wakeHandoff = WakeHandoff(), selfEntryHook = SelfEntryHook()
+final class NativeBackend: @unchecked Sendable {
+    func wakeReanchorAndPing() {}
+    func estimatedRtt() -> InertWakeRTT? { nil }
+    func enetHealth() -> InertWakeHealth? { nil }
+''', 1)
+handoff_fixture = handoff_fixture.replace("    func showRecovery(_ value: String?) { values.append(value) }", "    func showRecovery(_ value: String?) { values.append(value); if value != nil { selfEntryHook.fire() } }", 1)
+wake_methods = "\n".join(block(wake_source, signature).replace("package ", "") for signature in (
+    "package func teardownWakeObservers(", "package func handleSystemWake(", "private func startWakeProbe(", "private func finishWakeProbe("))
+# One explicit inert scheduling seam at the existing guard → actor-handoff gap.
+# The replacement uses the real stored producer and real cancellation statement.
+needle = "            await self.finishWakeProbe(budgetMs: budgetMs)"
+assert wake_methods.count(needle) == 1
+wake_methods = wake_methods.replace(needle, "            wakeHandoff.pauseOnce()\n" + needle, 1)
+handoff_fixture = handoff_fixture.replace("actor StreamSession {", """actor StreamSession {
+    static let wakeProbeFloorMs: UInt64 = 50, wakeProbeCeilingMs: UInt64 = 50, wakeProbeRttMultiple: UInt64 = 1
+    var wakeProbeTask: Task<Void, Never>?
+    let services = InertWakeServices()
+    var stopCalls = 0
+""" + wake_methods + r'''
+    func startObservedWake() async -> Task<Void, Never> { await handleSystemWake(); return wakeProbeTask! }
+    func cleanupState() -> (Bool, Bool, Bool, Int) { (isStreaming, isReconnecting, reconnectAttemptID == nil, stopCalls) }
+    func beginWaiting() { bridge?.emit(.firstFrame); setWaitingForVideo(true) }
+    func runWaitingLive() async { beginWaiting(); await runLive() }
+    func runObservedSelf() async {
+        await prepareLive()
+        let bridge = self.bridge!, original = backend, attempt = attemptID
+        let events = NativeConnectionEvents(bridge: bridge, backend: original), decoder = originalDecoder!
+        selfEntryHook.set {
+            decoder.onFirstDecodedFrame?()
+            precondition(decodedFrames.use { $0 } == 0, "self-entry fences delayed old decoder before first suspension")
+            precondition(bridge.terminationIntent(from: original, attempt: attempt) == nil, "self-entry never seeds a fake local termination")
+            original.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+            precondition(bridge.terminationIntent(from: original, attempt: attempt) == Int32(bitPattern: 0x80030023), "real PC intent remains admitted after self-entry decoder fence")
+        }
+        await runSelfInitiatedReconnect(cause: "inert self-entry race")
+    }
+''', 1)
+handoff_fixture = handoff_fixture.replace("func stop(cause: DisconnectReason) async { cancelCurrent() }", "func stop(cause: DisconnectReason) async { stopCalls += 1; cancelCurrent() }", 1)
+handoff_fixture = handoff_fixture.replace("        probeCalls += 1\n", "        probeCalls += 1\n        if mode == .stopInitialProbe { await session?.stop(cause: .hostClosedClean); return 0 }\n        if mode == .waitingPCIdle || mode == .selfEntryPC { return 0 }\n", 1)
+self_entry = block(reconnect, "package func runSelfInitiatedReconnect(")
+assert self_entry.index("bridge?.beginAttempt(UUID())") < self_entry.index("await runReconnectEpisode(")
+assert "initialTermination:" not in self_entry
+assert "retiringSource:" not in self_entry
+handoff_fixture += r'''
+@main struct PreannouncementClosureChecks {
+    static func main() async {
+        var checks = 0
+        func expect(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
+        for mode: Schedule.Mode in [.wakePrecanceled, .stopInitialProbe, .waitingPCIdle, .waitingSameApp, .selfEntryPC] {
+            inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }
+            let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session)
+            if mode == .wakePrecanceled {
+                await session.prepareLive()
+                let first = await session.startObservedWake()
+                wait(wakeHandoff.passed)
+                let replacement = await session.startObservedWake()
+                expect(first.isCancelled, "real replacement cancels stored first wake after its production guard")
+                wakeHandoff.release.signal()
+                await first.value; await replacement.value
+            } else if mode == .selfEntryPC { await session.runObservedSelf() }
+            else { await session.runWaitingLive() }
+            let state = await session.cleanupState(), events = bridge.values.use { $0 }, phases = bridge.shellPhases.use { $0 }
+            let banners = await MainActor.run { presentation.values }, stats = await schedule.policyStats()
+            expect(!state.1 && state.2, "all initial verdicts release reconnect ownership and attempt identity")
+            expect(await session.liveInputStops() == 1, "initial input owner stops exactly once")
+            if mode == .wakePrecanceled {
+                expect(!state.0 && state.3 == 1, "precancelled real wake driver reaches one shared terminal stop")
+                expect(events == ["terminated"] && banners.allSatisfy { $0 == nil }, "preannouncement cancellation never shows false recovery UI")
+                expect(stats.2 == 0 && stats.1.isEmpty, "canceled wake never selects or launches replacement")
+            }
+            if mode == .stopInitialProbe {
+                expect(!state.0 && state.3 == 1, "stop during initial probe is not stopped twice")
+                expect(events.filter { $0 == "terminated" }.isEmpty && !events.contains("reconnecting"), "stopped initial probe cannot emit duplicate terminal or recovery")
+            }
+            if mode == .waitingPCIdle {
+                expect(events == ["frame", "waiting-true", "terminated"], "waiting PC-close never emits waiting=false or false recovery")
+                expect(phases == ["live", "waiting", "ended"], "actual shell never transiently returns live before clean PC-end")
+                expect(banners.isEmpty && stats.1.isEmpty, "clean waiting PC-end has no card or host launch")
+            }
+            if mode == .waitingSameApp {
+                expect(events.firstIndex(of: "reconnecting")! < events.firstIndex(of: "waiting-false")!, "surviving recovery announces before clearing old waiting")
+                expect(!phases.dropFirst(2).contains("live"), "actual shell stays recovering/waiting until fresh replacement picture")
+            }
+            if mode == .selfEntryPC {
+                expect(!state.0 && stats.2 == 0 && stats.1.isEmpty, "self-entry admits real PC stop before another backend or launch")
+                expect(decodedFrames.use { $0 } == 0, "old self-entry callback cannot clear recovery")
+                expect(inputTrace.use { $0.filter { $0 == "epoch" }.count } == 1, "self fence and later real PC intent share one decoder epoch retirement")
+            }
+            await session.finalCleanup()
+        }
+        print("{\"status\":\"passed\",\"preannouncementClosureChecks\":\(checks),\"scope\":\"actual Wake producer/guard/replacement/finish with one controlled post-guard scheduling pause, complete LIVE episode/shared cleanup, actual waiting policy/decoder/input and shell reducer; inert resources only\"}")
+    }
+}
+'''
+with tempfile.TemporaryDirectory(prefix="knot-preannouncement-closure-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"; source.write_text(handoff_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"preannouncementClosureFixtureSHA256": hashlib.sha256(handoff_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Wake.swift", ENGINE / "Session/StreamSession+FrameWatchdog.swift", ENGINE / "Session/StreamSession+Start.swift", ENGINE / "Session/StreamBridgeContext.swift", ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift")}}))

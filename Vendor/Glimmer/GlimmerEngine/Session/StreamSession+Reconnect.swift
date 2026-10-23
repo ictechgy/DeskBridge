@@ -122,6 +122,9 @@ extension StreamSession {
         publicInput?.prepareForReplacement(attempt: attemptID)
         let inp = input
         DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+        // Fence only decoder callbacks; keep the original transport's separate
+        // source/attempt observation available for real PC intent during recovery.
+        if bridge?.currentAttempt == attemptID { bridge?.beginAttempt(UUID()) }
         await runReconnectEpisode(code: Self.deadPeerTerminationCode, cause: cause, bannerText: bannerText)
     }
 
@@ -136,7 +139,6 @@ extension StreamSession {
         reconnectAttemptFailure = nil
         reconnectAttemptFailureHandled = false
         lastReconnectTerminationCode = nil
-        setWaitingForVideo(false)
         reconnectAttempts = 0
         lastReconnectError = nil
         let budget = ReconnectBudget(seconds: Self.reconnectWindowSeconds)
@@ -144,19 +146,23 @@ extension StreamSession {
         // resolve PC intent before showing a recovery card for a clean PC close.
         if let initialTermination { retainReconnectTermination(initialTermination) }
         if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
-        guard !Task.isCancelled, isStreaming, !stopInProgress else { return }
-        bridge?.emit(.reconnecting)
-        // Surface the hold over the frozen frame - the launcher's phase chip is
-        // occluded by the fullscreen window, so this banner is the only in-stream
-        // signal that we're holding rather than dead. It announces itself.
-        let winForBanner = presentation
-        await MainActor.run {
-            winForBanner?.showRecovery(bannerText)
+        // Cancellation or a concurrent stop still needs the shared ownership
+        // cleanup below, even before any recovery UI was announced.
+        if !Task.isCancelled, isStreaming, !stopInProgress {
+            bridge?.emit(.reconnecting)
+            setWaitingForVideo(false)
+            // Surface the hold over the frozen frame - the launcher's phase chip is
+            // occluded by the fullscreen window, so this banner is the only in-stream
+            // signal that we're holding rather than dead. It announces itself.
+            let winForBanner = presentation
+            await MainActor.run {
+                winForBanner?.showRecovery(bannerText)
+            }
+            Diag.notice("Reconnecting in place, holding the last frame: \(cause).", "Stream")
         }
-        Diag.notice("Reconnecting in place, holding the last frame: \(cause).", "Stream")
 
         var pcMovedOn = false
-        while isStreaming, !stopInProgress {
+        while !Task.isCancelled, isStreaming, !stopInProgress {
             // A replacement may have been killed on purpose, just like a live
             // connection. Resolve that first; never erase its evidence and /launch
             // an idle PC merely because this happened inside a reconnect episode.
@@ -254,7 +260,7 @@ extension StreamSession {
         publicInput?.prepareForReplacement(attempt: attemptID)
         let inp = input
         DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
-        bridge?.beginAttempt(UUID())
+        if bridge?.currentAttempt == attemptID { bridge?.beginAttempt(UUID()) }
         // The initial decision precedes recovery UI. Later attempt failures must
         // reassert it after a decoder's first frame may have hidden the card.
         if reconnectAttempts > 0 { bridge?.emit(.reconnecting) }
