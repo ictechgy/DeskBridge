@@ -80,7 +80,7 @@ function Update-HeadlessState {
             $status.Text='Knot 복구 기록이나 설정을 안전하게 확인하지 못했습니다. 기존 상태는 보존했습니다. 파일을 직접 삭제하거나 재설치하지 말고 Windows 관리자에게 복구 기록 점검을 요청하세요.'; return
         }
         if ($foreign.Count -gt 0) {
-            $status.Text='기존 가상 디스플레이 또는 변경된 설정이 있습니다. Knot이 설치하거나 제거하지 않습니다. 기존 드라이버의 관리 도구를 사용하세요.'; return
+            $status.Text=$recordText+[Environment]::NewLine+'기존 가상 디스플레이 또는 변경된 설정이 있습니다. Knot이 설치하거나 제거하지 않습니다. 기존 드라이버의 관리 도구를 사용하세요.'; return
         }
         if ($state.Status -eq 'Absent') {
             $availability=Get-KnotHeadlessAvailability
