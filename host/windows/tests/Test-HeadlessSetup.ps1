@@ -647,11 +647,19 @@ try {
             $heldFs.Quarantine={ param($path,$record,$hash) & $module { param($p,$j,$h) Preserve-KnotTornJournal $p $j $h (New-KnotControlFileSystem) } $path $record $hash }.GetNewClosure()
             & $module { param($fs) $script:SyntheticControlFileSystem=$fs } $heldFs
             $fixture.FileSystem=$heldFs
+            $composition=[pscustomobject]@{SecondOpenRejected=$false}
+            # A callback enters module scope on Windows PowerShell 5.1. Keep it
+            # self-contained rather than resolving outer test helper commands.
             $action={
-                Reject { $conflict=[IO.File]::Open($heldLockPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $conflict.Dispose() } 'A second actual FileStream open remains excluded while composed recovery holds its lock.'
-                return Read-FixtureJournal $fixture $pins -Recover
+                $conflict=$null
+                try { $conflict=[IO.File]::Open($heldLockPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+                catch [IO.IOException] { $composition.SecondOpenRejected=$true }
+                finally { if ($conflict) { $conflict.Dispose() } }
+                if (-not $composition.SecondOpenRejected) { throw 'The second exclusive stream unexpectedly opened.' }
+                return & $module { param($path,$p,$fs) $script:SyntheticDirectory=$path; Read-KnotJournal $p -FileSystem $fs -Recover } $fixture.Directory $pins $fixture.FileSystem
             }.GetNewClosure()
             $read=& $module { param($action) Invoke-KnotExclusive $action } $action
+            Assert $composition.SecondOpenRejected 'A second actual FileStream open remains excluded while composed recovery holds its lock.'
             Assert ($read.generation -eq 1 -and -not [IO.File]::Exists($fixture.Pending) -and $heldState.HandleChecks -gt 0 -and $heldState.ReopenAttempts -eq 0 -and $heldState.Stream.SafeFileHandle.IsClosed) 'Exclusive recovery preserves evidence through the same live handle and clears/disposes its context after completion.'
             $contextCleared=& $module { $null -eq $script:HeldControlLock }
             $quarantines=@([IO.Directory]::EnumerateDirectories($control,'quarantine-*'))
@@ -667,7 +675,7 @@ try {
             }
             $fixture=New-JournalFixture $pins; Write-FixtureJournal $fixture $pins; $fixture.FileSystem=$heldFs
             [IO.File]::WriteAllText($fixture.Pending,'{"schema":3,'); $pendingHash=Hash ([IO.File]::ReadAllBytes($fixture.Pending)); $createdBefore=$state.Created.Count; $flushBefore=$state.Flushes
-            $action={ Read-FixtureJournal $fixture $pins -Recover }.GetNewClosure()
+            $action={ & $module { param($path,$p,$fs) $script:SyntheticDirectory=$path; Read-KnotJournal $p -FileSystem $fs -Recover } $fixture.Directory $pins $fixture.FileSystem }.GetNewClosure()
             Reject { & $module { param($action) Invoke-KnotExclusive $action } $action } 'A full protected evidence inventory refuses another quarantine before creating a stage.'
             Assert ([IO.File]::Exists($fixture.Pending) -and (Hash ([IO.File]::ReadAllBytes($fixture.Pending))) -ceq $pendingHash -and @([IO.Directory]::EnumerateFileSystemEntries($control)).Count -eq 102 -and $state.Created.Count -eq $createdBefore -and $state.Flushes -eq $flushBefore -and $heldState.ReopenAttempts -eq 0) 'Capacity refusal leaves the original interrupted bytes untouched and writes no new stage or evidence.'
             Assert ($heldState.Stream.SafeFileHandle.IsClosed -and (& $module { $null -eq $script:HeldControlLock })) 'Failed composed recovery still disposes and clears the exact held lock context.'
