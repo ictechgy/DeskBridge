@@ -26,7 +26,7 @@ def run_headless_checks(powershell, invoke, snapshot):
             raise ValueError('Supply --powershell for mandatory synthetic headless native/setup checks')
         powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     results = {'sourceSha256': {path: snapshot[path] for path in HEADLESS_SOURCE_PATHS}}
-    for label, script in [('headless-native', 'Test-HeadlessNative.ps1'), ('headless-setup', 'Test-HeadlessSetup.ps1')]:
+    for label, script in [('headless-native', 'Test-HeadlessNative.ps1'), ('headless-setup', 'Test-HeadlessSetup.ps1'), ('headless-status', 'Test-HeadlessStatus.ps1')]:
         entry = invoke(label + '-synthetic-checks', [powershell, '-NoProfile', '-NonInteractive', '-File', ROOT / 'host/windows/tests' / script])
         lines = entry['stdout'].strip().splitlines()
         if not lines:
@@ -143,7 +143,8 @@ if __name__ == '__main__':
         'suites': REQUIRED_WINDOWS_SUITES,
         'counts': {'native-pe': 1, 'managed-payload': payload_result['checks'], 'native-arguments': native_result['checks'],
                    **reverse['counts'], 'reverse-qr': reverse_qr['checks'],
-                   'headless-native': headless['headless-native']['checks'], 'headless-setup': headless['headless-setup']['checks']},
+                   'headless-native': headless['headless-native']['checks'], 'headless-setup': headless['headless-setup']['checks'],
+                   'headless-status': headless['headless-status']['checks']},
         **{key: record[key] for key in ('sha256', 'managedSha256', 'sourceManifest')},
         'reverseClient': reverse, 'reverseQR': reverse_qr, 'reverseQRWindows': reverse_qr_windows, 'headless': headless,
         'embeddedDecoderBindingTested': payload_result['embeddedDecoderBindingTested'],

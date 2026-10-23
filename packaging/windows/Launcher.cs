@@ -281,9 +281,10 @@ internal static class Launcher
     internal static int InterpretHeadlessResult(int result, bool completed, bool rebootRequired)
     {
         if (result == 0 && completed && !rebootRequired) return 0;
-        // A reboot receipt means pending work, never an installed/streaming success claim.
-        if (result == 3010 && rebootRequired) return 3010;
-        if (result == 2) return 2;
+        // Receipts distinguish completed installation from incomplete rollback/removal.
+        if (result == 3010 && completed && rebootRequired) return 3010;
+        if (result == 12 && !completed && rebootRequired) return 12;
+        if (result == 2 && !completed) return 2;
         throw new InvalidOperationException("가상 화면 작업을 완료하지 못했습니다. 상태를 다시 확인한 뒤 복구 안내를 따르세요.");
     }
 

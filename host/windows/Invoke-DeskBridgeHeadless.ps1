@@ -23,8 +23,12 @@ try {
     if ($result.Completed) { Write-HeadlessReceipt 'operation-success' }
     if ($result.RebootRequired) {
         Write-HeadlessReceipt 'reboot-required'
-        Write-Host 'Windows requires a restart. Keep the recovery folder and reopen Knot after restarting.'
-        exit 3010
+        if ($result.Completed) {
+            Write-Host 'Installation completed and requires a Windows restart. Reopen Knot afterward to check the display.'
+            exit 3010
+        }
+        Write-Host 'The operation is incomplete. Recovery requires a Windows restart; keep the recovery folder and retry managed removal afterward.'
+        exit 12
     }
     if (-not $result.Completed) { throw 'Virtual display setup could not verify completion.' }
     Write-Host 'The managed virtual display operation completed. Installation alone does not verify a streaming connection.'

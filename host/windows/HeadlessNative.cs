@@ -38,7 +38,8 @@ namespace Knot.Headless
     {
         public static DriverDevice[] ReadDriverDevices() { return new WindowsPlatform().ReadDriverDevices(); }
         public static void CreateDevice(string instanceId) { new Controller(new WindowsPlatform()).Create(instanceId); }
-        public static bool InstallDevice(string instanceId, string protectedInfPath) { return new Controller(new WindowsPlatform()).Install(instanceId, protectedInfPath); }
+        public static string StageDriverPackage(string protectedInfPath) { return new Controller(new WindowsPlatform()).Stage(protectedInfPath); }
+        public static bool InstallDevice(string instanceId, string protectedInfPath, string expectedPublishedInf) { return new Controller(new WindowsPlatform()).Install(instanceId, protectedInfPath, expectedPublishedInf); }
         public static bool RemoveDevice(string instanceId) { return new Controller(new WindowsPlatform()).Remove(instanceId); }
         public static DisplayTarget[] FindDisplays() { return new Controller(new WindowsPlatform()).Scan().Displays; }
         public static Task<ScanResult> ScanAsync() { return Task.Run(delegate { return new Controller(new WindowsPlatform()).Scan(); }); }
@@ -59,7 +60,8 @@ namespace Knot.Headless
     {
         DriverDevice[] ReadDriverDevices();
         void Create(string instanceId);
-        bool Install(string instanceId, string infPath);
+        string Stage(string infPath);
+        bool Install(string instanceId, string infPath, string expectedPublishedInf);
         bool Remove(string instanceId);
         MonitorRecord[] ReadMonitors();
         DisplayRecord[] ReadDisplays();
@@ -78,12 +80,30 @@ namespace Knot.Headless
             // The caller's durable journal identifies the only resumable instance.
             if (devices.Length == 0) platform.Create(instanceId);
         }
-        internal bool Install(string instanceId, string infPath)
+        internal string Stage(string infPath)
+        {
+            Policy.ValidateInfPath(infPath);
+            string publishedInf = platform.Stage(infPath);
+            Policy.ValidatePublishedInf(publishedInf);
+            return publishedInf;
+        }
+        internal bool Install(string instanceId, string infPath, string expectedPublishedInf)
         {
             Policy.ValidateOwnedInstance(instanceId);
             Policy.ValidateInfPath(infPath);
+            Policy.ValidatePublishedInf(expectedPublishedInf);
             Policy.ValidateExclusive(platform.ReadDriverDevices(), instanceId, false);
-            return platform.Install(instanceId, infPath);
+            // Re-stage the verified source on each attempt and bind this attempt
+            // to the package name durably recorded before device creation.
+            if (!String.Equals(Stage(infPath), expectedPublishedInf, StringComparison.Ordinal))
+                throw new InvalidOperationException("The staged driver package does not match the recorded published INF.");
+            bool reboot = platform.Install(instanceId, infPath, expectedPublishedInf);
+            DriverDevice[] installed = platform.ReadDriverDevices();
+            Policy.ValidateExclusive(installed, instanceId, false);
+            if (!String.Equals(installed[0].DriverInf, expectedPublishedInf, StringComparison.OrdinalIgnoreCase) ||
+                !String.Equals(installed[0].DriverVersion, Policy.DriverVersion, StringComparison.Ordinal))
+                throw new InvalidOperationException("The recorded instance did not report the expected published INF and pinned driver version after installation.");
+            return reboot;
         }
         internal bool Remove(string instanceId)
         {
@@ -112,6 +132,8 @@ namespace Knot.Headless
     {
         internal const int MaxItems = 4096, MaxBytes = 65536, MaxChars = 4096, RetryLimit = 4;
         internal const string HardwareId = @"Root\MttVDD";
+        internal const string DriverVersion = "11.30.4.434";
+        internal const int InfPathCapacity = 260;
         private static readonly Encoding Utf16 = new UnicodeEncoding(false, false, true);
         internal static bool IsVirtualHardware(string[] hardwareIds)
         {
@@ -137,6 +159,116 @@ namespace Knot.Headless
         {
             ValidateOrdinaryPath(path);
             if (!path.EndsWith(".inf", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Expected an INF file.");
+        }
+        internal static void ValidatePublishedInf(string value)
+        {
+            // Windows assigns OEM*.inf names. Persist one canonical basename,
+            // never a caller-supplied path or an alias of the package number.
+            if (value == null || value.Length < 8 || value.Length > 17 ||
+                !value.StartsWith("oem", StringComparison.Ordinal) || !value.EndsWith(".inf", StringComparison.Ordinal))
+                throw new ArgumentException("Expected a canonical published OEM INF basename.");
+            int digits = value.Length - 7;
+            if (digits > 1 && value[3] == '0') throw new ArgumentException("Published OEM INF numbers must be canonical.");
+            uint number = 0;
+            for (int i = 3; i < value.Length - 4; i++)
+            {
+                if (value[i] < '0' || value[i] > '9') throw new ArgumentException("Published OEM INF numbers require ASCII digits.");
+                uint digit = (uint)(value[i] - '0');
+                if (number > (UInt32.MaxValue - digit) / 10) throw new ArgumentException("Published OEM INF number exceeds its limit.");
+                number = number * 10 + digit;
+            }
+        }
+        internal static string PublishedInfPath(string windowsDirectory, string publishedInf)
+        {
+            ValidateOrdinaryPath(windowsDirectory);
+            ValidatePublishedInf(publishedInf);
+            string path = windowsDirectory + @"\INF\" + publishedInf;
+            ValidateInfPath(path);
+            return path;
+        }
+        internal static string PublishedInfName(string windowsDirectory, string path)
+        {
+            ValidateInfPath(path);
+            ValidateOrdinaryPath(windowsDirectory);
+            string prefix = windowsDirectory + @"\INF\";
+            if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The staged INF is outside the trusted Windows INF directory.");
+            string name = path.Substring(prefix.Length).ToLowerInvariant();
+            ValidatePublishedInf(name);
+            return name;
+        }
+        internal delegate int CopyInf(StringBuilder destination, out uint required);
+        internal static string ReadPublishedInf(CopyInf copy, string windowsDirectory)
+        {
+            int capacity = 128;
+            for (int attempt = 0; attempt < RetryLimit; attempt++)
+            {
+                StringBuilder destination = new StringBuilder(capacity);
+                uint required;
+                int status = copy(destination, out required);
+                if (status != 0 && status != 122) throw new Win32Exception(status, "Staging the verified driver package failed.");
+                if (required == 0 || required > InfPathCapacity)
+                    throw new InvalidDataException("The staged INF path exceeds its bounded size contract.");
+                if (status == 0)
+                {
+                    string path = destination.ToString();
+                    if (required > capacity || required != path.Length + 1)
+                        throw new InvalidDataException("The staged INF path has an inconsistent native length.");
+                    return PublishedInfName(windowsDirectory, path);
+                }
+                if (required <= capacity) throw new InvalidDataException("The staged INF path buffer did not grow.");
+                capacity = (int)required;
+            }
+            throw new InvalidOperationException("The staged INF path kept changing; retry limit reached.");
+        }
+        internal static ulong DriverVersionValue
+        {
+            get
+            {
+                Version version = new Version(DriverVersion);
+                if (version.Major > UInt16.MaxValue || version.Minor > UInt16.MaxValue || version.Build < 0 || version.Build > UInt16.MaxValue || version.Revision < 0 || version.Revision > UInt16.MaxValue)
+                    throw new InvalidOperationException("The pinned driver version does not fit the native four-part version contract.");
+                return ((ulong)(ushort)version.Major << 48) | ((ulong)(ushort)version.Minor << 32) | ((ulong)(ushort)version.Build << 16) | (ulong)(ushort)version.Revision;
+            }
+        }
+        internal delegate int ReadDriverDetail(byte[] buffer, out uint required);
+        internal static void ValidateSelectedDriver(ReadDriverDetail read, string windowsDirectory, string expectedPublishedInf, ulong selectedVersion)
+        {
+            ValidatePublishedInf(expectedPublishedInf);
+            if (selectedVersion != DriverVersionValue)
+                throw new InvalidOperationException("The selected driver does not have the pinned package version.");
+            int structureSize = Marshal.SizeOf(typeof(DriverDetail));
+            byte[] buffer = new byte[structureSize];
+            byte[] size = BitConverter.GetBytes(structureSize);
+            int pathOffset = Marshal.OffsetOf(typeof(DriverDetail), "InfFileName").ToInt32();
+            for (int attempt = 0; attempt < RetryLimit; attempt++)
+            {
+                // SetupAPI requires the fixed struct size even when the trailing
+                // hardware/compatible ID allocation is larger than that struct.
+                Buffer.BlockCopy(size, 0, buffer, 0, size.Length);
+                uint required;
+                int status = read(buffer, out required);
+                if (status != 0 && status != 122) throw new Win32Exception(status, "Reading the selected driver details failed.");
+                if (required < structureSize || required > MaxBytes || (required & 1) != 0)
+                    throw new InvalidDataException("The selected driver details exceed their bounded size contract.");
+                if (status == 0)
+                {
+                    if (required > buffer.Length || BitConverter.ToUInt32(buffer, 0) != structureSize)
+                        throw new InvalidDataException("The selected driver details returned an inconsistent native length or layout.");
+                    int end = -1;
+                    for (int index = 0; index < InfPathCapacity; index++)
+                        if (buffer[pathOffset + index * 2] == 0 && buffer[pathOffset + index * 2 + 1] == 0) { end = index; break; }
+                    if (end < 0) throw new InvalidDataException("The selected driver INF path is not terminated within its fixed native field.");
+                    string path = Utf16.GetString(buffer, pathOffset, end * 2);
+                    string publishedInf = PublishedInfName(windowsDirectory, path);
+                    if (!String.Equals(publishedInf, expectedPublishedInf, StringComparison.Ordinal))
+                        throw new InvalidOperationException("The selected driver details do not match the recorded published INF.");
+                    return;
+                }
+                if (required <= buffer.Length) throw new InvalidDataException("The selected driver details buffer did not grow.");
+                buffer = new byte[(int)required];
+            }
+            throw new InvalidOperationException("The selected driver details kept changing; retry limit reached.");
         }
         internal static void ValidateOrdinaryPath(string path)
         {
@@ -359,7 +491,7 @@ namespace Knot.Headless
             }
             finally { Api.SetupDiDestroyDeviceInfoList(set); }
         }
-        public bool Install(string instanceId, string infPath)
+        private static void ValidateSourceInf(string infPath)
         {
             Policy.ValidateInfPath(infPath);
             // The script validates protected ownership, ACL, catalog and pinned
@@ -374,6 +506,37 @@ namespace Knot.Headless
                 first = false;
                 checkPath = Path.GetDirectoryName(checkPath);
             }
+        }
+        private static string WindowsDirectory()
+        {
+            // The system directory API avoids Terminal Services per-user Windows directories.
+            StringBuilder directory = new StringBuilder(Policy.InfPathCapacity);
+            uint length = Api.GetSystemWindowsDirectoryW(directory, (uint)directory.Capacity);
+            if (length == 0) throw new Win32Exception(Marshal.GetLastWin32Error(), "Reading the trusted Windows directory failed.");
+            if (length >= directory.Capacity || length != directory.Length)
+                throw new InvalidDataException("The Windows directory exceeds its bounded path contract.");
+            string value = directory.ToString();
+            Policy.ValidateOrdinaryPath(value);
+            return value;
+        }
+        public string Stage(string infPath)
+        {
+            ValidateSourceInf(infPath);
+            string windowsDirectory = WindowsDirectory();
+            // Capture the package name actually assigned by Windows. Reusing an
+            // identical staged package is allowed, but its name is never guessed.
+            string publishedInf = Policy.ReadPublishedInf(delegate(StringBuilder destination, out uint required) {
+                return Api.SetupCopyOEMInfW(infPath, null, 1, 0, destination, (uint)destination.Capacity, out required, IntPtr.Zero) ? 0 : Marshal.GetLastWin32Error();
+            }, windowsDirectory);
+            ValidateSourceInf(Policy.PublishedInfPath(windowsDirectory, publishedInf));
+            return publishedInf;
+        }
+        public bool Install(string instanceId, string infPath, string expectedPublishedInf)
+        {
+            ValidateSourceInf(infPath);
+            string windowsDirectory = WindowsDirectory();
+            string publishedPath = Policy.PublishedInfPath(windowsDirectory, expectedPublishedInf);
+            ValidateSourceInf(publishedPath);
             Guid guid = DisplayClass;
             IntPtr set = CheckHandle(Api.SetupDiCreateDeviceInfoList(ref guid, IntPtr.Zero));
             bool built = false;
@@ -381,14 +544,11 @@ namespace Knot.Headless
             try
             {
                 device = OpenOwned(set, instanceId);
-                // DiInstallDevice requires a package already in the driver store.
-                // Staging does not enumerate or update matching device instances.
-                Check(Api.SetupCopyOEMInfW(infPath, null, 1, 0, IntPtr.Zero, 0, IntPtr.Zero, IntPtr.Zero), "Staging the verified driver package failed.");
                 InstallParameters parameters = new InstallParameters { Size = (uint)Marshal.SizeOf(typeof(InstallParameters)) };
                 Check(Api.SetupDiGetDeviceInstallParamsW(set, ref device, ref parameters), "Reading device install parameters failed.");
                 parameters.Flags = (parameters.Flags & ~0x00080000u) | 0x80010000u; // Single INF, preserve root IDs; never use a class-wide driver list.
                 parameters.FlagsEx |= 0x20000800; // Include PnP drivers; restart only this instance, never other devices using the driver.
-                parameters.DriverPath = infPath;
+                parameters.DriverPath = publishedPath;
                 Check(Api.SetupDiSetDeviceInstallParamsW(set, ref device, ref parameters), "Setting the single-INF driver selection failed.");
                 Check(Api.SetupDiBuildDriverInfoList(set, ref device, CompatibleDriver), "Building this instance's compatible driver list failed.");
                 built = true;
@@ -398,6 +558,9 @@ namespace Knot.Headless
                 if (Api.SetupDiEnumDriverInfoW(set, ref device, CompatibleDriver, 1, ref extra)) throw new InvalidOperationException("The protected INF has ambiguous compatible drivers.");
                 int error = Marshal.GetLastWin32Error();
                 if (error != 259) throw new Win32Exception(error, "Checking the compatible driver list failed.");
+                Policy.ValidateSelectedDriver(delegate(byte[] detail, out uint required) {
+                    return Api.SetupDiGetDriverInfoDetailW(set, ref device, ref selected, detail, (uint)detail.Length, out required) ? 0 : Marshal.GetLastWin32Error();
+                }, windowsDirectory, expectedPublishedInf, selected.Version);
                 // This API installs only this DEVINFO element. Hardware-wide APIs
                 // such as UpdateDriverForPlugAndPlayDevices must never be used.
                 bool reboot;
@@ -566,6 +729,17 @@ namespace Knot.Headless
         internal System.Runtime.InteropServices.ComTypes.FILETIME Date;
         internal ulong Version;
     }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] internal struct DriverDetail
+    {
+        internal uint Size;
+        internal System.Runtime.InteropServices.ComTypes.FILETIME Date;
+        internal uint CompatibleOffset, CompatibleLength;
+        internal UIntPtr Reserved;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] internal string SectionName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] internal string InfFileName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] internal string Description;
+        internal ushort HardwareId; // First WCHAR of the variable-length trailing ID array.
+    }
     [StructLayout(LayoutKind.Sequential)] internal struct Luid { internal uint Low; internal int High; }
     [StructLayout(LayoutKind.Sequential)] internal struct Rational { internal uint Numerator, Denominator; }
     [StructLayout(LayoutKind.Sequential)] internal struct PathSource { internal Luid Adapter; internal uint Id, ModeIndex, StatusFlags; }
@@ -592,7 +766,9 @@ namespace Knot.Headless
 
     internal static class Api
     {
-        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetupCopyOEMInfW(string source, string media, uint mediaType, uint flags, IntPtr destination, uint size, IntPtr required, IntPtr component);
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetupCopyOEMInfW(string source, string media, uint mediaType, uint flags, StringBuilder destination, uint size, out uint required, IntPtr component);
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetupDiGetDriverInfoDetailW(IntPtr set, ref DevInfo device, ref DriverInfo driver, [In, Out] byte[] detail, uint size, out uint required);
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern uint GetSystemWindowsDirectoryW(StringBuilder directory, uint size);
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security, uint disposition, uint flags, IntPtr template);
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetFileInformationByHandle(SafeFileHandle file, out FileInformation information);
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] internal static extern IntPtr SetupDiGetClassDevsW(ref Guid guid, string enumerator, IntPtr parent, uint flags);

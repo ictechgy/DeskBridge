@@ -18,8 +18,8 @@ PAYLOAD_NAMES = (
     "Enable-DeskBridgeSFTP.ps1", "Resume-DeskBridgeSFTP.ps1", "Disable-DeskBridgeSFTP.ps1",
     "SunshineDependency.json", "README.md",
     "ConnectionInvitation.psm1", "Show-ConnectionQR.ps1",
-    "HeadlessSetup.psm1", "HeadlessNative.cs", "Invoke-DeskBridgeHeadless.ps1", "Show-HeadlessSetup.ps1",
-    "VirtualDisplayDependency.json", "VirtualDisplayFiles.json", "Knot-vdd_settings.xml", "VirtualDisplay-NOTICE.txt",
+    "HeadlessSetup.psm1", "HeadlessStatus.psm1", "HeadlessNative.cs", "Invoke-DeskBridgeHeadless.ps1", "Show-HeadlessSetup.ps1",
+    "VirtualDisplayDependency.json", "VirtualDisplayFiles.json", "VirtualDisplayDeployments.json", "Knot-vdd_settings.xml", "VirtualDisplay-NOTICE.txt",
 )
 
 
@@ -75,12 +75,46 @@ def verify_virtual_display_inputs(root):
         raise ValueError('Invalid virtual display inventory')
     if hashlib.sha256((folder / 'Knot-vdd_settings.xml').read_bytes()).hexdigest() != pin.get('settingsSha256'):
         raise ValueError('Virtual display settings differ from the pinned template')
+    deployments = json.loads((folder / 'VirtualDisplayDeployments.json').read_text())
+    profiles = deployments.get('profiles', [])
+    required_files = {'mttvdd.cat', 'MttVDD.dll', 'MttVDD.inf', 'vdd_settings.xml'}
+    ids = [profile.get('manifestId') for profile in profiles]
+    if (deployments.get('schema') != 1 or not profiles or len(profiles) > 32 or
+            any(not isinstance(value, str) or not re.fullmatch('[a-z0-9][a-z0-9.-]{0,79}', value) for value in ids) or
+            len(set(ids)) != len(ids) or deployments.get('currentManifestId') not in ids or
+            not isinstance(deployments.get('legacySchema2ManifestIds'), list) or
+            not set(deployments['legacySchema2ManifestIds']) <= set(ids)):
+        raise ValueError('Invalid trusted virtual display deployment profiles')
+    for profile in profiles:
+        deployed = profile.get('files', [])
+        if (not re.fullmatch('[0-9a-f]{64}', profile.get('archiveSha256', '')) or
+                not re.fullmatch('[0-9a-f]{64}', profile.get('catalogSignerCertificateSha256', '')) or
+                not re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', profile.get('driverVersion', '')) or
+                len(deployed) != 4 or {entry.get('name') for entry in deployed} != required_files or
+                any(type(entry.get('bytes')) is not int or not 0 < entry['bytes'] <= 300000 or
+                    not re.fullmatch('[0-9a-f]{64}', entry.get('sha256', '')) for entry in deployed)):
+            raise ValueError('Invalid trusted virtual display deployment inventory')
+    current = profiles[ids.index(deployments['currentManifestId'])]
+    expected_deployed = {Path(item['path']).name: (item['bytes'], item['sha256']) for item in inventory}
+    settings = (folder / 'Knot-vdd_settings.xml').read_bytes()
+    expected_deployed['vdd_settings.xml'] = (len(settings), pin['settingsSha256'])
+    actual_deployed = {item['name']: (item['bytes'], item['sha256']) for item in current['files']}
+    if (current['archiveSha256'] != pin['sha256'] or current['driverVersion'] != pin['driverVersion'] or
+            current['catalogSignerCertificateSha256'] != pin['catalogSignerCertificateSha256'] or
+            actual_deployed != expected_deployed):
+        raise ValueError('Current virtual display profile differs from installation pins')
+    native = (folder / 'HeadlessNative.cs').read_text()
+    if ('internal const string DriverVersion = "' + pin['driverVersion'] + '";') not in native:
+        raise ValueError('Native virtual display verification version differs from installation pins')
     notice = (folder / 'VirtualDisplay-NOTICE.txt').read_text()
     if 'Copyright (c) 2024 Virtual Display' not in notice or 'Permission is hereby granted' not in notice:
         raise ValueError('Missing virtual display license notice')
     return {'dependencySha256': hashlib.sha256((folder / 'VirtualDisplayDependency.json').read_bytes()).hexdigest(),
             'inventorySha256': hashlib.sha256((folder / 'VirtualDisplayFiles.json').read_bytes()).hexdigest(),
-            'settingsSha256': pin['settingsSha256'], 'deviceRuntimeTested': False}
+            'settingsSha256': pin['settingsSha256'],
+            'deploymentProfilesSha256': hashlib.sha256((folder / 'VirtualDisplayDeployments.json').read_bytes()).hexdigest(),
+            'nativeSourceSha256': hashlib.sha256((folder / 'HeadlessNative.cs').read_bytes()).hexdigest(),
+            'deviceRuntimeTested': False}
 
 
 def build(compiler, references, output, dotnet=None, native_compiler=None):

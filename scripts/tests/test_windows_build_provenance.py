@@ -67,7 +67,7 @@ class VirtualDisplayPolicy(unittest.TestCase):
         self.folder.mkdir(parents=True)
         source = Path(__file__).resolve().parents[2] / 'host/windows'
         for name in ('VirtualDisplayDependency.json', 'VirtualDisplayFiles.json',
-                     'Knot-vdd_settings.xml', 'VirtualDisplay-NOTICE.txt'):
+                     'Knot-vdd_settings.xml', 'VirtualDisplay-NOTICE.txt', 'VirtualDisplayDeployments.json', 'HeadlessNative.cs'):
             (self.folder / name).write_bytes((source / name).read_bytes())
         self.pin = json.loads((self.folder / 'VirtualDisplayDependency.json').read_text())
 
@@ -79,6 +79,24 @@ class VirtualDisplayPolicy(unittest.TestCase):
 
     def test_current_blocked_candidate_is_packaged(self):
         self.assertIs(verify_virtual_display_inputs(self.root)['deviceRuntimeTested'], False)
+
+    def test_deployment_identity_or_files_cannot_drift_from_current_pins(self):
+        path = self.folder / 'VirtualDisplayDeployments.json'
+        original = json.loads(path.read_text())
+        import copy
+        for field in ('archiveSha256', 'catalogSignerCertificateSha256', 'driverVersion', 'files'):
+            changed = copy.deepcopy(original)
+            changed['profiles'][0][field] = [] if field == 'files' else ('1.2.3.4' if field == 'driverVersion' else '0' * 64)
+            path.write_text(json.dumps(changed))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                verify_virtual_display_inputs(self.root)
+        path.write_text(json.dumps(original))
+
+    def test_native_verification_version_is_bound_to_current_driver(self):
+        path = self.folder / 'HeadlessNative.cs'
+        path.write_text(path.read_text().replace('11.30.4.434', '1.2.3.4'))
+        with self.assertRaisesRegex(ValueError, 'Native virtual display verification version'):
+            verify_virtual_display_inputs(self.root)
 
     def test_json_alone_cannot_enable_candidate(self):
         for key, values in {

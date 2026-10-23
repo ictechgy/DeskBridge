@@ -58,14 +58,14 @@ function Make-Operations([object] $State,[string] $FailAfter,[bool] $CleanupFail
     }
 }
 function New-TestState {
-    return [pscustomobject]@{events=(New-Object 'Collections.Generic.List[string]');record=$false;files=$false;registry=$false;instance=$null;removed=$null;foreign=$false;reboot=$false;cleanupReboot=$false;removeEvenOnReboot=$false;boot='boot:2026-01-01T00:00:00.0000000Z';saved=$null}
+    return [pscustomobject]@{events=(New-Object 'Collections.Generic.List[string]');record=$false;files=$false;registry=$false;instance=$null;removed=$null;foreign=$false;reboot=$false;cleanupReboot=$false;removeEvenOnReboot=$false;boot='boot:2026-01-01T00:00:00.0000000Z';session=('a'*32);saved=$null}
 }
-function New-RemovalJournal { return [pscustomobject]@{instanceId=('ROOT\KNOTVDD\'+('A'*32));driverVersion='11.30.4.434';removalPending=$false;removalPhase='None';removalBootId='';rebootRequired=$false} }
+function New-RemovalJournal { return [pscustomobject]@{schema=3;publishedInfName='oem42.inf';instanceId=('ROOT\KNOTVDD\'+('A'*32));driverVersion='11.30.4.434';removalBootSession='';removalPending=$false;removalPhase='None';removalBootId='';rebootRequired=$false} }
 function Make-RemovalOperations([object] $State,[string] $FailAfter='') {
     $mutate={ param($name) [void]$State.events.Add($name); if ($name -ceq $FailAfter) { throw ('synthetic removal fault after '+$name) } }.GetNewClosure()
     return @{
         Validate={ param($j) if ($State.foreign) { throw 'synthetic foreign device/settings' }; return [bool]$State.instance }.GetNewClosure()
-        BootIdentity={ return $State.boot }.GetNewClosure()
+        BootEvidence={ return [pscustomobject]@{BootId=$State.boot;Session=$State.session} }.GetNewClosure()
         Save={ param($j,$step) if (-not $State.record) { throw 'no journal' }; $State.saved=$j | ConvertTo-Json -Depth 6; & $mutate $step }.GetNewClosure()
         RemoveDevice={ param($j)
             if ($State.instance -cne $j.instanceId) { throw 'wrong device' }
@@ -110,9 +110,9 @@ function Read-FixtureJournal([object] $Fixture,[object] $Pins,[switch] $Recover)
     & $module { param($path,$p,$fs,$repair) $script:SyntheticDirectory=$path; Read-KnotJournal $p -FileSystem $fs -Recover:$repair } $Fixture.Directory $Pins $Fixture.FileSystem ([bool]$Recover)
 }
 function Start-FixtureRemoval([object] $Fixture) {
-    $Fixture.Journal.removalPhase='Started'; $Fixture.Journal.removalPending=$true; $Fixture.Journal.rebootRequired=$true; $Fixture.Journal.removalBootId='boot:2026-01-01T00:00:00.0000000Z'
+    $Fixture.Journal.removalPhase='Started'; $Fixture.Journal.removalPending=$true; $Fixture.Journal.rebootRequired=$true; $Fixture.Journal.removalBootId='boot:2026-01-01T00:00:00.0000000Z'; $Fixture.Journal.removalBootSession='a'*32
 }
-$journal=[pscustomobject]@{instanceId=('ROOT\KNOTVDD\'+('A'*32));driverVersion='11.30.4.434'}
+$journal=[pscustomobject]@{schema=3;publishedInfName='oem42.inf';instanceId=('ROOT\KNOTVDD\'+('A'*32));driverVersion='11.30.4.434'}
 try {
     foreach ($policy in @($null,([pscustomobject]@{}),([pscustomobject]@{installEnabled=$false;driverSafetyReviewStatus='blocked'}),([pscustomobject]@{installEnabled='false';driverSafetyReviewStatus='accepted'}),([pscustomobject]@{installEnabled='true';driverSafetyReviewStatus='accepted'}),([pscustomobject]@{installEnabled=$true;driverSafetyReviewStatus='blocked'}),([pscustomobject]@{installEnabled=$true;driverSafetyReviewStatus='Accepted'}))) {
         Reject { Assert-KnotInstallPolicy $policy } 'The installation policy defaults to disabled without explicit boolean enablement and accepted review.'
@@ -209,7 +209,7 @@ try {
         Reject { Invoke-KnotHeadlessRemoval $journal (Make-RemovalOperations $state $fault) } ('Surface removal failure after '+$fault)
         Assert $state.record 'Interrupted removal always retains its journal.'
         Assert (-not $state.events.Contains('finish')) 'Failure never advances to journal deletion.'
-        $state.boot='boot:2026-01-02T00:00:00.0000000Z'
+        $state.boot='boot:2026-01-02T00:00:00.0000000Z'; $state.session='b'*32
         $result=Invoke-KnotHeadlessRemoval $journal (Make-RemovalOperations $state)
         Assert ($result.Completed -and -not $state.record -and -not $state.files -and -not $state.registry -and -not $state.instance) 'A prepared partial removal can complete idempotently.'
     }
@@ -237,8 +237,8 @@ try {
         Assert (-not $result.Completed -and $result.RebootRequired -and $state.registry -and $state.files -and $state.record -and $state.events.Count -eq $eventsBefore) 'Same-boot absent-device retry retains all resources without mutations.'
         $state.boot=$null
         $result=Invoke-KnotHeadlessRemoval $journal (Make-RemovalOperations $state)
-        Assert (-not $result.Completed -and $result.Status -ceq 'BootIdentityUnavailable' -and $state.registry -and $state.files -and $state.record -and $state.events.Count -eq $eventsBefore) 'Unavailable boot identity never releases pending or unknown removal resources.'
-        $state.boot='boot:2026-01-02T00:00:00.0000000Z'
+        Assert (-not $result.Completed -and $result.Status -ceq 'RemovalPending' -and $state.registry -and $state.files -and $state.record -and $state.events.Count -eq $eventsBefore) 'Unavailable boot identity never releases pending or unknown removal resources.'
+        $state.boot='boot:2026-01-02T00:00:00.0000000Z'; $state.session='b'*32
         $result=Invoke-KnotHeadlessRemoval $journal (Make-RemovalOperations $state)
         Assert ($result.Completed -and -not $state.registry -and -not $state.files -and -not $state.record) 'A changed verified boot plus fresh absent-device inventory permits cleanup.'
     }
@@ -312,7 +312,7 @@ try {
         $read=Read-FixtureJournal $fixture $pins -Recover
         Assert ($read.generation -eq 2 -and -not [IO.File]::Exists($fixture.Pending)) 'A verified pending successor is atomically promoted.'
     }
-    foreach ($bad in @('deployment','predecessor','generation','schema','inventory','transition','truncated','unknown-file','changed-settings','missing-predecessor','acl','hardlink')) {
+    foreach ($bad in @('deployment','predecessor','generation','schema','inventory','transition','unknown-file','changed-settings','missing-predecessor','acl','hardlink')) {
         $fixture=New-JournalFixture $pins; Write-FixtureJournal $fixture $pins; Start-FixtureRemoval $fixture
         $fixture.State.Fault='after-flush'
         Reject { Write-FixtureJournal $fixture $pins } 'Create a fresh interrupted successor fixture.'
@@ -368,10 +368,241 @@ try {
         $state.boot=$null; $fixture.Journal=Read-FixtureJournal $fixture $pins -Recover
         $result=Invoke-KnotHeadlessRemoval $fixture.Journal $ops
         Assert (-not $result.Completed -and $state.registry -and (Hash ([IO.File]::ReadAllBytes($fixture.Record))) -ceq $recordHash -and [IO.File]::Exists($settingsPath)) 'Unavailable boot identity preserves persisted pending recovery.'
-        $state.boot='boot:2026-01-02T00:00:00.0000000Z'; $fixture.Journal=Read-FixtureJournal $fixture $pins -Recover
+        $state.boot='boot:2026-01-02T00:00:00.0000000Z'; $state.session='b'*32; $fixture.Journal=Read-FixtureJournal $fixture $pins -Recover
         $result=Invoke-KnotHeadlessRemoval $fixture.Journal $ops
         Assert ($result.Completed -and -not $state.registry -and -not [IO.Directory]::Exists($fixture.Directory)) 'A verified changed boot and fresh absent-device result release the actual fixture files.'
     }
+    $runtimeSource=& $module { (${function:Assert-KnotElevatedRuntime}).ToString() }
+    Assert (-not $runtimeSource.Contains('VirtualDisplayDependency.json') -and -not $runtimeSource.Contains('VirtualDisplayFiles.json') -and -not $runtimeSource.Contains('Knot-vdd_settings.xml') -and $runtimeSource.Contains('VirtualDisplayDeployments.json')) 'Common elevated recovery runtime requires trusted historical authority, not current install candidate resources.'
+    # Current candidate pins are not recovery authority. The historical profile
+    # remains readable when the candidate settings/download policy have changed.
+    $fixture=New-JournalFixture $pins; Write-FixtureJournal $fixture $pins
+    $fixture.Journal.files=@($fixture.Journal.files | Sort-Object name -Descending | ForEach-Object { [pscustomobject]@{sha256=$_.sha256;name=$_.name;bytes=$_.bytes} })
+    Write-FixtureJournal $fixture $pins
+    $reordered=Read-FixtureJournal $fixture $pins
+    Assert ($reordered.generation -eq 2) 'Fieldwise trusted profile identity permits harmless file/property ordering changes while the exact predecessor byte hash still chains updates.'
+    $otherPins=[pscustomobject]@{Dependency=[pscustomobject]@{sha256=('0'*64);driverVersion='99.0.0.0';settingsSha256=('1'*64)};Inventory=$null}
+    $read=Read-FixtureJournal $fixture $otherPins
+    Assert ($read.manifestId -ceq 'vdd-25.7.23-knot-settings-v1') 'Recovery resolves the exact trusted historical profile independently of candidate pins.'
+    & $module { $script:SavedDependencyReader=${function:Read-KnotDependency}; function script:Read-KnotDependency { throw 'synthetic missing current candidate' } }
+    try {
+        $read=Read-FixtureJournal $fixture $null
+        Assert ($read.deploymentId -ceq $fixture.Journal.deploymentId) 'Missing current candidate does not disable historical recovery.'
+    } finally { & $module { Set-Item Function:script:Read-KnotDependency $script:SavedDependencyReader } }
+    & $module {
+        param($fs)
+        $script:FixtureFileSystem=$fs; $script:SavedFileSystemFactory=${function:New-KnotJournalFileSystem}; $script:SavedDependencyReader=${function:Read-KnotDependency}; $script:SavedExclusive=${function:Invoke-KnotExclusive}; $script:SavedRemoveOwned=${function:Remove-KnotOwnedDeployment}
+        function script:New-KnotJournalFileSystem([switch]$WithoutNative) { return $script:FixtureFileSystem }
+        function script:Read-KnotDependency { throw 'synthetic missing current candidate' }
+        function script:Invoke-KnotExclusive([scriptblock]$Action) { return & $Action }
+        function script:Remove-KnotOwnedDeployment([object]$Journal,[object]$Pins=$null) { return [pscustomobject]@{Completed=$true;RebootRequired=$false;Status='SyntheticRemovalValidated';InstanceId=$Journal.instanceId} }
+    } $fixture.FileSystem
+    try { $result=Remove-KnotVirtualDisplay; Assert ($result.Completed -and $result.Status -ceq 'SyntheticRemovalValidated' -and $result.InstanceId -ceq $fixture.Journal.instanceId) 'Public managed removal reaches trusted historical recovery without reading missing current install resources; OS mutations are stubbed.' }
+    finally { & $module { Set-Item Function:script:New-KnotJournalFileSystem $script:SavedFileSystemFactory; Set-Item Function:script:Read-KnotDependency $script:SavedDependencyReader; Set-Item Function:script:Invoke-KnotExclusive $script:SavedExclusive; Set-Item Function:script:Remove-KnotOwnedDeployment $script:SavedRemoveOwned } }
+    foreach ($mode in @('predecessor','pending-orphan')) {
+        $guardFixture=New-JournalFixture $pins; Write-FixtureJournal $guardFixture $pins; Start-FixtureRemoval $guardFixture
+        $guardFixture.State.Fault='after-flush'; Reject { Write-FixtureJournal $guardFixture $pins } 'Create a protected interrupted update for expected-identity guarding.'; $guardFixture.State.Fault=''
+        if ($mode -ceq 'pending-orphan') {
+            [IO.File]::Delete($guardFixture.Record)
+            $candidate=[IO.File]::ReadAllText($guardFixture.Pending) | ConvertFrom-Json
+            $candidate.generation=1; $candidate.previousRecordSha256=''; $candidate.removalPhase='None'; $candidate.removalPending=$false; $candidate.rebootRequired=$false; $candidate.removalBootId=''; $candidate.removalBootSession=''
+            [IO.File]::WriteAllText($guardFixture.Pending,($candidate | ConvertTo-Json -Depth 6))
+        }
+        $before=Hash ([IO.File]::ReadAllBytes($guardFixture.Pending)); $promotions=$guardFixture.State.Promotions
+        Reject { & $module { param($path,$pins,$fs) $script:SyntheticDirectory=$path; Read-KnotJournal $pins -Recover -FileSystem $fs -ExpectedDeploymentId ('F'*32) } $guardFixture.Directory $pins $guardFixture.FileSystem } ('Expected deployment mismatch is rejected before recovery: '+$mode)
+        Assert ($guardFixture.State.Promotions -eq $promotions -and (Hash ([IO.File]::ReadAllBytes($guardFixture.Pending))) -ceq $before) 'Mismatched expected recovery identity causes zero promotion, quarantine, or content mutation.'
+    }
+    & $module { param($path) $script:SyntheticDirectory=$path } $fixture.Directory
+    $planned=$fixture.Journal | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $planned.deploymentId='F'*32; $planned.instanceId='ROOT\KNOTVDD\'+$planned.deploymentId
+    & $module { param($fs) $script:FixtureFileSystem=$fs; $script:SavedFileSystemFactory=${function:New-KnotJournalFileSystem}; function script:New-KnotJournalFileSystem([switch]$WithoutNative) { return $script:FixtureFileSystem } } $fixture.FileSystem
+    try { Assert (-not (& $module { param($j) Test-KnotOwnedDeployment $j } $planned)) 'Compensation authority rejects a valid owned record for a different planned deployment.' }
+    finally { & $module { Set-Item Function:script:New-KnotJournalFileSystem $script:SavedFileSystemFactory } }
+    $state=New-TestState; $state.foreign=$true; $state.record=$true
+    Reject { Invoke-KnotHeadlessTransaction $journal (Make-Operations $state '') } 'A failed preflight cannot enter compensation even if a foreign journal path already exists.'
+    Assert ($state.record -and $state.events.Count -eq 0) 'Foreign existing journal survives failed preflight without cleanup.'
+
+    foreach ($failure in @('remaining','probe-error')) {
+        $j=New-RemovalJournal; $state=New-TestState; $state.record=$true; $state.files=$true; $state.registry=$true; $state.instance=$j.instanceId
+        if ($failure -ceq 'remaining') { $state.cleanupReboot=$true }
+        $ops=Make-RemovalOperations $state
+        if ($failure -ceq 'probe-error') { $ops.Remaining={ param($j) throw 'synthetic post-removal inventory error' } }
+        Reject { Invoke-KnotHeadlessRemoval $j $ops } ('An unverified nonreboot removal cannot publish Ready: '+$failure)
+        $persisted=$state.saved | ConvertFrom-Json
+        Assert ($persisted.removalPhase -ceq 'Started' -and $persisted.rebootRequired -and $state.registry -and $state.files -and $state.record) 'A remaining or unreadable device inventory preserves the durable unknown-outcome phase.'
+        $state.instance=$null
+        $result=Invoke-KnotHeadlessRemoval $persisted (Make-RemovalOperations $state)
+        Assert (-not $result.Completed -and $result.Status -ceq 'RemovalPending' -and $state.record) 'An absent devnode on the same boot cannot bypass a failed removal verification.'
+    }
+    foreach ($change in @('boot-only','session-only','missing-session','invalid-session','missing-boot')) {
+        $j=New-RemovalJournal; $j.removalPending=$true; $j.removalPhase='PendingReboot'; $j.rebootRequired=$true; $j.removalBootId='boot:2026-01-01T00:00:00.0000000Z'; $j.removalBootSession='a'*32
+        $state=New-TestState; $state.record=$true; $state.registry=$true; $state.files=$true
+        switch ($change) {
+            'boot-only' { $state.boot='boot:2026-01-02T00:00:00.0000000Z' }
+            'session-only' { $state.session='b'*32 }
+            'missing-session' { $state.session=$null }
+            'invalid-session' { $state.session='not-a-session' }
+            'missing-boot' { $state.boot=$null }
+        }
+        $result=Invoke-KnotHeadlessRemoval $j (Make-RemovalOperations $state)
+        Assert (-not $result.Completed -and $result.Status -ceq 'RemovalPending' -and $state.events.Count -eq 0 -and $state.files -and $state.registry) ('Independent reboot evidence remains conservative: '+$change)
+    }
+    $j=New-RemovalJournal; $j.schema=2; $j.PSObject.Properties.Remove('publishedInfName'); $j.PSObject.Properties.Remove('removalBootSession'); $j.removalPending=$true; $j.removalPhase='PendingReboot'; $j.rebootRequired=$true; $j.removalBootId='boot:2026-01-01T00:00:00.0000000Z'
+    $state=New-TestState; $state.boot='boot:2026-01-02T00:00:00.0000000Z'; $state.session='b'*32
+    $result=Invoke-KnotHeadlessRemoval $j (Make-RemovalOperations $state)
+    Assert ($result.Status -ceq 'LegacyRecoveryRequired' -and -not $result.Completed -and $state.events.Count -eq 0) 'A legacy pending record never invents missing volatile reboot evidence.'
+
+    $fixture=New-JournalFixture $pins
+    $legacy=$fixture.Journal | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+    $legacy.schema=2; foreach ($name in @('manifestId','publishedInfName','removalBootSession')) { $legacy.PSObject.Properties.Remove($name) }
+    & $module { param($j) Assert-KnotJournal $j } $legacy; $script:Checks++
+    [IO.File]::WriteAllText($fixture.Record,($legacy | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+    $fixture.Journal=& $module { param($j) Convert-KnotLegacyJournal $j @() } $legacy
+    Write-FixtureJournal $fixture $null
+    $migrated=Read-FixtureJournal $fixture $null
+    Assert ($migrated.schema -eq 3 -and $migrated.manifestId -ceq 'vdd-25.7.23-knot-settings-v1' -and $migrated.generation -eq 2 -and $migrated.removalBootSession -ceq '') 'An exact trusted nonpending legacy deployment migrates through the protected journal sequence.'
+    foreach ($bad in @('schema-type','manifest','inf-leading-zero','inf-overflow','boot-session-type')) {
+        $j=$migrated | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        switch ($bad) {
+            'schema-type' { $j.schema='3' }
+            'manifest' { $j.manifestId='untrusted-profile' }
+            'inf-leading-zero' { $j.publishedInfName='oem01.inf' }
+            'inf-overflow' { $j.publishedInfName='oem4294967296.inf' }
+            'boot-session-type' { $j.removalBootSession=42 }
+        }
+        Reject { & $module { param($record) Assert-KnotJournal $record } $j } ('Schema 3 rejects malformed authority: '+$bad)
+    }
+    $j=New-RemovalJournal
+    $device=[pscustomobject]@{InstanceId=$j.instanceId;HardwareIds=@('Root\MttVDD');DriverVersion=$j.driverVersion;DriverInf='oem43.inf'}
+    Reject { Assert-KnotDevices @($device) $j -Installed } 'An arbitrary OEM name cannot satisfy a schema 3 installed device identity.'
+    Reject { Assert-KnotDevices @($device) $j } 'Recovery also rejects a changed nonempty published INF name.'
+    $device.DriverInf='OEM42.INF'; Assert-KnotDevices @($device) $j -Installed; $script:Checks++
+
+    function New-SyntheticFileSystem([object] $State) {
+        return @{
+            AssertDirectory={ param($path) if (-not [IO.Directory]::Exists($path) -or -not $path.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::Ordinal) -or -not $State.AclAllowed) { throw 'synthetic private directory guard' } }.GetNewClosure()
+            AssertFile={ param($path) if (-not [IO.File]::Exists($path) -or ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -or -not $State.AclAllowed -or $State.LinkCount -ne 1) { throw 'synthetic private file guard' } }.GetNewClosure()
+            CreateDirectory={ param($path) if (Test-Path -LiteralPath $path) { throw 'synthetic existing path' }; [void][IO.Directory]::CreateDirectory($path); [void]$State.Created.Add($path) }.GetNewClosure()
+            MoveDirectory={ param($source,$destination)
+                if ($State.Fault -ceq 'before-directory-move') { throw 'synthetic crash before atomic directory publication' }
+                if ($State.Fault -ceq 'directory-race') { [void][IO.Directory]::CreateDirectory($destination); [IO.File]::WriteAllText((Join-Path $destination 'foreign.txt'),'synthetic foreign') }
+                [IO.Directory]::Move($source,$destination); [void]$State.Moved.Add($destination)
+                if ($State.Fault -ceq 'after-directory-move') { throw 'synthetic crash after atomic directory publication' }
+            }.GetNewClosure()
+            Flush={ param($stream) $stream.Flush($true); $State.Flushes++; if ($State.FailFlush -gt 0 -and $State.Flushes -eq $State.FailFlush) { throw 'synthetic crash after durable file write' } }.GetNewClosure()
+            OpenLock={ param($path) [IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None) }
+            Replace={ param($source,$destination) [IO.File]::Replace($source,$destination,[NullString]::Value) }
+            Move={ param($source,$destination) [IO.File]::Move($source,$destination) }
+        }
+    }
+    function New-SyntheticFileState { return [pscustomobject]@{AclAllowed=$true;LinkCount=1;Fault='';FailFlush=0;Flushes=0;Created=(New-Object 'Collections.Generic.List[string]');Moved=(New-Object 'Collections.Generic.List[string]')} }
+    & $module { $script:SavedControlDirectory=${function:Get-KnotControlDirectory}; function script:Get-KnotControlDirectory { return $script:SyntheticControlDirectory } }
+    try {
+        $control=Join-Path $root 'control'; & $module { param($path) $script:SyntheticControlDirectory=$path } $control
+        $state=New-SyntheticFileState; $fs=New-SyntheticFileSystem $state
+        $first=& $module { param($fs) Enter-KnotControlLock $fs } $fs
+        try { Reject { & $module { param($fs) Enter-KnotControlLock $fs } $fs } 'A persistent protected FileShare.None lock rejects a concurrent operation.' }
+        finally { $first.Dispose() }
+        Assert ([IO.File]::Exists((Join-Path $control 'operation.lock')) -and [IO.File]::Exists((Join-Path $control 'control.json'))) 'Lock release leaves the exact marked control root and stable lock file.'
+        $second=& $module { param($fs) Enter-KnotControlLock $fs } $fs; $second.Dispose(); $script:Checks++
+        $lockOpened=[pscustomobject]@{Value=$false;Calls=0}
+        $guardFs=New-SyntheticFileSystem $state
+        $guardFs.AssertFile={ param($path) $lockOpened.Calls++; if ($lockOpened.Value) { throw 'a path/link-count reopen would conflict with the held exclusive handle' }; if (-not [IO.File]::Exists($path)) { throw 'missing synthetic control file' } }.GetNewClosure()
+        $guardFs.OpenLock={ param($path) $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None); $lockOpened.Value=$true; return $stream }.GetNewClosure()
+        $guarded=& $module { param($fs) Enter-KnotControlLock $fs } $guardFs
+        $guarded.Dispose()
+        Assert ($lockOpened.Value -and $lockOpened.Calls -ge 3) 'Exclusive acquisition performs all path/link validation before opening and never reopens its held lock.'
+        $state.AclAllowed=$false
+        Reject { & $module { param($fs) Enter-KnotControlLock $fs } $fs } 'An untrusted private control ACL cannot be adopted.'
+        $state.AclAllowed=$true; $state.LinkCount=2
+        Reject { & $module { param($fs) Enter-KnotControlLock $fs } $fs } 'A hard-linked control marker or lock file is rejected.'
+        $state.LinkCount=1
+        $unknown=Join-Path $root 'unmarked-control'; [void][IO.Directory]::CreateDirectory($unknown); [IO.File]::WriteAllText((Join-Path $unknown 'foreign.txt'),'synthetic foreign')
+        & $module { param($path) $script:SyntheticControlDirectory=$path } $unknown
+        Reject { & $module { param($fs) Enter-KnotControlLock $fs } $fs } 'An existing unmarked control directory is never adopted based only on its ACL.'
+        Assert ([IO.File]::Exists((Join-Path $unknown 'foreign.txt'))) 'Unknown control content is preserved.'
+        foreach ($fault in @('before-directory-move','after-directory-move','directory-race','flush')) {
+            $path=Join-Path $root ('control-fault-'+[Guid]::NewGuid().ToString('N')); & $module { param($p) $script:SyntheticControlDirectory=$p } $path
+            $state=New-SyntheticFileState; $fs=New-SyntheticFileSystem $state
+            if ($fault -ceq 'flush') { $state.FailFlush=1 } else { $state.Fault=$fault }
+            Reject { & $module { param($fs) Initialize-KnotControlDirectory $fs } $fs } ('Interrupt control-root publication: '+$fault)
+            if ($fault -ceq 'after-directory-move') { Assert ([IO.File]::Exists((Join-Path $path 'control.json')) -and [IO.File]::Exists((Join-Path $path 'operation.lock'))) 'A control root appearing after atomic publication is complete.' }
+            elseif ($fault -ceq 'directory-race') { Assert ([IO.File]::Exists((Join-Path $path 'foreign.txt'))) 'An atomic publication race preserves the foreign winner without adoption.' }
+            else { Assert (-not [IO.Directory]::Exists($path) -and $state.Created.Count -eq 1) 'A prepublication crash leaves only a unique protected stage and no empty active control root.' }
+        }
+
+        # A torn successor is copied, flushed, hashed, and atomically quarantined
+        # before the original is removed. The exact predecessor remains authority.
+        $fixture=New-JournalFixture $pins; Write-FixtureJournal $fixture $pins
+        [IO.File]::WriteAllText($fixture.Pending,'{"schema":3,')
+        $pendingHash=Hash ([IO.File]::ReadAllBytes($fixture.Pending)); $recordHash=Hash ([IO.File]::ReadAllBytes($fixture.Record))
+        $control=Join-Path $root ('quarantine-control-'+[Guid]::NewGuid().ToString('N')); & $module { param($path) $script:SyntheticControlDirectory=$path } $control
+        $state=New-SyntheticFileState; $fs=New-SyntheticFileSystem $state
+        $fs.Quarantine={ param($path,$record,$hash) & $module { param($path,$record,$hash,$fs) Preserve-KnotTornJournal $path $record $hash $fs } $path $record $hash $fs }.GetNewClosure()
+        $fixture.FileSystem=$fs
+        $read=Read-FixtureJournal $fixture $pins
+        Assert ([IO.File]::Exists($fixture.Pending) -and $read.generation -eq 1) 'Read-only inspection of a torn successor does not discard bytes or query native state.'
+        $read=Read-FixtureJournal $fixture $pins -Recover
+        $quarantines=@([IO.Directory]::EnumerateDirectories($control,'quarantine-*'))
+        Assert ($read.generation -eq 1 -and -not [IO.File]::Exists($fixture.Pending) -and $quarantines.Count -eq 1 -and (Hash ([IO.File]::ReadAllBytes((Join-Path $quarantines[0] 'recovery.new')))) -ceq $pendingHash -and (Hash ([IO.File]::ReadAllBytes($fixture.Record))) -ceq $recordHash) 'Torn successor recovery preserves exact forensic bytes and resumes the unchanged trusted predecessor.'
+        $validated=& $module { param($fs) Initialize-KnotControlDirectory $fs } $fs
+        Assert ($validated -ceq $control) 'Published quarantine metadata and content are revalidated on later control operations.'
+        foreach ($bad in @('orphan','unknown-file','changed-file','parseable-hostile','complete-ambiguous')) {
+            $fixture=New-JournalFixture $pins; Write-FixtureJournal $fixture $pins; $fixture.FileSystem=$fs
+            [IO.File]::WriteAllText($fixture.Pending,'{"schema":3,')
+            switch ($bad) {
+                'orphan' { [IO.File]::Delete($fixture.Record) }
+                'unknown-file' { [IO.File]::WriteAllText((Join-Path $fixture.Directory 'foreign.txt'),'synthetic foreign') }
+                'changed-file' { [IO.File]::WriteAllText((Join-Path $fixture.Directory 'MttVDD.dll'),'synthetic changed') }
+                'parseable-hostile' { [IO.File]::WriteAllText($fixture.Pending,'{"schema":3,"owner":"Other"}') }
+                'complete-ambiguous' { [IO.File]::WriteAllText($fixture.Pending,'{"schema":3,"SCHEMA":3}') }
+            }
+            $before=Hash ([IO.File]::ReadAllBytes($fixture.Pending))
+            Reject { Read-FixtureJournal $fixture $pins -Recover } ('Torn recovery lacks safe predecessor authority: '+$bad)
+            Assert ([IO.File]::Exists($fixture.Pending) -and (Hash ([IO.File]::ReadAllBytes($fixture.Pending))) -ceq $before) 'Untrusted, orphaned, or parseable hostile successor bytes remain in place.'
+        }
+    } finally { & $module { Set-Item Function:script:Get-KnotControlDirectory $script:SavedControlDirectory } }
+
+    # Stage all deployment files plus their canonical journal before one directory
+    # rename. These fixtures use a test-only trusted source profile, never a driver.
+    $sourceSettings=[IO.File]::ReadAllBytes((Join-Path (Split-Path $PSScriptRoot -Parent) 'Knot-vdd_settings.xml'))
+    $testFiles=@(); $testPayload=@{}
+    foreach ($name in @('mttvdd.cat','MttVDD.dll','MttVDD.inf')) { $bytes=[Text.Encoding]::UTF8.GetBytes('fresh-synthetic-'+$name); $testPayload['VirtualDisplayDriver/'+$name]=$bytes; $testFiles += [pscustomobject]@{name=$name;bytes=$bytes.Length;sha256=(Hash $bytes)} }
+    $testFiles += [pscustomobject]@{name='vdd_settings.xml';bytes=$sourceSettings.Length;sha256=(Hash $sourceSettings)}
+    $testProfile=[pscustomobject]@{manifestId='synthetic-v1';archiveSha256=('2'*64);driverVersion='11.30.4.434';catalogSignerCertificateSha256=('3'*64);files=$testFiles}
+    $testProfiles=[pscustomobject]@{schema=1;currentManifestId='synthetic-v1';legacySchema2ManifestIds=@('synthetic-v1');profiles=@($testProfile)}
+    $testPins=[pscustomobject]@{Dependency=[pscustomobject]@{sha256=$testProfile.archiveSha256;driverVersion=$testProfile.driverVersion;catalogSignerCertificateSha256=$testProfile.catalogSignerCertificateSha256;settingsSha256=(Hash $sourceSettings)};Inventory=[pscustomobject]@{files=@($testFiles | Where-Object { $_.name -cne 'vdd_settings.xml' } | ForEach-Object { [pscustomobject]@{path=('VirtualDisplayDriver/'+$_.name);bytes=$_.bytes;sha256=$_.sha256} })}}
+    & $module { param($profiles) $script:SyntheticProfiles=$profiles; $script:SavedProfileReader=${function:Read-KnotDeploymentProfiles}; function script:Read-KnotDeploymentProfiles { return $script:SyntheticProfiles } } $testProfiles
+    try {
+        foreach ($fault in @('flush-first','flush-file','before-directory-move','after-directory-move','directory-race','')) {
+            $path=Join-Path $root ('publish-'+[Guid]::NewGuid().ToString('N')); & $module { param($p) $script:SyntheticDirectory=$p } $path
+            $j=& $module { param($p) New-KnotJournal $p } $testPins
+            $state=New-SyntheticFileState; $fs=New-SyntheticFileSystem $state
+            switch ($fault) { 'flush-first' { $state.FailFlush=1 }; 'flush-file' { $state.FailFlush=3 }; default { $state.Fault=$fault } }
+            $action={ & $module { param($j,$pins,$payload,$fs) Publish-KnotDeployment $j $pins $payload $fs } $j $testPins $testPayload $fs }.GetNewClosure()
+            if ($fault) { Reject $action ('Interrupt whole deployment publication: '+$fault) } else { & $action; $script:Checks++ }
+            if ($fault -cin @('','after-directory-move')) {
+                Assert (@([IO.Directory]::EnumerateFileSystemEntries($path)).Count -eq 5) 'An active deployment appears with all four files and the complete protected journal in one publication.'
+                $stored=[IO.File]::ReadAllText((Join-Path $path 'recovery.json')) | ConvertFrom-Json
+                Assert ($stored.directory -ceq $path -and $stored.directory -cne $state.Created[0]) 'Physical staging never changes the canonical recorded deployment identity.'
+                if ($fault -ceq '') { $complete=[pscustomobject]@{Journal=$j;Directory=$path;State=$state;FileSystem=$fs} }
+            } elseif ($fault -ceq 'directory-race') { Assert ([IO.File]::Exists((Join-Path $path 'foreign.txt'))) 'Publication never replaces a foreign directory that wins the rename race.' }
+            else { Assert (-not [IO.Directory]::Exists($path) -and $state.Created.Count -eq 1) 'Staging faults preserve the unique stage without creating an empty active deployment.' }
+        }
+        foreach ($fault in @('before-directory-move','after-directory-move','')) {
+            $path=Join-Path $root ('retire-'+[Guid]::NewGuid().ToString('N')); & $module { param($p) $script:SyntheticDirectory=$p } $path
+            $j=& $module { param($p) New-KnotJournal $p } $testPins; $state=New-SyntheticFileState; $fs=New-SyntheticFileSystem $state
+            & $module { param($j,$pins,$payload,$fs) Publish-KnotDeployment $j $pins $payload $fs } $j $testPins $testPayload $fs
+            $j.removalPending=$true; $j.removalPhase='Ready'; $j.removalBootId='boot:2026-01-01T00:00:00.0000000Z'; $j.removalBootSession='a'*32
+            & $module { param($j,$fs) Write-KnotJournal $j $null $fs } $j $fs
+            $state.Fault=$fault
+            $action={ & $module { param($j,$fs) Retire-KnotDeployment $j $fs } $j $fs }.GetNewClosure()
+            if ($fault) { Reject $action ('Interrupt atomic retirement: '+$fault) } else { & $action; $script:Checks++ }
+            if ($fault -ceq 'before-directory-move') { Assert ([IO.File]::Exists((Join-Path $path 'recovery.json')) -and @([IO.Directory]::EnumerateFileSystemEntries($path)).Count -eq 5) 'A crash before retirement keeps all active ownership evidence and payload bytes.' }
+            elseif ($fault -ceq 'after-directory-move') { $retired=$state.Moved[$state.Moved.Count-1]; Assert (-not [IO.Directory]::Exists($path) -and [IO.File]::Exists((Join-Path $retired 'recovery.json')) -and @([IO.Directory]::EnumerateFileSystemEntries($retired)).Count -eq 5) 'A crash after retirement preserves the complete journal outside the active path.' }
+            else { Assert (-not [IO.Directory]::Exists($path) -and -not [IO.Directory]::Exists($state.Moved[$state.Moved.Count-1])) 'Completed retirement deletes only the exact validated deployment after its active path is gone.' }
+        }
+    } finally { & $module { Set-Item Function:script:Read-KnotDeploymentProfiles $script:SavedProfileReader } }
     Write-Output ('Headless setup synthetic checks passed: '+$script:Checks)
     [pscustomobject]@{status='passed';checks=$script:Checks;freshSyntheticOnly=$true;nativeApisInvoked=$false} | ConvertTo-Json -Compress
 } finally {

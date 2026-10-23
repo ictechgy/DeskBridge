@@ -32,8 +32,10 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                            'headless-native': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-native'],
                                'freshSyntheticOnly': True, 'nativeApisInvoked': False, 'frameworkCompiler': False},
                            'headless-setup': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-setup'],
+                               'freshSyntheticOnly': True, 'nativeApisInvoked': False},
+                           'headless-status': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-status'],
                                'freshSyntheticOnly': True, 'nativeApisInvoked': False}},
-                       'invocations': [{'label': label + '-synthetic-checks', 'exitCode': 0} for label in ('headless-native', 'headless-setup')],
+                       'invocations': [{'label': label + '-synthetic-checks', 'exitCode': 0} for label in ('headless-native', 'headless-setup', 'headless-status')],
                        'reverseClient': {
                            'schema': 1, 'status': 'passed', 'suites': ['reverse-client', 'reverse-discovery'],
                            'sourceManifest': source, 'freshSyntheticOnly': True, 'windowsRuntimeTested': False,
@@ -74,7 +76,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                 validate_windows_check_record({**self.checks, **changed}, self.build)
 
     def test_missing_or_incomplete_reverse_counts_are_rejected(self):
-        for label in ('reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup'):
+        for label in ('reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup', 'headless-status'):
             for invalid in (None, True, 0, MINIMUM_WINDOWS_CHECKS[label] - 1):
                 changed = copy.deepcopy(self.checks)
                 changed['counts'][label] = invalid
@@ -82,7 +84,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                     validate_windows_check_record(changed, self.build)
 
     def test_headless_synthetic_execution_cannot_be_omitted_or_replaced_by_native_calls(self):
-        for label in ('headless-native', 'headless-setup'):
+        for label in ('headless-native', 'headless-setup', 'headless-status'):
             for key, value in (('status', 'failed'), ('freshSyntheticOnly', False), ('nativeApisInvoked', True), ('checks', True)):
                 changed = copy.deepcopy(self.checks)
                 changed['headless'][label][key] = value
@@ -106,7 +108,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                     validate_windows_check_record(changed, self.build)
 
     def test_headless_success_requires_one_successful_invocation_per_suite(self):
-        for label in ('headless-native', 'headless-setup'):
+        for label in ('headless-native', 'headless-setup', 'headless-status'):
             for mode in ('missing', 'failed', 'duplicate'):
                 changed = copy.deepcopy(self.checks)
                 selected = next(item for item in changed['invocations'] if item['label'] == label + '-synthetic-checks')

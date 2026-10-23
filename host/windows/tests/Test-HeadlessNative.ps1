@@ -26,7 +26,7 @@ if ($compiler -and (Test-Path -LiteralPath $compiler -PathType Leaf)) {
         if ($LASTEXITCODE -ne 0) { throw 'Headless native synthetic checks failed.' }
         if ($output.Count -eq 0) { throw 'Headless native fixture returned no result.' }
         $result=$output[-1] | ConvertFrom-Json
-        if ($result.status -cne 'passed' -or $result.checks -lt 226 -or -not $result.freshSyntheticOnly -or $result.nativeApisInvoked) { throw 'Incomplete headless native fixture result.' }
+        if ($result.status -cne 'passed' -or $result.checks -lt 354 -or -not $result.freshSyntheticOnly -or $result.nativeApisInvoked) { throw 'Incomplete headless native fixture result.' }
         $result | Add-Member -NotePropertyName frameworkCompiler -NotePropertyValue $true
         $result | ConvertTo-Json -Compress
     } finally { [IO.Directory]::Delete($directory,$true) }
@@ -35,7 +35,7 @@ if ($compiler -and (Test-Path -LiteralPath $compiler -PathType Leaf)) {
     $definition=[IO.File]::ReadAllText($source)+"`n"+[IO.File]::ReadAllText($checks)
     Add-Type -TypeDefinition $definition -CompilerOptions '/langversion:5'
     $count=[Knot.Headless.HeadlessNativeChecks]::Run()
-    if ($count -lt 226) { throw 'Incomplete headless native fixture result.' }
+    if ($count -lt 354) { throw 'Incomplete headless native fixture result.' }
     @{status='passed';checks=$count;freshSyntheticOnly=$true;nativeApisInvoked=$false;frameworkCompiler=$false} | ConvertTo-Json -Compress
 } else {
     throw 'The 64-bit .NET Framework C# compiler is required.'

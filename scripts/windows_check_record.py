@@ -3,15 +3,17 @@
 import re
 
 REQUIRED_WINDOWS_SUITES = ['native-pe', 'managed-payload', 'native-arguments',
-                          'reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup']
+                          'reverse-client', 'reverse-discovery', 'reverse-qr', 'headless-native', 'headless-setup', 'headless-status']
 MINIMUM_WINDOWS_CHECKS = {'native-pe': 1, 'managed-payload': 242, 'native-arguments': 154,
                         'reverse-client': 124, 'reverse-discovery': 195, 'reverse-qr': 65,
-                        'headless-native': 226, 'headless-setup': 184}
+                        'headless-native': 354, 'headless-setup': 266, 'headless-status': 27}
 HEADLESS_SOURCE_PATHS = ['host/windows/HeadlessNative.cs', 'host/windows/HeadlessSetup.psm1',
                          'host/windows/Invoke-DeskBridgeHeadless.ps1', 'host/windows/tests/Test-HeadlessNative.ps1',
                          'host/windows/tests/Test-HeadlessSetup.ps1', 'scripts/tests/HeadlessNativeChecks.cs',
                          'host/windows/VirtualDisplayDependency.json', 'host/windows/VirtualDisplayFiles.json',
-                         'host/windows/Knot-vdd_settings.xml']
+                         'host/windows/Knot-vdd_settings.xml', 'host/windows/VirtualDisplayDeployments.json',
+                         'host/windows/Show-HeadlessSetup.ps1', 'host/windows/HeadlessStatus.psm1',
+                         'host/windows/tests/Test-HeadlessStatus.ps1']
 MAC_INTEROP_SOURCE_PATHS = ['Sources/DeskBridgeAppChecks/main.swift', 'Sources/DeskBridgeApp/MacHostPage.swift',
                             'Sources/DeskBridgeCore/ConnectionInvitation.swift']
 
@@ -40,7 +42,7 @@ def validate_windows_check_record(checks, build):
     if (not isinstance(headless_sources, dict) or set(headless_sources) != set(HEADLESS_SOURCE_PATHS) or
             any(not _digest(digest) or source.get(path) != digest for path, digest in headless_sources.items())):
         raise ValueError(message)
-    for label in ('headless-native', 'headless-setup'):
+    for label in ('headless-native', 'headless-setup', 'headless-status'):
         result = headless.get(label, {})
         if (not isinstance(result, dict) or result.get('status') != 'passed' or result.get('checks') != counts[label] or
                 type(result.get('checks')) is not int or result.get('freshSyntheticOnly') is not True or

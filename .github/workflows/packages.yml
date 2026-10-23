@@ -149,9 +149,12 @@ jobs:
         run: |
           .\host\windows\tests\Test-HeadlessSetup.ps1
           .\host\windows\tests\Test-HeadlessNative.ps1
+          .\host\windows\tests\Test-HeadlessStatus.ps1
       - name: Validate headless setup with inert PowerShell 7 fixtures
         shell: pwsh
-        run: .\host\windows\tests\Test-HeadlessSetup.ps1
+        run: |
+          .\host\windows\tests\Test-HeadlessSetup.ps1
+          .\host\windows\tests\Test-HeadlessStatus.ps1
       - name: Verify official virtual display package without installing it
         shell: powershell
         run: |

@@ -103,11 +103,11 @@ internal static class Checks
             throw new Exception("An early/unhandled setup failure was hidden");
         }
         var headlessResult = launcher.GetMethod("InterpretHeadlessResult", BindingFlags.Static | BindingFlags.NonPublic)!;
-        foreach (int code in new[] { 0, 2, 3010, 1, 1602 })
+        foreach (int code in new[] { 0, 2, 12, 3010, 1, 1602 })
         foreach (bool completed in new[] { false, true })
         foreach (bool rebootRequired in new[] { false, true })
         {
-            bool accepted = (code == 0 && completed && !rebootRequired) || (code == 3010 && rebootRequired) || code == 2;
+            bool accepted = (code == 0 && completed && !rebootRequired) || (code == 3010 && completed && rebootRequired) || (code == 12 && !completed && rebootRequired) || (code == 2 && !completed);
             try
             {
                 int interpreted = (int)headlessResult.Invoke(null, new object[] { code, completed, rebootRequired })!;

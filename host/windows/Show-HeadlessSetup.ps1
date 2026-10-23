@@ -5,6 +5,7 @@
 param([Windows.Forms.IWin32Window] $Owner, [string] $LauncherPath)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'HeadlessSetup.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'HeadlessStatus.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SetupDownload.psm1') -Force
 $window=New-Object Windows.Forms.Form
 $window.Text='Knot · 모니터 없이 사용'; $window.Size=New-Object Drawing.Size(740,740)
@@ -58,17 +59,22 @@ function Show-HeadlessFailure($Record,[switch] $StatusProbe) {
 }
 function Update-HeadlessState {
     $script:canInstall=$false; $script:canRemove=$false
-    $status.Text='가상 화면 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
+    $recordText='가상 화면 복구 기록을 확인하지 못했습니다.'
+    $status.Text='가상 화면 복구 기록을 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
     try {
+        # Read-only recovery state is available even if compilation or device probing fails.
+        $state=Get-KnotHeadlessState
+        $recordText=Get-KnotHeadlessStatusText $state.Status
+        $status.Text=$recordText+' 장치 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
+        if ($state.Status -cin @('Conflict','LegacyRecoveryRequired') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
         Initialize-KnotHeadlessNative
         if ($null -eq $script:scan) { $script:scan=[Knot.Headless.Native]::ScanAsync() }
         $timer=[Diagnostics.Stopwatch]::StartNew()
         while (-not $script:scan.IsCompleted -and $timer.Elapsed.TotalSeconds -lt 15) {
             [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 80
         }
-        if (-not $script:scan.IsCompleted) { $status.Text=$script:installHoldText+' 장치 확인이 지연되고 있습니다. 잠시 뒤 상태 새로고침을 누르세요.'; return }
+        if (-not $script:scan.IsCompleted) { $status.Text=$recordText+' 장치 확인이 지연되고 있습니다. 작업 버튼은 잠겨 있습니다. 잠시 뒤 상태 새로고침을 누르세요.'; return }
         try { $inventory=$script:scan.GetAwaiter().GetResult() } finally { $script:scan=$null }
-        $state=Get-KnotHeadlessState
         $foreign=@($inventory.Devices | Where-Object { $_.InstanceId -ine $state.InstanceId })
         if ($state.Status -eq 'Conflict') {
             $status.Text='Knot 복구 기록이나 설정을 안전하게 확인하지 못했습니다. 기존 상태는 보존했습니다. 파일을 직접 삭제하거나 재설치하지 말고 Windows 관리자에게 복구 기록 점검을 요청하세요.'; return
@@ -82,8 +88,8 @@ function Update-HeadlessState {
             $status.Text=if ($script:canInstall) {'Knot 가상 화면이 없습니다. 설치 후 Sunshine에서 사용할 화면을 한 번 지정하세요.'} else {'가상 화면 자동 설치는 현재 사용할 수 없습니다. 외부 드라이버의 보안 검토가 끝날 때까지 설치를 보류했습니다. 모니터 또는 HDMI 더미 플러그로 기존 화면 연결을 이용할 수 있습니다.'}; return
         }
         $script:canRemove=[bool]$state.Managed
-        if ($state.Status -ne 'Installed') {
-            $status.Text='이전 작업의 복구가 필요합니다. Windows를 재시작한 뒤 “Knot 가상 화면 제거”를 실행하세요. 자동 설치는 계속 보류되며 이 버전에서는 다시 설치할 수 없습니다.'; return
+        if ($state.Status -cnotin @('Installed','InstalledPendingRestart')) {
+            $status.Text=$recordText; return
         }
         $devices=@($inventory.Devices | Where-Object { $_.InstanceId -ieq $state.InstanceId })
         $screens=@($inventory.Displays | Where-Object { $_.AdapterInstanceId -ieq $state.InstanceId })
@@ -94,7 +100,7 @@ function Update-HeadlessState {
             $status.Text='가상 화면 활성 (진단용 이름, Sunshine ID 아님): '+$names+'. Sunshine의 device_id와 실제 원격 연결을 확인하세요.'
         } else { $status.Text='가상 디스플레이 장치는 설치되어 있지만 활성 화면을 확인하지 못했습니다. Windows 디스플레이 설정에서 화면을 확장하거나 재시작한 뒤 다시 확인하세요.' }
         if ($state.RebootRequired) { $status.Text+=' 설치 때 재시작이 요청되었습니다. 아직 재시작하지 않았다면 먼저 재시작하세요.' }
-    } catch { $script:scan=$null; Show-HeadlessFailure $_ -StatusProbe }
+    } catch { $script:scan=$null; $script:canInstall=$false; $script:canRemove=$false; $status.Text=$recordText+' 장치 상태를 확인하지 못해 작업 버튼을 잠갔습니다. 기존 복구 기록은 보존했습니다. 잠시 뒤 상태를 새로고침하세요.' }
     finally { Set-HeadlessBusy $script:headlessBusy }
 }
 function Invoke-HeadlessBroker([string] $Operation,[string] $Archive) {
@@ -143,8 +149,7 @@ $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
         $status.Text='Windows 관리자 확인과 드라이버 설치를 진행하세요.'
         $result=Invoke-HeadlessBroker 'InstallVirtualDisplay' $file
         Update-HeadlessState
-        if ($result -eq 3010) { $status.Text='작업을 마치려면 Windows를 재시작해야 합니다. 재시작 후 Knot에서 상태를 다시 확인하세요.' }
-        elseif ($result -ne 0) { $status.Text='설치를 완료하지 못했습니다. 관리자 창의 안내를 확인한 뒤 상태를 새로고침하세요.' }
+        $status.Text=Get-KnotHeadlessOperationText 'InstallVirtualDisplay' $result
     } catch [OperationCanceledException] { $status.Text='다운로드를 취소했습니다. 필요할 때 다시 시작하세요.' }
     catch { Show-HeadlessFailure $_ }
     finally {
@@ -180,8 +185,7 @@ $remove=Add-HeadlessButton 'Knot 가상 화면 제거…' {
     try {
         $result=Invoke-HeadlessBroker 'RemoveVirtualDisplay' $null
         Update-HeadlessState
-        if ($result -eq 3010) { $status.Text='제거를 마치려면 Windows를 재시작한 뒤 여기에서 제거를 다시 실행하세요. 복구 파일은 유지됩니다.' }
-        elseif ($result -ne 0) { $status.Text='제거를 완료하지 못했습니다. 기존 설정을 보존했습니다. 상태를 다시 확인하세요.' }
+        $status.Text=Get-KnotHeadlessOperationText 'RemoveVirtualDisplay' $result
     } catch { Show-HeadlessFailure $_ }
     finally { Set-HeadlessBusy $false }
 }
