@@ -121,12 +121,15 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         raise SystemExit("The packaged app must contain exactly the camera permission entitlement.")
     (stage / "Applications").symlink_to("/Applications", target_is_directory=True)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
-    shutil.copy2(ROOT / "INSTALLATION.md", stage / "INSTALLATION.md")
+    installation = (ROOT / "INSTALLATION.md").read_text()
+    for target in ("host/windows/README.md", "docs/BRAND_COMPATIBILITY.md", "docs/RELEASING.md", "docs/HEADLESS_WINDOWS.md"):
+        installation = installation.replace("](" + target + ")", "](https://github.com/ictechgy/Knot/blob/" + head + "/" + target + ")")
+    (stage / "INSTALLATION.md").write_text(installation)
     (stage / "INSTALL.txt").write_text("Knot.app을 Applications 폴더로 드래그하세요.\nApple Silicon / macOS 26+\n" +
         "업데이트: 기존 앱을 종료하고 이전 DeskBridge.app 번들만 제거하세요. 같은 번들 ID의 두 앱을 함께 두지 마세요.\n" +
         "Application Support·설정·인증서는 보존하세요. macOS 권한을 다시 요청할 수 있습니다.\n" +
         ("Developer ID 서명 및 Apple 공증 패키지입니다.\n" if args.mode == "release" else "개발 프리뷰: 로컬 ad-hoc 서명이며 Apple 공증이 없습니다.\n") +
-        "Windows 설정과 대응 소스는 함께 제공하는 INSTALLATION.md와 source.tar.gz를 확인하세요.\n")
+        "설정 안내는 이 이미지의 INSTALLATION.md를 확인하세요. 대응 소스는 같은 릴리스의 별도 파일 " + name + "-source.tar.gz 입니다.\n")
     if args.mac_format in ["zip", "both"]:
         mac_zip = output / (name + "-macos-arm64" + suffix + ".zip")
         run("mac-zip", ["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(stage), str(mac_zip)])

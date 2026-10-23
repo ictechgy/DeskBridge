@@ -910,12 +910,31 @@ actor NetworkClient {
     let schedule: Schedule
     let backend: NativeBackend
     let events: NativeConnectionEvents
+    let probing: Bool
     var shutdowns = 0
-    init(schedule: Schedule, backend: NativeBackend, events: NativeConnectionEvents) {
-        self.schedule = schedule; self.backend = backend; self.events = events
+    let clientUniqueID: String? = "synthetic"
+    init(schedule: Schedule, backend: NativeBackend, events: NativeConnectionEvents, probing: Bool = false) {
+        self.schedule = schedule; self.backend = backend; self.events = events; self.probing = probing
     }
-    func setRequestDeadline(_ deadline: Date?) async { await schedule.deadlineCleared(backend: backend, events: events) }
+    func setRequestDeadline(_ deadline: Date?) async {
+        if !probing { await schedule.deadlineCleared(backend: backend, events: events) }
+    }
+    func fetchServerInfo() async throws -> ServerInfo {
+        guard let id = await schedule.probeResult() else { throw StreamError.hostUnreachable("inert probe silence") }
+        return ServerInfo(currentGameID: id)
+    }
+    func launch(appID: Int, config: StreamRequest) async throws -> LaunchResponse { await schedule.recordRequest("launch"); return LaunchResponse() }
+    func resume(config: StreamRequest) async throws -> LaunchResponse { await schedule.recordRequest("resume"); return LaunchResponse() }
     func shutdown() { shutdowns += 1 }
+}
+struct ServerInfo: Sendable { let currentGameID: Int }
+struct StreamRequest: Sendable {}
+struct LaunchResponse: Sendable {}
+struct DisconnectOnly: Sendable { var cancellation: Int? { nil } }
+enum StreamAttempt {
+    static func run<Value: Sendable>(until deadline: Date, operation: @escaping @Sendable () async throws -> Value) async throws -> Value {
+        try await operation() // Deadline transport is inert; production supplies its bounded probe deadline.
+    }
 }
 struct BackendStreamConfig { let bitrate: Int32 = 20_000 }
 actor Schedule {
@@ -927,6 +946,10 @@ actor Schedule {
     let callbackDone = DispatchSemaphore(value: 0), releaseStop = DispatchSemaphore(value: 0)
     var retainedReceiver: Receiver?
     init(_ mode: Mode) { self.mode = mode }
+    var requests = [String](), probeCalls = 0
+    func recordRequest(_ request: String) { requests.append(request) }
+    func requestSnapshot() -> [String] { requests }
+    func probeResult() async -> Int? { probeCalls += 1; return 42 }
     func setSession(_ session: StreamSession) { self.session = session }
     func sleep() {
         sleepCalls += 1
@@ -973,10 +996,15 @@ actor Schedule {
 }
 actor StreamSession {
     static let deadPeerTerminationCode: Int32 = -1, reconnectAttemptCap = 3
-    static let reconnectWindowSeconds: TimeInterval = 30
+    static let reconnectWindowSeconds: TimeInterval = 30, hostEndProbeSeconds: TimeInterval = 1.5
+    static let recoverableTerminationCodes: Set<Int32> = [Int32(bitPattern: 0x80030023), Int32(bitPattern: 0x80030013)]
+    let reconnectServer: Int? = 1, reconnectAppID: Int? = 42
+    var ownsHostSession = true, hostSessionClientID: String? = "synthetic"
     let schedule: Schedule, clock: SyntheticClock, bridge: Bridge?
     var backend = NativeBackend(), attemptID = UUID()
     var reconnectAttemptID: UUID?, reconnectAttemptFailure: Int32?
+    var reconnectAttemptFailureHandled = false, reachedLiveState = true
+    var lastReconnectTerminationCode: Int32?
     var isStreaming = true, stopInProgress = false, isReconnecting = false, reconnectAttempts = 0
     var lastReconnectError: StreamError?, normalTerminations = 0, publicInput: Input? = Input(), input: Input? = Input()
     var network: NetworkClient?
@@ -988,6 +1016,10 @@ actor StreamSession {
     }
     func setWaitingForVideo(_ waiting: Bool) {}; func resetStallLatches() {}
     func makeBackend() -> NativeBackend { NativeBackend() }
+    func makeNetwork(_ server: Int) -> NetworkClient {
+        NetworkClient(schedule: schedule, backend: backend,
+                      events: NativeConnectionEvents(bridge: bridge!, backend: backend), probing: true)
+    }
     func checkAttempt(deadline: Date? = nil) throws {
         guard !Task.isCancelled, isStreaming, !stopInProgress else { throw CancellationError() }
     }
@@ -1012,7 +1044,7 @@ actor StreamSession {
     }
     func cancelCurrent() { isStreaming = false; stopInProgress = true; backend.stopConnection() }
     func stop(cause: DisconnectReason) async { cancelCurrent() }
-    func endStreamClosedByPC() async { cancelCurrent() }
+    __END_CLOSED__
     func run() async { await runReconnectEpisode(code: -1, cause: "synthetic") }
     func state() -> (Bool, Int, Int32?) { (isReconnecting, normalTerminations, reconnectAttemptFailure) }
     func finalCleanup() { backend.stopConnection() }
@@ -1062,8 +1094,11 @@ reconnect_fixture = reconnect_fixture.replace("__EVENT_METHODS__", "\n".join(
     for signature in ("private func enqueueSessionEvent(", "package func connectionTerminated(")))
 reconnect_fixture = reconnect_fixture.replace("__TERMINATE_PREFIX__", terminate_prefix.replace("package func", "func", 1))
 reconnect_fixture = reconnect_fixture.replace("__ATTEMPT_METHODS__", "\n".join(
-    block(reconnect, signature) for signature in ("private func reconnectAttemptIsHealthy(",
-                                                "private func checkReconnectAttempt(", "private func tearDownSlippedInReconnect(")))
+    block(reconnect, signature).replace("package ", "") for signature in ("private func reconnectAttemptIsHealthy(",
+                                                "private func checkReconnectAttempt(", "private func tearDownSlippedInReconnect(",
+                                                "private func endReconnectAfterCurrentFailure(", "private func probeRunningAppID(",
+                                                "package static func pcEndedSession(")))
+reconnect_fixture = reconnect_fixture.replace("__END_CLOSED__", block(reconnect, "private func endStreamClosedByPC("))
 reconnect_fixture = reconnect_fixture.replace("__EPISODE__", block(reconnect, "private func runReconnectEpisode("))
 reconnect_fixture = reconnect_fixture.replace("__TEARDOWN__", teardown)
 reconnect_fixture = reconnect_fixture.replace("__SELECTION__", selection)
@@ -1126,6 +1161,10 @@ __CONTRACT__
 __PRESENTATION__
 __EVENT_SOURCE__
 final class NativeBackend: @unchecked Sendable {}
+final class RecoveryInput: Sendable {
+    func prepareForReplacement(attempt: UUID) {}
+    @MainActor func setReady(_ ready: Bool) {}
+}
 final class StreamBridgeContext: @unchecked Sendable {
     private let sourceLock = NSLock()
     private var attemptID = UUID()
@@ -1149,7 +1188,10 @@ public final class StreamSession: @unchecked Sendable {
     var bridge: StreamBridgeContext?
     var isStreaming = true, stopInProgress = false, isReconnecting = true
     var attemptID: UUID, reconnectAttemptID: UUID?, reconnectAttemptFailure: Int32?
+    var reconnectAttemptFailureHandled = false
+    var lastReconnectTerminationCode: Int32?
     var lastReconnectError: StreamError?
+    let publicInput: RecoveryInput? = nil, input: RecoveryInput? = nil
     init(bridge: StreamBridgeContext, attempt: UUID) {
         self.bridge = bridge; attemptID = attempt; reconnectAttemptID = attempt
     }
@@ -1266,3 +1308,234 @@ with tempfile.TemporaryDirectory(prefix="knot-public-recovery-", dir="/tmp") as 
     print(json.dumps({"publicRecoveryFixtureSHA256": hashlib.sha256(recovery_fixture.encode()).hexdigest(),
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                                  for path in recovery_paths.values()}}))
+
+
+# Keep host intent while recovering: actual pinned Sunshine 0x80030023 can mean
+# its app was Force Stopped. Execute the same bounded episode/probe/PC-ended
+# decision plus actual next-serverinfo gate and /resume-versus-/launch selector.
+# Controller revocation below runs the real input-owner methods against inert
+# actuator/battery/release recorders; no hardware or real transport is touched.
+lifecycle_source = (ENGINE / "Session/StreamSession+Lifecycle.swift").read_text()
+inbound_source = (ENGINE / "Network/EnetControlChannel+Inbound.swift").read_text()
+input_attempts = (ENGINE / "Input/StreamInput+Attempts.swift").read_text()
+input_source = (ENGINE / "Input/StreamInput.swift").read_text()
+first_failure = block(reconnect, "if reconnectAttemptFailure == nil {")
+assert first_failure.index("publicInput?.prepareForReplacement(attempt: attemptID)") < first_failure.index("bridge?.beginAttempt(UUID())")
+assert first_failure.index("DispatchQueue.main.async") < first_failure.index("bridge?.beginAttempt(UUID())")
+assert "lastReconnectError = .sessionFailed(code)" in first_failure
+assert "if lastReconnectTerminationCode == nil" in block(reconnect, "private func reconnectInPlace(")
+assert "endReconnectAfterCurrentFailure(until: budget.deadline())" in block(reconnect, "private func runReconnectEpisode(")
+policy_fixture = reconnect_fixture[:reconnect_fixture.index("@main struct Checks")]
+policy_fixture = policy_fixture.replace("final class NativeBackend: @unchecked Sendable {", """
+final class Terminator {
+    var onTerminated: ((Int32) -> Void)?
+    __PARSE_TERMINATION__
+}
+final class NativeBackend: @unchecked Sendable {
+    func hostTermination(_ code: Int32, events: NativeConnectionEvents) {
+        let enet = Terminator()
+        __HOST_TERMINATION__
+        enet.onTerminated?(code)
+    }
+""", 1)
+policy_fixture = policy_fixture.replace("__PARSE_TERMINATION__", block(inbound_source, "func parseTerminationCode("))
+policy_fixture = policy_fixture.replace("__HOST_TERMINATION__", block(pipeline, "enet.onTerminated ="))
+input_start = policy_fixture.index("final class Input: Sendable {")
+input_end = policy_fixture.index("struct SyntheticClock:", input_start)
+input_fixture = r'''
+let inputTrace = Locked<[String]>([])
+final class Actuator: @unchecked Sendable {
+    let stops = Locked(0)
+    func stopAll(reason: String) { stops.use { $0 += 1 }; inputTrace.use { $0.append(reason) } }
+    func streamActivated(appActive: Bool) {}; func streamActivated(backend: NativeBackend) {}
+    func setOwnership(_ focused: Bool) {}
+}
+final class Battery: @unchecked Sendable { let pauses = Locked(0); func pause() { pauses.use { $0 += 1 } } }
+struct Snapshot { var ready = false, focused = false; var acceptEventsAfter: Double = 0 }
+final class Releases { func releaseAll(connectionLost: Bool) {} }
+final class InputCore: @unchecked Sendable {
+    let lock = NSLock(), releases = Releases()
+    var snapshot = Snapshot(), backend: NativeBackend?
+    var pendingArrivals = [Int](), current = [Int](), buttons = [Int](), analogs = [Int]()
+    func withLock<T>(_ operation: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return operation() }
+}
+struct Rearm { mutating func suppressHeld() {} }
+struct Registration { var announced = true, rearm = Rearm(); let identity = 1 }
+final class Input: @unchecked Sendable {
+    enum Event { case controllersActive(Bool) }
+    let core = InputCore(), haptics = Actuator(), motion = Actuator(), battery = Battery()
+    var terminal = false, activeAttempt: UUID?, rearmOnActivation = false, focused = true
+    var registrations = [0: Registration()]
+    var legacyReady = true
+    func releaseOwnership() {}
+    func emit(_ event: Event) { if case .controllersActive(let value) = event { inputTrace.use { $0.append(value ? "active" : "inactive") } } }
+    func announce(_ identity: Int) {}; func scheduleReconciliation() {}
+    func rebind(to backend: NativeBackend, attempt: UUID) { core.withLock { self.activeAttempt = attempt; core.backend = backend } }
+    @MainActor func quiesce() {}; @MainActor func setReady(_ ready: Bool) { legacyReady = ready }
+    __PREPARE_INPUT__
+    __ACTIVATE_INPUT__
+    func state() -> (Bool, Int, Int, Int) {
+        core.withLock { (activeAttempt == nil && core.backend == nil && !core.snapshot.ready,
+                         haptics.stops.use { $0 }, motion.stops.use { $0 }, battery.pauses.use { $0 }) }
+    }
+}
+'''
+input_fixture = input_fixture.replace("__PREPARE_INPUT__", block(input_attempts, "package func prepareForReplacement(").replace("package ", ""))
+input_fixture = input_fixture.replace("__ACTIVATE_INPUT__", block(input_source, "func activate(_ value: Bool, attempt:"))
+policy_fixture = policy_fixture[:input_start] + input_fixture + policy_fixture[input_end:]
+policy_fixture = policy_fixture.replace("values.use { value in\n            switch event", "values.use { value in\n            switch event", 1)
+policy_fixture = policy_fixture.replace("    func beginAttempt(_ id: UUID) {}", "    func beginAttempt(_ id: UUID) { inputTrace.use { $0.append(\"epoch\") } }", 1)
+policy_fixture = policy_fixture.replace("    let values = Locked<[String]>([])", "    let values = Locked<[String]>([])\n    let terminations = Locked<[(Int32, Int32?)]>([])", 1)
+policy_fixture = policy_fixture.replace("            case .connectionTerminated: value.append(\"terminated\")", """            case .connectionTerminated(let code, let error):
+                var errorCode: Int32?
+                if case .sessionFailed(let actual)? = error { errorCode = actual }
+                terminations.use { $0.append((code, errorCode)) }; value.append("terminated")""", 1)
+policy_fixture = policy_fixture.replace("case healthy, deadlineFatal, rearmFatal, notifyBeforeStop, stale, wake, cancel, taskCancel, allFatal", "case healthy, deadlineFatal, rearmFatal, notifyBeforeStop, stale, wake, cancel, taskCancel, allFatal, hostForceStop, hostTakeover, hostRestartSilent, hostSameApp, hostDuringBackoff, hostFatalCode, duplicateCatch, probeCancel")
+policy_fixture = policy_fixture.replace("    func probeResult() async -> Int? { probeCalls += 1; return 42 }", """    func probeResult() async -> Int? {
+        probeCalls += 1
+        if mode == .probeCancel { await session?.cancelCurrent(); return 0 }
+        if mode == .hostRestartSilent { return nil }
+        if mode == .hostForceStop || mode == .hostDuringBackoff { return 0 }
+        if mode == .hostTakeover { return 7 }
+        return 42
+    }
+    func policyStats() -> (Int, [String], Int) { (probeCalls, requests, setupCount) }
+    func currentGameIDForAttempt() -> Int {
+        if setupCount == 1 { return 42 }
+        if mode == .hostForceStop || mode == .hostDuringBackoff || mode == .hostRestartSilent { return 0 }
+        if mode == .hostTakeover { return 7 }
+        return 42
+    }
+    func sendHostFailure(backend: NativeBackend, events: NativeConnectionEvents, duplicate: Bool = false) async {
+        // The protected-content value is a supported fatal receive contract;
+        // this does not claim pinned Sunshine emits it in the Force Stop path.
+        let payload: [UInt8] = mode == .hostFatalCode || mode == .duplicateCatch
+            ? [0x80, 0x0e, 0x93, 0x02] : [0x80, 0x03, 0x00, 0x23]
+        let code = Terminator().parseTerminationCode(payload)
+        backend.hostTermination(code, events: events)
+        if duplicate { events.connectionTerminated(code: Int32(bitPattern: 0x80030023)) }
+        await events.drain()
+        await session?.assertImmediateInputRevocation()
+    }
+    func beforeConnectCatch(backend: NativeBackend, events: NativeConnectionEvents) async -> Bool {
+        if mode == .duplicateCatch && setupCount == 1 {
+            await sendHostFailure(backend: backend, events: events, duplicate: true); return true
+        }
+        return false
+    }""", 1)
+policy_fixture = policy_fixture.replace("    func sleep() {\n        sleepCalls += 1", """    func sleep() async {
+        sleepCalls += 1
+        if mode == .hostDuringBackoff && sleepCalls == 2 {
+            await sendHostFailure(backend: backends[0], events: events[0])
+        }""", 1)
+policy_fixture = policy_fixture.replace("        let index = setupCount\n        if mode == .allFatal", """        let index = setupCount
+        if index == 1 && [.hostForceStop, .hostTakeover, .hostRestartSilent, .hostSameApp, .hostFatalCode, .probeCancel].contains(mode) {
+            await sendHostFailure(backend: backend, events: events); return
+        }
+        if mode == .hostDuringBackoff && index == 1 { return }
+        if mode == .allFatal""", 1)
+# This mode first fails the connect without a terminate, then delivers the host
+# close during backoff. The post-backoff policy checkpoint must catch it.
+policy_fixture = policy_fixture.replace("        network = net\n", """        network = net
+        let pcAnswered = true
+        do {
+            try await observedLaunch(net: net, currentGameID: await schedule.currentGameIDForAttempt(), deadline: deadline)
+            if await schedule.beforeConnectCatch(backend: fresh, events: events) {
+                throw StreamError.hostUnreachable("generic inert connect failure after specific host code")
+            }
+            if await schedule.mode == .hostDuringBackoff && schedule.stats().0 == 1 {
+                throw StreamError.hostUnreachable("inert connect failure before late host close")
+            }
+        } __CONNECT_CATCH__
+""", 1)
+# No actor isolation is crossed without an explicit await in the condition.
+policy_fixture = policy_fixture.replace("if await schedule.mode == .hostDuringBackoff && schedule.stats().0 == 1", "if await schedule.shouldFailBeforeBackoff()")
+policy_fixture = policy_fixture.replace("    func beforeConnectCatch(", "    func shouldFailBeforeBackoff() -> Bool { mode == .hostDuringBackoff && setupCount == 1 }\n    func beforeConnectCatch(", 1)
+assert "try await observedLaunch(net: net, currentGameID:" in policy_fixture
+actual_attempt = block(reconnect, "private func reconnectInPlace(")
+catch_start = actual_attempt.index("        } catch {\n            Diag.notice(\"reconnect attempt failed:")
+catch_end = actual_attempt.index("\n\n        // H5:", catch_start)
+policy_fixture = policy_fixture.replace("__CONNECT_CATCH__", actual_attempt[catch_start + len("        } "):catch_end])
+gate_start = reconnect.index("            if serverInfo.currentGameID != appID { ownsHostSession = false }")
+gate_end = reconnect.index("            let launch = try await launchWithDeadline(", gate_start)
+policy_methods = block(lifecycle_source, "private func launchWithoutCancellation(")
+policy_methods += "\n" + block(reconnect, "package static func reconnectAttemptError(").replace("package ", "")
+policy_methods += '''
+    let hostDisposition = DisconnectOnly()
+    func launchAndRecordOwnership(client: String?, appID: Int,
+        operation: @escaping @Sendable () async throws -> LaunchResponse) async throws -> LaunchResponse {
+        try await operation() // Ownership bookkeeping only; real request choice below.
+    }
+    func observedLaunch(net: NetworkClient, currentGameID: Int, deadline: Date) async throws {
+        let serverInfo = ServerInfo(currentGameID: currentGameID), appID = 42
+''' + reconnect[gate_start:gate_end] + '''
+        _ = try await launchWithoutCancellation(network: net, appID: appID, config: StreamRequest(), info: serverInfo, deadline: deadline)
+    }
+    func assertImmediateInputRevocation() async {
+        let state = publicInput!.state()
+        precondition(state.0 && state.1 == 1 && state.2 == 1 && state.3 == 1, "real owner revokes input and actuators immediately")
+        publicInput?.activate(false, attempt: attemptID) // Late feedback cannot deactivate twice.
+        precondition(publicInput!.state().1 == 1, "stale deactivation is idempotent after owner revocation")
+        let trace = inputTrace.use { $0 }
+        precondition(trace.contains("inactive"), "owner publishes controllers inactive")
+        precondition(trace.suffix(2) == ["inactive", "epoch"], "input revocation precedes callback epoch retirement")
+        let inp = input
+        await MainActor.run { precondition(inp?.legacyReady == false, "FIFO ready-false precedes next retry backoff") }
+    }
+'''
+policy_fixture = policy_fixture.replace("    func run() async {", policy_methods + "\n    func run() async {", 1)
+policy_fixture = policy_fixture.replace("        await schedule.register(fresh, dec, events)", "        publicInput?.activate(true, attempt: attemptID)\n        await schedule.register(fresh, dec, events)", 1)
+policy_fixture += r'''
+@main struct TerminationPolicyChecks {
+    static func main() async {
+        var checks = 0
+        func expect(_ value: Bool, _ name: String) { precondition(value, name); checks += 1 }
+        for mode: Schedule.Mode in [.hostForceStop, .hostTakeover, .hostRestartSilent, .hostSameApp, .hostDuringBackoff, .hostFatalCode, .duplicateCatch, .probeCancel, .deadlineFatal] {
+            inputTrace.use { $0 = [] }
+            let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session)
+            await Task { await session.run() }.value
+            let stats = await schedule.policyStats(), state = await session.state()
+            let values = bridge.values.use { $0 }, terminal = bridge.terminations.use { $0 }
+            let resumes = mode == .hostRestartSilent || mode == .hostSameApp || mode == .deadlineFatal
+            expect(stats.2 == (resumes ? 2 : 1), "host stop/takeover/fatal/cancel does not select another backend")
+            expect(stats.1.first == "resume", "first connection follows actual resume selector")
+            expect(stats.1.filter { $0 == "launch" }.count == (mode == .hostRestartSilent ? 1 : 0), "Force Stop never relaunches; silent restart may launch again")
+            expect(values.filter { $0 == "reconnected" }.count == (resumes ? 1 : 0), "only policy-approved recovery commits success")
+            expect(!state.0, "policy ends episode ownership")
+            expect(stats.0 == ((mode == .deadlineFatal || mode == .hostFatalCode || mode == .duplicateCatch) ? 0 : 1), "dead-peer and fatal do not probe; recoverable host close probes once")
+            if mode == .hostForceStop || mode == .hostTakeover || mode == .hostDuringBackoff {
+                expect(terminal.count == 1 && terminal[0].0 == 0 && terminal[0].1 == nil, "PC-ended outcome is a clean close with no cancel/launch")
+                expect(await session.ownsHostSession == false && session.hostSessionClientID == nil, "actual PC-ended method relinquishes host cancellation ownership")
+            }
+            if mode == .hostFatalCode || mode == .duplicateCatch {
+                let fatal = Int32(bitPattern: 0x800E9302)
+                expect(terminal.count == 1 && terminal[0].0 == fatal && terminal[0].1 == fatal, "first specific fatal survives duplicate and generic connect catch")
+            }
+            await session.finalCleanup()
+            expect(await schedule.stats().1.allSatisfy { $0 == 1 }, "policy cleanup drains each sink once")
+        }
+        print("{\"status\":\"passed\",\"reconnectTerminationPolicyChecks\":\(checks),\"scope\":\"actual host parser/producer/ordered adapter/episode/probe/PC-ended decision/next serverinfo gate/request selector/connect catch and input owner methods; inert transport and actuator recorders only\"}")
+    }
+}
+'''
+# Read both actor-owned values through one isolated accessor.
+policy_fixture = policy_fixture.replace("    func finalCleanup()", "    func ownershipReleased() -> Bool { !ownsHostSession && hostSessionClientID == nil }\n    func finalCleanup()", 1)
+policy_fixture = policy_fixture.replace("await session.ownsHostSession == false && session.hostSessionClientID == nil", "await session.ownershipReleased()")
+with tempfile.TemporaryDirectory(prefix="knot-reconnect-policy-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"
+    source.write_text(policy_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O",
+            "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"reconnectPolicyFixtureSHA256": hashlib.sha256(policy_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in (ENGINE / "Session/StreamSession.swift", ENGINE / "Session/StreamSession+Reconnect.swift",
+                                                              ENGINE / "Session/StreamSession+Lifecycle.swift", ENGINE / "Session/NativeConnectionEvents.swift",
+                                                              ENGINE / "Session/NativeBackend+Pipeline.swift", ENGINE / "Network/EnetControlChannel+Inbound.swift",
+                                                              ENGINE / "Input/StreamInput.swift", ENGINE / "Input/StreamInput+Attempts.swift")}}))

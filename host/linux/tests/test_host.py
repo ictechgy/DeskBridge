@@ -284,7 +284,7 @@ class HostChecks(unittest.TestCase):
         self.assertTrue(caught.exception.cleanup_failed)
         self.assertNotIn('synthetic cleanup', str(caught.exception))
 
-    def test_export_cleanup_failure_after_publish_records_cleanup_guidance_flag(self):
+    def test_export_success_preserves_recreated_temporary_name(self):
         import runtime
         pin, opener = self.fixture_download(b'fixture!', 8)
         package = download(pin, self.store, threading.Event(), opener=opener)
@@ -295,12 +295,10 @@ class HostChecks(unittest.TestCase):
             Path(source).write_bytes(b'synthetic residue after publication')
             residue.append(Path(source))
         with patch('runtime.publish_new', side_effect=publish_with_fresh_residue), \
-             patch('runtime.os.unlink', side_effect=OSError(errno.EIO, 'synthetic private cleanup path')), self.assertRaises(Failure) as caught:
-            save_package(pin, package, destination)
+             patch('runtime.os.unlink') as cleanup:
+            self.assertEqual(save_package(pin, package, destination), destination)
+            cleanup.assert_not_called()
         self.assertEqual(destination.read_bytes(), b'fixture!')
-        self.assertEqual(caught.exception.key, 'export_destination')
-        self.assertTrue(caught.exception.cleanup_failed)
-        self.assertNotIn('synthetic private cleanup path', str(caught.exception))
         self.assertEqual(len(residue), 1); self.assertTrue(residue[0].exists())
         residue[0].unlink()
 

@@ -648,6 +648,7 @@ def save_package(pin, package, destination):
                     except (OSError, Failure): raise Failure('export_destination') from None
                     if verified != (pin['bytes'], pin['sha256']): raise Failure('export_destination')
                     publish_new(temporary, destination)
+                    temporary = None  # Rename consumed it; a recreated name belongs to someone else.
                     return destination
                 except FileExistsError:
                     raise Failure('collision') from None

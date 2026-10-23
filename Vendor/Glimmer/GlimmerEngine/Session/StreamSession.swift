@@ -199,6 +199,11 @@ public actor StreamSession {
     /// Sticky even when notification reaches this actor before the producer has
     /// latched backend interruption. Cleared only when selecting a new attempt.
     package var reconnectAttemptFailure: Int32?
+    /// The episode classifies each selected attempt's first host termination once,
+    /// before spending another retry or launching anything on the PC.
+    package var reconnectAttemptFailureHandled = false
+    /// Explicit termination diagnostics survive generic connect/cancellation errors.
+    package var lastReconnectTerminationCode: Int32?
     /// Attempt counter for the current reconnect episode.
     package var reconnectAttempts = 0
     /// The last attempt's classified failure; a give-up hands it to the launcher so the copy names the fix.
