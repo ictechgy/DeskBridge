@@ -199,6 +199,10 @@ class Store:
                 publish_new(temporary, apps)
             finally:
                 if os.path.lexists(temporary): os.unlink(temporary)
+        # A private directory is valid elsewhere in the tree, but Sunshine's
+        # file_apps argument must name an owned ordinary file before launch.
+        with ordinary_read(apps, 16 * 1024 * 1024, os.getuid(), True):
+            pass
         self.validate()
 
     def close(self):

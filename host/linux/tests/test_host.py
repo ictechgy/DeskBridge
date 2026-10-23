@@ -108,6 +108,63 @@ class HostChecks(unittest.TestCase):
         self.store.prepare()
         self.assertEqual(json.loads(apps.read_bytes())['apps'], [{'name': 'Desktop', 'cmd': ''}])
 
+    def nonfile_apps_fixture(self, store, kind):
+        apps, sentinel = store.root / 'apps.json', None
+        if kind == 'directory':
+            apps.mkdir(mode=0o700)
+            sentinel = apps / 'preserved'
+            Store.write_new(sentinel, b'synthetic preserved contents')
+        elif kind == 'link':
+            sentinel = self.base / (store.root.name + '-target')
+            Store.write_new(sentinel, b'synthetic preserved contents')
+            apps.symlink_to(sentinel)
+        else:
+            os.mkfifo(apps, 0o600)
+        return apps, sentinel
+
+    def test_prepare_rejects_nonfile_apps_without_replacing_contents(self):
+        for kind in ('directory', 'link', 'fifo'):
+            with self.subTest(kind=kind):
+                store = Store(self.base / ('prepare-' + kind))
+                try:
+                    apps, sentinel = self.nonfile_apps_fixture(store, kind)
+                    before = apps.lstat()
+                    with self.assertRaises((Failure, OSError)) as caught:
+                        store.prepare()
+                    if isinstance(caught.exception, Failure):
+                        self.assertEqual(caught.exception.key, 'storage')
+                    after = apps.lstat()
+                    self.assertEqual((after.st_ino, after.st_mode), (before.st_ino, before.st_mode))
+                    if sentinel is not None:
+                        self.assertEqual(sentinel.read_bytes(), b'synthetic preserved contents')
+                finally:
+                    store.close()
+
+    def test_start_rejects_nonfile_apps_before_credentials_or_spawn(self):
+        for kind in ('directory', 'link', 'fifo'):
+            with self.subTest(kind=kind):
+                store = Store(self.base / ('start-' + kind))
+                try:
+                    apps, sentinel = self.nonfile_apps_fixture(store, kind)
+                    before = apps.lstat()
+                    host = OwnedHost()
+                    with patch('runtime.preflight', return_value=({'DISPLAY': ':1'}, '/synthetic/sunshine')), \
+                         patch.object(host, '_spawn') as spawn, \
+                         patch.object(store, 'prepare_web_credentials', wraps=store.prepare_web_credentials) as credentials:
+                        with self.assertRaises((Failure, OSError)) as caught:
+                            host.start({}, store, 'Linux', 'synthetic', 'Synthetic-password-42!')
+                        if isinstance(caught.exception, Failure):
+                            self.assertEqual(caught.exception.key, 'storage')
+                        credentials.assert_not_called(); spawn.assert_not_called()
+                    self.assertFalse(os.path.lexists(store.root / 'web-credentials.json'))
+                    self.assertIsNone(host.child)
+                    after = apps.lstat()
+                    self.assertEqual((after.st_ino, after.st_mode), (before.st_ino, before.st_mode))
+                    if sentinel is not None:
+                        self.assertEqual(sentinel.read_bytes(), b'synthetic preserved contents')
+                finally:
+                    store.close()
+
     def test_storage_no_adoption_or_overlap(self):
         other = self.base / 'unowned'; other.mkdir(mode=0o700)
         self.rejects(lambda: Store(other))
