@@ -151,7 +151,7 @@ final class FilesModel: ObservableObject {
             let next = path ?? currentPath
             let listed = try await client.list(path: next)
             entries = listed; currentPath = next; selection = nil
-            status = "\(listed.count)개 항목"
+            status = "표시된 \(listed.count)개 항목"
         }
     }
     func parent() {

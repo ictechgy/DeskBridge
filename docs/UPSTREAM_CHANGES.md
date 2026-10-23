@@ -42,7 +42,7 @@ Control and lifecycle robustness, 2026-10-23:
 
 Launch cancellation and parser limits, 2026-10-23:
 
-- Session/StreamSession+Start.swift: clear the shared initial-launch request deadline on success, failure and cancellation before checking the next startup attempt. The paired NetworkClient can subsequently refresh the PC with its normal per-request budget.
+- Session/StreamSession+Start.swift: consume takeover consent immediately after a successful launch, before the next actor hop or attempt check; a failed launch retains consent for retry. Clear the shared initial-launch request deadline on success, failure and cancellation before checking the next startup attempt. The paired NetworkClient can subsequently refresh the PC with its normal per-request budget.
 - Session/StreamSession+Lifecycle.swift: disconnect-only stop cancels the inner pending launch task as well as its outer waiter; the owned-host cancellation disposition retains its bounded late-success cleanup. This does not authorize a disconnect-only session to send host `/cancel`.
 - Session/NativeBackend.swift and StreamSession+Connect.swift: classify mandatory stream-encryption policy failures as typed security errors and preserve typed backend errors through reconnect cleanup, so shell guidance can name encryption, blocked ports or timeouts.
 - Network/Network+Support.swift: bound XML input to 4 MiB, nesting to 64 elements, node count to 16,384 and retained character/CDATA text to 4 MiB. Budget exhaustion aborts parsing and rejects the response; it does not relax TLS pins or introduce a plaintext fallback.

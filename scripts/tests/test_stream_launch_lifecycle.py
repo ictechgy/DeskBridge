@@ -56,10 +56,17 @@ def make_fixture():
     sources = {key: (ENGINE / name).read_text() for key, name in names.items()}
     start = block(sources["start"], "package func start(")
     begin = start.index("        let launch: LaunchResponse\n")
-    end = start.index("        takeoverAuthorized = false", begin)
+    end = start.index("        if publicMedia != nil", begin)
     initial = start[begin:end]
     assert initial.count("launch = try await launchWithDeadline(") == 1
     assert initial.rstrip().endswith("try checkAttempt()")
+    # Only the two deadline-clear leaves gain an inert continuation gate. The
+    # wrapper then calls the unchanged actual setter; all actor-local ordering,
+    # catch/throw and attempt checks remain the complete extracted source block.
+    assert initial.count("await network.setRequestDeadline(nil)") == 2
+    gated_initial = initial.replace("await network.setRequestDeadline(nil)",
+                                    "await network.setRequestDeadlineAtGate(nil)")
+    consent_property = re.search(r"(?m)^    package var takeoverAuthorized = false$", sources["session"])[0]
     # Bind the refresh leaf to its actual /serverinfo caller without replacing TLS/endpoint policy.
     endpoint = block(sources["endpoints"], "public func fetchServerInfo(")
     assert 'rawRequest(path: "serverinfo"' in endpoint
@@ -173,6 +180,7 @@ package actor NetworkClient {
     static let controlTimeout: TimeInterval = 5
     static let wireUniqueID = "SYNTHETIC_ID"
     let transport: Transport
+    var deadlineClearGate: AsyncGate?
     init(_ ledger: TransportLedger) {
         self.ledger = ledger
         transport = { _, _, target, _, paired, credential, timeout in
@@ -183,6 +191,11 @@ package actor NetworkClient {
     static func notPaired(_ pc: String) -> StreamError { .pairingFailed(pc) }
     static func requestNonce() -> String { "SYNTHETIC_NONCE" }
     func cancel() async throws { await ledger.recordCancel() }
+    func holdDeadlineClear(_ gate: AsyncGate) { deadlineClearGate = gate }
+    func setRequestDeadlineAtGate(_ deadline: Date?) async {
+        if let gate = deadlineClearGate { try? await gate.wait() }
+        setRequestDeadline(deadline)
+    }
     __SET_DEADLINE__
     __DATA_REQUEST__
     __REQUEST_ERROR__
@@ -257,6 +270,7 @@ public actor StreamSession {
     var publicInput: PublicInput?, publicTerminal = false
     var isStreaming = true, stopInProgress = false, waitingForVideo = true
     var stopCause: DisconnectReason?
+__TAKEOVER_PROPERTY__
     var teardown = SharedTeardown()
     var initialServerInfoTask: Task<ServerInfo, Error>?
     var launchTask: Task<LaunchResponse, Error>?, pendingLaunch: Task<LaunchResponse, Error>?
@@ -284,6 +298,7 @@ public actor StreamSession {
     func noteTelemetryDisconnect(_ cause: DisconnectReason) {}
     func installOuterLaunch(_ task: Task<LaunchResponse, Error>) { launchTask = task }
     func pendingWasCancelled() -> Bool { pendingLaunch?.isCancelled ?? false }
+    func authorizeTakeover() { takeoverAuthorized = true }
     func launchWithDeadline(network: NetworkClient, appID: Int, config: StreamRequest, info: ServerInfo) async throws -> LaunchResponse {
         // Inert launch leaf deliberately returns with an expired shared budget; no clock sleep/network.
         await network.setRequestDeadline(Date.distantPast)
@@ -337,6 +352,34 @@ func syntheticLaunch() -> LaunchResponse {
             let body = try await client.dataRequest(path: "serverinfo", query: [:], usePaired: true, timeout: 0.5)
             try expect(body == Data("synthetic-refresh".utf8), "same client refresh inherited a stale launch deadline")
             try expect(await client.ledger.targets.count == 1, "fresh refresh did not reach its inert transport exactly once")
+        }
+        for outcome: InitialOutcome in [.success, .failure] {
+            let ledger = TransportLedger(), client = NetworkClient(ledger), gate = AsyncGate()
+            await client.holdDeadlineClear(gate)
+            let session = StreamSession(network: client, outcome: outcome)
+            await session.authorizeTakeover()
+            let starting = Task { try await session.initialLaunch(network: client) }
+            await gate.waitEntered()
+            if outcome == .success {
+                try expect(await session.takeoverAuthorized == false,
+                           "successful launch yielded with stale takeover consent")
+                await session.stop(cause: .userStopped)
+                try expect(await session.takeoverAuthorized == false,
+                           "stop during deadline clear retained consumed takeover consent")
+            } else {
+                try expect(await session.takeoverAuthorized,
+                           "failed launch consumed takeover consent before retry")
+            }
+            await gate.release()
+            if case .failure(let error) = await starting.result {
+                if outcome == .success {
+                    try expect(error is CancellationError, "held-clear stop lost cancellation")
+                } else if case .hostRefused(_, 503) = error as? StreamError {
+                    try expect(true, "held-clear launch failure preserved diagnosis")
+                } else { throw CheckFailure(message: "held-clear failure lost host refusal") }
+            } else { throw CheckFailure(message: "held-clear launch unexpectedly completed") }
+            try expect(await session.takeoverAuthorized == (outcome == .failure),
+                       "attempt exit changed one-shot takeover consent")
         }
         let cancelLedger = TransportLedger(), cancelClient = NetworkClient(cancelLedger), cancelGate = AsyncGate()
         let cancelledStart = StreamSession(network: cancelClient, outcome: .suspended, gate: cancelGate)
@@ -416,7 +459,7 @@ func syntheticLaunch() -> LaunchResponse {
 '''
     replacements = {
         "__CONTRACT__": contract, "__CONSTANTS__": constants,
-        "__INITIAL_BLOCK__": methods["initialLaunchBlock"],
+        "__INITIAL_BLOCK__": gated_initial, "__TAKEOVER_PROPERTY__": consent_property,
         "__SET_DEADLINE__": methods["setRequestDeadline"], "__DATA_REQUEST__": methods["dataRequest"],
         "__REQUEST_ERROR__": methods["requestError"], "__CODEC_MASK__": methods["codecMask"],
         "__CHECK_ATTEMPT__": methods["checkAttempt"], "__STOP__": methods["stop"],
@@ -434,6 +477,7 @@ func syntheticLaunch() -> LaunchResponse {
                          for key, value in sources.items()},
         "extractedSHA256": {key: hashlib.sha256(value.encode()).hexdigest() for key, value in methods.items()},
         "fixtureSHA256": hashlib.sha256(fixture.encode()).hexdigest(),
+        "deadlineClearLeafAdaptations": 2,
         "scope": "source-extracted synthetic regression; initial launch leaf and all transport/media/teardown leaves inert; not native/device acceptance",
     }
     return fixture, binding

@@ -14,6 +14,10 @@ import Foundation
     func finish() { running = false; onExit?() }
 }
 
+@MainActor private final class SyntheticMacHostDownloadOwner {
+    weak var model: MacHostModel?
+}
+
 @MainActor func runMacHostChecks(temporary: URL) async throws -> Int {
     var count = 0
     func expect(_ value: Bool, _ message: String) throws {
@@ -109,6 +113,25 @@ import Foundation
     child.finish(); try expect(model.phase == .stopped && model.errorMessage == nil, "requested host stop reported failure")
     model.download(to: fixture.appendingPathComponent("synthetic.dmg")); try await settle { !model.downloading }
     try expect(downloads == 1 && model.downloadedURL != nil && starts == 1, "download launched a host")
+
+    // A normal provider return means the exclusive final copy committed. A
+    // cancellation request at that boundary must preserve its published URL.
+    let committedOwner = SyntheticMacHostDownloadOwner()
+    let committedDestination = fixture.appendingPathComponent("synthetic-committed.dmg")
+    let committedHost = MacHostModel(operations: .init(installed: { true }, addresses: { addresses },
+        start: { _, _, _ in SyntheticMacHostChild() }, download: { _ in committedOwner.model?.cancelDownload() }))
+    committedOwner.model = committedHost
+    committedHost.download(to: committedDestination)
+    try await settle { !committedHost.downloading }
+    try expect(committedHost.downloadedURL == committedDestination && committedHost.errorMessage == nil &&
+               committedHost.status == "취소를 요청했지만 DMG 저장을 마쳤습니다.",
+               "cancellation racing a committed provider return hid the saved DMG or claimed cancellation")
+    let uncommittedHost = MacHostModel(operations: .init(installed: { true }, addresses: { addresses },
+        start: { _, _, _ in SyntheticMacHostChild() }, download: { _ in throw CancellationError() }))
+    uncommittedHost.download(to: fixture.appendingPathComponent("synthetic-uncommitted.dmg"))
+    try await settle { !uncommittedHost.downloading }
+    try expect(uncommittedHost.downloadedURL == nil && uncommittedHost.errorMessage == nil && uncommittedHost.status == "다운로드 취소됨",
+               "pre-commit provider cancellation was reported as a committed download")
 
     // Application activation reads installation presence only; no UI, preferences, or network.
     let activationCenter = NotificationCenter()

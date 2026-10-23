@@ -2236,21 +2236,20 @@ diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Ses
 +        reachedLiveState = false
 @@ -42,0 +44 @@
 +        refreshPowerAssertion()
-@@ -78 +80,10 @@
+@@ -78,3 +80,10 @@
 -        let launch = try await launchWithDeadline(network: network, appID: appID, config: config, info: serverInfo)
+-        try checkAttempt()
+-        takeoverAuthorized = false
 +        let launch: LaunchResponse
 +        do {
 +            launch = try await launchWithDeadline(network: network, appID: appID, config: config, info: serverInfo)
++            takeoverAuthorized = false
 +        } catch {
 +            // The shell reuses this paired client for the next PC refresh. An
 +            // expired launch budget must never poison a later retry or pairing.
 +            await network.setRequestDeadline(nil)
 +            throw error
 +        }
-+        await network.setRequestDeadline(nil)
-@@ -81,2 +91,0 @@
--        await network.setRequestDeadline(nil)
--        try checkAttempt()
 @@ -180 +189 @@
 -        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
 +        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)

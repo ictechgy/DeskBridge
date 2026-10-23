@@ -80,6 +80,7 @@ extension StreamSession {
         let launch: LaunchResponse
         do {
             launch = try await launchWithDeadline(network: network, appID: appID, config: config, info: serverInfo)
+            takeoverAuthorized = false
         } catch {
             // The shell reuses this paired client for the next PC refresh. An
             // expired launch budget must never poison a later retry or pairing.
@@ -88,7 +89,6 @@ extension StreamSession {
         }
         await network.setRequestDeadline(nil)
         try checkAttempt()
-        takeoverAuthorized = false
 
         if publicMedia != nil { try launch.validateSessionKey() }
 

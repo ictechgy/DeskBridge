@@ -135,7 +135,7 @@ struct FilesPage: View {
             if model.entries.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "folder").font(.system(size: 28, weight: .light))
-                    Text(model.busy ? "파일 목록을 확인하는 중…" : "이 폴더에는 항목이 없습니다.")
+                    Text(model.busy ? "파일 목록을 확인하는 중…" : "표시할 수 있는 항목이 없습니다.")
                 }
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 240)
@@ -150,7 +150,7 @@ struct FilesPage: View {
 
             Divider()
             HStack(spacing: 12) {
-                Text("\(model.entries.count)개 항목")
+                Text("표시된 \(model.entries.count)개 항목")
                 Spacer()
                 if let entry = model.selectedEntry {
                     Text("\(entry.name) 선택됨").lineLimit(1).truncationMode(.middle)
@@ -161,6 +161,12 @@ struct FilesPage: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .padding(12)
+            Text("지원하지 않는 이름·경로의 항목은 생략됩니다. Windows에서 이름이나 폴더 위치를 바꾼 뒤 새로고침하세요.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
         }
         .quietPanel()
     }

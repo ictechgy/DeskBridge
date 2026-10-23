@@ -116,10 +116,10 @@ import Foundation
             defer { downloading = false; downloadTask = nil }
             do {
                 try await operations.download(destination)
-                try Task.checkCancellation()
                 guard !shuttingDown else { throw CancellationError() }
                 downloadedURL = destination; installed = operations.installed()
-                status = "DMG 크기·SHA256 확인 완료 · DMG를 열고 Sunshine을 Applications로 옮기세요."
+                status = Task.isCancelled ? "취소를 요청했지만 DMG 저장을 마쳤습니다."
+                    : "DMG 크기·SHA256 확인 완료 · DMG를 열고 Sunshine을 Applications로 옮기세요."
             } catch is CancellationError { status = "다운로드 취소됨" }
             catch { errorMessage = fixedMessage(error); status = phase == .running ? "공유 프로세스 실행 중" : "공유 꺼짐" }
         }
