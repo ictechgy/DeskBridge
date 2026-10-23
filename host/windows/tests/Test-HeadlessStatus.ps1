@@ -71,3 +71,5 @@ try {
     }
 } finally { [IO.Directory]::Delete($root,$true) }
 [pscustomobject]@{status='passed';checks=$count;freshSyntheticOnly=$true;nativeApisInvoked=$false;bootstrapPolicyComposed=[bool]$BootstrapPolicyRunner} | ConvertTo-Json -Compress
+# Expected failing child fixtures must not become the successful checker's process status.
+$global:LASTEXITCODE=0
