@@ -1,10 +1,20 @@
 # Knot 설치
 
-공개 배포 전 개발 프리뷰입니다. macOS 26 이상 Apple Silicon Mac과 Windows 11 x64를 지원합니다. 실제 두 기기 연결 검증은 아직 남아 있습니다.
+개발 프리뷰 **0.2.0-preview.16**입니다. 실제 기기 설치와 두 기기 연결 검증은 아직 남아 있습니다.
+
+| 컴퓨터 | 다운로드 | 요구 사항 |
+| --- | --- | --- |
+| Mac | [DMG](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-macos-arm64-preview.dmg) | Apple Silicon, macOS 26 이상 |
+| Windows | [설치 EXE](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-windows-x64-setup.exe) | Windows 11 x64, Home 포함 |
+| Linux 호스트 | [DEB](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/Knot-0.2.0-preview.16-ubuntu24.04-amd64-preview.deb) | Ubuntu 24.04 LTS amd64, 로그인한 X11 데스크톱 |
+
+[릴리스 안내·대응 소스](https://github.com/ictechgy/Knot/releases/tag/v0.2.0-preview.16) · [SHA256SUMS](https://github.com/ictechgy/Knot/releases/download/v0.2.0-preview.16/SHA256SUMS)
+
+Mac 패키지는 ad-hoc 서명·미공증, Windows EXE는 미서명입니다. 이 배포 프리뷰의 가상 화면 자동 설치는 드라이버 안전성 검토로 비활성화되어 있습니다. 무모니터 동작을 전제로 사용하지 마세요.
 
 ## Mac에서 Windows 열기
 
-1. **Windows:** 동봉된 **Knot-…-windows-x64-quick-setup-preview.exe**를 두 번 클릭하고 **이 Windows 공유**를 고릅니다. ZIP 압축 해제나 PowerShell 명령 입력은 필요 없습니다. **관리자 권한으로 실행**을 선택하지 마세요.
+1. **Windows:** **Knot-…-windows-x64-setup.exe**를 두 번 클릭하고 설치 과정의 UAC 요청을 승인합니다. 설치 후 시작 메뉴의 **Knot 설정**을 열고 **이 Windows 공유**를 고릅니다. 설치 프로그램은 시작 메뉴와 제거 기능을 제공하며 설치 후 도우미를 원래 사용자 권한으로 엽니다. ZIP 압축 해제나 PowerShell 명령 입력은 필요 없습니다. EXE를 **관리자 권한으로 실행**할 필요는 없습니다.
 2. 안내창의 **Sunshine 설치**를 누릅니다. 고정된 공식 MSI의 크기·SHA256를 검증한 뒤 설치 화면이 열립니다. 이미 Sunshine이 있다면 설치를 건너뛰세요. 설치 후 Sunshine 설정 창이 열립니다.
 3. Sunshine에서 초기 계정을 만들고 **Configuration → Network**의 LAN/WAN 암호화를 **둘 다 Mandatory**로 저장합니다. Desktop 앱을 확인하세요. 이 초기 설정은 아직 직접 해야 합니다. 계정·암호는 Knot에 전달하지 않습니다. 게임패드 드라이버는 업무용 키보드·마우스 연결에 필요하지 않습니다.
 4. **Mac:** DMG를 열고 **Knot.app → Applications**로 드래그해 실행합니다. 로컬 네트워크 권한을 허용하고 **근처 Windows PC → 이 PC 확인 → PIN으로 연결**을 누릅니다. Mac에 나온 PIN을 Sunshine의 PIN 메뉴에 입력한 뒤 **Windows 열기**를 누릅니다.
@@ -19,7 +29,7 @@ Mac의 확인 창에서 PC 이름과 LAN/Tailscale 주소를 고르면 기존 PC
 
 자동 검색은 같은 로컬 네트워크의 Sunshine Bonjour 알림을 사용하며 Tailscale 너머의 PC를 자동 열거하지 않습니다. 게스트 Wi-Fi의 기기 격리나 mDNS 차단, 거부된 Mac 로컬 네트워크 권한, 중지된 Sunshine에서는 목록이 비어 있을 수 있습니다. 이때 QR/링크 경로를 사용하세요. 이 프리뷰의 검색/QR은 Sunshine 기본 포트를 전제로 합니다.
 
-quick-setup EXE는 안내창을 바로 여는 단일 실행 파일입니다. 도우미 자체를 시작 메뉴에 등록하는 설치 프로그램은 아닙니다. 일반 화면은 사용자 전용 임시 폴더, 관리자 작업은 보호된 Program Files 아래의 임시 폴더를 사용하고 종료 시 자신이 만든 파일만 정리합니다. 다시 설정하려면 원래 EXE를 다시 여세요. `…-windows-x64-setup.exe`는 Windows CI에서 별도로 만드는 시작 메뉴·제거 기능 포함 설치 프로그램입니다.
+설치 없이 안내창만 바로 열고 싶다면 릴리스의 `…-windows-x64-quick-setup-preview.exe`를 일반 사용자로 실행할 수 있습니다. 이 고급 대체 경로는 시작 메뉴에 등록하지 않으므로 다시 설정하려면 원래 EXE를 여세요. 일반 화면은 사용자 전용 임시 폴더, 관리자 작업은 보호된 Program Files 아래의 임시 폴더를 사용하고 종료 시 자신이 만든 파일만 정리합니다.
 
 ## Windows에서 Mac 열기
 
@@ -48,9 +58,9 @@ Moonlight는 전용 portable 프로필을 쓰며 기존 사용자 설정·인증
 
 ## 프리뷰 서명 상태
 
-현재 로컬 Mac 패키지는 ad-hoc 서명이며 Apple 공증이 없습니다. 공개 릴리스는 Developer ID 서명·공증을 완료해야 합니다. Gatekeeper나 조직 보안 정책을 끄는 설치법은 제공하지 않습니다.
+현재 개발 프리뷰의 Mac 패키지는 ad-hoc 서명이며 Apple 공증이 없습니다. 정식 릴리스는 Developer ID 서명·공증을 완료해야 합니다. Gatekeeper나 조직 보안 정책을 끄는 설치법은 제공하지 않습니다.
 
-quick-setup EXE는 Mac에서도 교차 컴파일합니다. Windows 실행·UAC·설치 동작은 실제 Windows에서 검증해야 합니다. 로컬 EXE는 Authenticode 서명이 없는 프리뷰이므로 SmartScreen 경고가 나타날 수 있습니다. 네이티브 실행 파일이 내장 관리 도우미의 해시를 확인하고 제한된 환경에서 Windows 기본 .NET Framework와 PowerShell을 시작합니다. 사용자가 별도 개발 도구를 설치할 필요는 없습니다.
+Windows 설치·quick-setup EXE는 Authenticode 서명이 없는 프리뷰이므로 SmartScreen 경고가 나타날 수 있습니다. quick-setup EXE는 Mac에서도 교차 컴파일합니다. Windows 실행·UAC·설치 동작은 실제 Windows에서 검증해야 합니다. 네이티브 실행 파일이 내장 관리 도우미의 해시를 확인하고 제한된 환경에서 Windows 기본 .NET Framework와 PowerShell을 시작합니다. 사용자가 별도 개발 도구를 설치할 필요는 없습니다.
 
 동봉 PowerShell 스크립트는 정확한 소스 바이트를 유지하며 Authenticode 서명이 없습니다. EXE/설치 프로그램에 서명해도 스크립트의 개별 서명이 생기지는 않습니다. 도우미는 해당 PowerShell 프로세스에만 RemoteSigned를 요청하며 영구 정책을 바꾸지 않습니다. 조직에서 AllSigned를 강제하면 별도로 서명한 스크립트나 조직에서 승인한 수동 배포가 필요합니다. 정책을 끄거나 우회하지 마세요. 로컬 portable ZIP과 Setup.cmd는 개발자 대체 경로입니다.
 
