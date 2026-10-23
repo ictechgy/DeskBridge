@@ -444,24 +444,30 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
 }
 
 /// Compiles and runs only this new inert fixture, never Sunshine or app main.
-/// A forked child may not outlive its owned host, while a separately launched
-/// companion must remain unaffected by that cleanup.
+/// The owned host cannot fork; an unrelated companion remains unaffected.
 @MainActor private func runOwnedMacHostProcessChecks(temporary: URL) async throws -> Int {
     let source = temporary.appendingPathComponent("owned-process.c")
     let executable = temporary.appendingPathComponent("owned-process")
     let forkMarker = temporary.appendingPathComponent("fork-escaped")
     let forkStarted = temporary.appendingPathComponent("fork-escaped.started")
+    let forkDenied = temporary.appendingPathComponent("fork-escaped.denied")
     let companionMarker = temporary.appendingPathComponent("companion-completed")
     let code = """
     #include <unistd.h>
     #include <stdio.h>
     #include <string.h>
     #include <signal.h>
+    #include <errno.h>
     int main(int argc, char **argv) {
       if (argc != 3) return 2;
       if (strcmp(argv[1], "fork") == 0) {
         pid_t p = fork();
-        if (p < 0) return 4;
+        if (p < 0) {
+          if (errno != EPERM) return 4;
+          char proof[4096]; snprintf(proof, sizeof(proof), "%s.denied", argv[2]);
+          FILE *f = fopen(proof, "wx"); if (!f) return 5; fputs("SYNTHETIC EPERM", f); fclose(f);
+          return 0;
+        }
         if (p > 0) {
           char proof[4096]; snprintf(proof, sizeof(proof), "%s.started", argv[2]);
           FILE *f = fopen(proof, "wx"); if (!f) return 5; fputs("SYNTHETIC", f); fclose(f);
@@ -492,10 +498,11 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
     guard !owned.running else { owned.forceStop(); throw ModelCheckFailure(message: "owned parent exit did not settle") }
     try await Task.sleep(for: .milliseconds(600))
     companion.waitUntilExit()
-    guard FileManager.default.fileExists(atPath: forkStarted.path),
+    guard (try? Data(contentsOf: forkDenied)) == Data("SYNTHETIC EPERM".utf8),
+          !FileManager.default.fileExists(atPath: forkStarted.path),
           !FileManager.default.fileExists(atPath: forkMarker.path), companion.terminationStatus == 0,
           FileManager.default.fileExists(atPath: companionMarker.path) else {
-        throw ModelCheckFailure(message: "owned group cleanup escaped or affected unrelated companion")
+        throw ModelCheckFailure(message: "owned host fork was not denied or cleanup affected unrelated companion")
     }
     let linger = try MacHostChild(executable: executable, arguments: ["linger", forkMarker.path])
     try await Task.sleep(for: .milliseconds(30))
