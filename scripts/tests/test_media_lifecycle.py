@@ -8,6 +8,7 @@ bookkeeping is real; the unexercised RS decoder and display are inert stand-ins.
 from pathlib import Path
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -2101,7 +2102,7 @@ handoff_fixture += r'''
                 expect(phases == ["live", "waiting", "ended"], "actual stop prefix clears waiting silently without restoring old live frame")
             }
             if mode == .waitingPCIdle {
-                expect(Array(events.prefix(3)) == ["frame", "waiting-true", "terminated"] && events.last == "stopped", "actual PC-ended stop follows terminal with its stop suffix")
+                expect(events == ["frame", "waiting-true", "terminated", "stopped"], "actual PC-ended stop has no stray event between terminal and stopped")
                 expect(Array(phases.prefix(3)) == ["live", "waiting", "ended"] && phases.dropFirst(2).allSatisfy { $0 == "ended" }, "actual shell stays ended through the real stop prefix and suffix")
                 expect(banners.isEmpty && stats.1.isEmpty, "clean waiting PC-end has no card or host launch")
             }
@@ -2135,22 +2136,43 @@ with tempfile.TemporaryDirectory(prefix="knot-preannouncement-closure-", dir="/t
 # guard, then choose both finish orders explicitly; no timer race decides order.
 wake_owner_fixture = handoff_fixture[:handoff_fixture.index("@main struct PreannouncementClosureChecks")]
 wake_gates = r'''
-final class WakeGate: @unchecked Sendable {
-    let passed = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0)
-}
-final class WakeHandoff: @unchecked Sendable {
-    private let lock = NSLock()
-    private var gates: [UUID: WakeGate] = [:]
-    func gate(_ id: UUID) -> WakeGate {
-        lock.withLock { if let gate = gates[id] { return gate }; let gate = WakeGate(); gates[id] = gate; return gate }
+actor WakeGate {
+    private var entered = false, released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releasedWaiters: [CheckedContinuation<Void, Never>] = []
+    func enterAndWait() async {
+        entered = true
+        let waiters = enteredWaiters; enteredWaiters = []
+        for waiter in waiters { waiter.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releasedWaiters.append($0) }
     }
-    func pause(probeID: UUID) { let gate = gate(probeID); gate.passed.signal(); wait(gate.release) }
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+    func release() {
+        released = true
+        let waiters = releasedWaiters; releasedWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+}
+actor WakeHandoff {
+    private var gates: [UUID: WakeGate] = [:]
+    private func gate(_ id: UUID) -> WakeGate {
+        if let gate = gates[id] { return gate }
+        let gate = WakeGate(); gates[id] = gate; return gate
+    }
+    func pause(probeID: UUID) async { await gate(probeID).enterAndWait() }
+    func waitUntilEntered(_ id: UUID) async { await gate(id).waitUntilEntered() }
+    func release(_ id: UUID) async { await gate(id).release() }
 }
 '''
 wake_owner_fixture = wake_owner_fixture.replace(block(wake_owner_fixture, "final class WakeHandoff:"), wake_gates, 1)
-wake_owner_fixture = wake_owner_fixture.replace("wakeHandoff.pauseOnce()", "wakeHandoff.pause(probeID: probeID)", 1)
-wake_owner_fixture = wake_owner_fixture.replace("struct InertWakeRTT", "let wakeHealthReads = Locked(0)\nstruct InertWakeRTT", 1)
+wake_owner_fixture = wake_owner_fixture.replace("wakeHandoff.pauseOnce()", "await wakeHandoff.pause(probeID: probeID)", 1)
+wake_owner_fixture = wake_owner_fixture.replace("struct InertWakeRTT", "let wakeHealthReads = Locked(0), wakeTelemetryReasonWrites = Locked(0)\nstruct InertWakeRTT", 1)
 wake_owner_fixture = wake_owner_fixture.replace("    func enetHealth() -> InertWakeHealth? { nil }", "    var syntheticWakeHealth: InertWakeHealth?\n    func enetHealth() -> InertWakeHealth? { wakeHealthReads.use { $0 += 1 }; return withState { syntheticWakeHealth } }", 1)
+wake_owner_fixture = wake_owner_fixture.replace("func setDisconnectReason(_ reason: DisconnectReason) {}", "func setDisconnectReason(_ reason: DisconnectReason) { wakeTelemetryReasonWrites.use { $0 += 1 } }", 1)
 wake_owner_fixture = wake_owner_fixture.replace("    var wakeProbeTask: Task<Void, Never>?", "    var wakeTerminationEntries: [Bool] = []\n    var wakeProbeTask: Task<Void, Never>?", 1)
 # This entry recorder observes the full production consumer without replacing it.
 handler = block(wake_owner_fixture, "func handleHostTerminate(")
@@ -2158,6 +2180,8 @@ opening = handler.index("{")
 recorded_handler = handler[:opening + 1] + "\n        wakeTerminationEntries.append(Task.isCancelled)" + handler[opening + 1:]
 wake_owner_fixture = wake_owner_fixture.replace(handler, recorded_handler, 1)
 wake_owner_fixture = wake_owner_fixture.replace("    func startObservedWake()", r'''
+    var stopWindow: WakeGate?
+    func pauseNextStop() -> WakeGate { let gate = WakeGate(); stopWindow = gate; return gate }
     func startTaggedWake() async -> (Task<Void, Never>, UUID) {
         await handleSystemWake()
         return (wakeProbeTask!, wakeProbeID!)
@@ -2174,6 +2198,12 @@ wake_owner_fixture = wake_owner_fixture.replace("    func startObservedWake()", 
         await finishWakeProbe(budgetMs: 1, probeID: id, armedAttempt: attemptID)
     }
     func startObservedWake()''', 1)
+# Production can suspend after this actual stop prefix and before observer
+# invalidation. Model that window explicitly without adding a production await.
+owner_stop = block(wake_owner_fixture, "func stop(cause:")
+owner_stop_window = owner_stop.replace("        teardownWakeObservers()", "        if let gate = stopWindow { await gate.enterAndWait(); stopWindow = nil }\n        teardownWakeObservers()", 1)
+assert owner_stop_window != owner_stop
+wake_owner_fixture = wake_owner_fixture.replace(owner_stop, owner_stop_window, 1)
 owner_finish = block(wake_source, "private func finishWakeProbe(")
 assert owner_finish.index("guard !Task.isCancelled, wakeProbeID == probeID else { return }") < owner_finish.index("wakeProbeTask = nil")
 assert block(wake_source, "package func teardownWakeObservers(").index("wakeProbeID = nil") < block(wake_source, "package func teardownWakeObservers(").index("wakeProbeTask?.cancel()")
@@ -2184,30 +2214,34 @@ wake_owner_fixture += r'''
         var checks = 0
         func expect(_ value: Bool, _ message: String) { precondition(value, message); checks += 1 }
         func makeSession() async -> (StreamSession, Schedule, Bridge) {
-            inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }; wakeHealthReads.use { $0 = 0 }
+            inputTrace.use { $0 = [] }; decodedFrames.use { $0 = 0 }; wakeHealthReads.use { $0 = 0 }; wakeTelemetryReasonWrites.use { $0 = 0 }
             let schedule = Schedule(.waitingSameApp), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
             let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
             bridge.session = session; await schedule.setSession(session); await session.prepareLive()
             return (session, schedule, bridge)
         }
+        let releasedEarly = WakeGate()
+        await releasedEarly.release(); await releasedEarly.release()
+        await releasedEarly.enterAndWait(); await releasedEarly.waitUntilEntered()
+        expect(true, "async gate remembers release before arrival and repeated release is idempotent")
         for oldFirst in [true, false] {
             let (session, schedule, bridge) = await makeSession()
-            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
-            let (replacement, replacementID) = await session.startTaggedWake(); wait(wakeHandoff.gate(replacementID).passed)
+            let (first, firstID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(firstID)
+            let (replacement, replacementID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(replacementID)
             expect(first.isCancelled && firstID != replacementID, "real replacement cancels old producer and owns a fresh generation")
             let pending = await session.wakeOwnerState()
             expect(pending.0 == replacementID && pending.1 && pending.2.isEmpty, "both producer handoffs are parked with replacement handle intact")
             if oldFirst {
-                wakeHandoff.gate(firstID).release.signal(); await first.value
+                await wakeHandoff.release(firstID); await first.value
                 let discarded = await session.wakeOwnerState()
                 expect(discarded.0 == replacementID && discarded.1, "old finish cannot clear replacement handle or generation")
                 expect(discarded.2.isEmpty && bridge.values.use { $0 }.isEmpty, "discarded old finish never enters termination consumer")
-                wakeHandoff.gate(replacementID).release.signal(); await replacement.value
+                await wakeHandoff.release(replacementID); await replacement.value
             } else {
-                wakeHandoff.gate(replacementID).release.signal(); await replacement.value
+                await wakeHandoff.release(replacementID); await replacement.value
                 let recovered = await session.wakeOwnerState(), before = await session.cleanupState()
                 expect(before.0 && before.3 == 0 && recovered.2 == [false], "replacement alone completes uncancelled recovery before old release")
-                wakeHandoff.gate(firstID).release.signal(); await first.value
+                await wakeHandoff.release(firstID); await first.value
                 let after = await session.wakeOwnerState()
                 expect(after.3 == recovered.3 && after.2 == [false], "late old finish cannot tear down or replace recovered transport")
             }
@@ -2224,12 +2258,12 @@ wake_owner_fixture += r'''
         // even after another actual reconnect has committed a replacement.
         do {
             let (session, schedule, bridge) = await makeSession()
-            let (old, oldID) = await session.startTaggedWake(); wait(wakeHandoff.gate(oldID).passed)
+            let (old, oldID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(oldID)
             await session.recoverIndependently()
             let recovered = await session.wakeOwnerState(), before = await session.cleanupState()
             expect(!old.isCancelled && recovered.0 == oldID && recovered.1, "independent reconnect leaves old uncancelled wake owner parked")
             expect(before.0 && before.3 == 0 && recovered.2.isEmpty, "independent replacement completes without wake termination")
-            wakeHandoff.gate(oldID).release.signal(); await old.value
+            await wakeHandoff.release(oldID); await old.value
             let after = await session.wakeOwnerState(), state = await session.cleanupState()
             expect(after.0 == nil && !after.1 && after.3 == recovered.3, "old current owner may consume only its finished handle, never the new backend")
             expect(wakeHealthReads.use { $0 } == 0 && after.2.isEmpty, "stale arm-time attempt cannot read new health or drive any terminate")
@@ -2242,8 +2276,8 @@ wake_owner_fixture += r'''
         for fresh in [true, false] {
             let (session, schedule, bridge) = await makeSession()
             await session.configureWakeHealth(fresh ? 0 : 10_000)
-            let (probe, probeID) = await session.startTaggedWake(); wait(wakeHandoff.gate(probeID).passed)
-            wakeHandoff.gate(probeID).release.signal(); await probe.value
+            let (probe, probeID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(probeID)
+            await wakeHandoff.release(probeID); await probe.value
             let owner = await session.wakeOwnerState(), state = await session.cleanupState()
             expect(owner.0 == nil && !owner.1 && wakeHealthReads.use { $0 } == 1, "current owner consumes exactly one configured health sample")
             expect(owner.2 == (fresh ? [] : [false]), "fresh ACK does not terminate; stale ACK alone drives valid wake verdict")
@@ -2255,18 +2289,18 @@ wake_owner_fixture += r'''
         // cannot consume a newly armed generation while the session remains live.
         do {
             let (session, schedule, bridge) = await makeSession()
-            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
-            let (second, secondID) = await session.startTaggedWake(); wait(wakeHandoff.gate(secondID).passed)
+            let (first, firstID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(firstID)
+            let (second, secondID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(secondID)
             await session.invalidateWakeOwner()
             let invalid = await session.wakeOwnerState()
             expect(invalid.0 == nil && !invalid.1 && first.isCancelled && second.isCancelled, "observer teardown invalidates ownership and cancels stored task")
-            let (third, thirdID) = await session.startTaggedWake(); wait(wakeHandoff.gate(thirdID).passed)
-            wakeHandoff.gate(firstID).release.signal(); wakeHandoff.gate(secondID).release.signal()
+            let (third, thirdID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(thirdID)
+            await wakeHandoff.release(firstID); await wakeHandoff.release(secondID)
             await first.value; await second.value
             let untouched = await session.wakeOwnerState()
             expect(untouched.0 == thirdID && untouched.1 && untouched.2.isEmpty, "invalidated old finishes cannot clear rearmed generation")
             expect(bridge.values.use { $0 }.isEmpty && await session.liveInputStops() == 0, "invalidated old probes have no terminal or input effects")
-            wakeHandoff.gate(thirdID).release.signal(); await third.value
+            await wakeHandoff.release(thirdID); await third.value
             let state = await session.cleanupState()
             expect(state.0 && state.3 == 0, "only rearmed current generation may recover")
             expect(await schedule.policyStats().1 == ["resume"], "rearmed current producer resumes once")
@@ -2275,32 +2309,54 @@ wake_owner_fixture += r'''
         // A full stop invalidates both parked producers before either can act.
         do {
             let (session, _, bridge) = await makeSession()
-            let (first, firstID) = await session.startTaggedWake(); wait(wakeHandoff.gate(firstID).passed)
-            let (second, secondID) = await session.startTaggedWake(); wait(wakeHandoff.gate(secondID).passed)
+            let (first, firstID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(firstID)
+            let (second, secondID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(secondID)
             await session.stop(cause: .hostClosedClean)
-            wakeHandoff.gate(secondID).release.signal(); wakeHandoff.gate(firstID).release.signal()
+            await wakeHandoff.release(secondID); await wakeHandoff.release(firstID)
             await first.value; await second.value
             let owner = await session.wakeOwnerState(), state = await session.cleanupState()
             expect(owner.0 == nil && !owner.1 && owner.2.isEmpty, "stopped probe cannot consume handle or deliver stale verdict")
             expect(!state.0 && state.3 == 1 && bridge.values.use { $0 } == ["stopped"], "stopped probes cannot duplicate terminal or revive a stopped stream")
             await session.finalCleanup()
         }
+
+        // Exercise the real lifecycle flags before observer invalidation. The
+        // current producer is deliberately uncancelled throughout this window.
+        do {
+            let (session, _, bridge) = await makeSession()
+            let (current, currentID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(currentID)
+            let window = await session.pauseNextStop()
+            let stopping = Task { await session.stop(cause: .hostClosedClean) }
+            await window.waitUntilEntered()
+            let before = await session.wakeOwnerState(), stoppedPrefix = await session.cleanupState()
+            expect(!current.isCancelled && before.0 == currentID && before.1, "stop prefix suspends before canceling the still-owned current probe")
+            expect(!stoppedPrefix.0 && stoppedPrefix.3 == 1, "actual stop prefix has already marked the session stopped")
+            await wakeHandoff.release(currentID); await current.value
+            let consumed = await session.wakeOwnerState()
+            expect(consumed.0 == nil && !consumed.1 && consumed.2.isEmpty && wakeHealthReads.use { $0 } == 0 && wakeTelemetryReasonWrites.use { $0 } == 0, "uncancelled stopped owner cleans only its handle without health, telemetry or terminate effects")
+            expect(bridge.values.use { $0 }.isEmpty, "stop suffix remains suspended while stopped verdict is discarded")
+            expect(!current.isCancelled, "lifecycle rejection does not depend on task cancellation")
+            await window.release(); await stopping.value
+            let state = await session.cleanupState()
+            expect(!state.0 && state.3 == 1 && bridge.values.use { $0 } == ["stopped"], "resumed stop finishes once after the stopped-owner window")
+            await session.finalCleanup()
+        }
         // Defensive entry checks deliberately call the actual actor consumer from
         // a fresh task; these are separate from real stored-producer schedules.
         for cancelDriver in [false, true] {
             let (session, _, bridge) = await makeSession()
-            let (current, currentID) = await session.startTaggedWake(); wait(wakeHandoff.gate(currentID).passed)
+            let (current, currentID) = await session.startTaggedWake(); await wakeHandoff.waitUntilEntered(currentID)
             let attemptedID = cancelDriver ? currentID : UUID()
             await Task { await session.defensiveProbeEntry(attemptedID, cancelDriver: cancelDriver) }.value
             let pending = await session.wakeOwnerState()
             expect(pending.0 == currentID && pending.1 && pending.2.isEmpty, "noncurrent generation or canceled entry cannot consume valid owner")
             expect(bridge.values.use { $0 }.isEmpty && await session.liveInputStops() == 0, "defensive rejected entry has no liveness side effects")
-            wakeHandoff.gate(currentID).release.signal(); await current.value
+            await wakeHandoff.release(currentID); await current.value
             let state = await session.cleanupState()
             expect(state.0 && state.3 == 0, "valid current producer still recovers after rejected synthetic entry")
             await session.finalCleanup()
         }
-        print("{\"status\":\"passed\",\"wakeProbeOwnershipChecks\":\(checks),\"scope\":\"actual Wake generation producer/replacement/finish/teardown and complete recovery; both handoffs barriered for both orders, observer rearm and stopped lifecycle; separate defensive actor-entry checks; inert resources only\"}")
+        print("{\"status\":\"passed\",\"wakeProbeOwnershipChecks\":\(checks),\"scope\":\"actual Wake generation producer/replacement/finish/teardown and complete recovery; both handoffs use async continuation barriers for both orders, observer rearm and uncancelled stop-prefix window; separate defensive actor-entry checks; inert resources only\"}")
     }
 }
 '''
@@ -2313,6 +2369,26 @@ with tempfile.TemporaryDirectory(prefix="knot-wake-owner-", dir="/tmp") as direc
     argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
     print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
     subprocess.run(argv, check=True, timeout=90)
-    subprocess.run([str(executable)], check=True, timeout=30)
+    binary_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+    normal_env = os.environ.copy()
+    normal_env.pop("LIBDISPATCH_COOPERATIVE_POOL_STRICT", None)
+    normal = subprocess.run([str(executable)], env=normal_env, capture_output=True, text=True, timeout=30)
+    sys.stdout.write(normal.stdout); sys.stdout.flush()
+    sys.stderr.write(normal.stderr)
+    normal.check_returncode()
+    strict_env = normal_env.copy(); strict_env["LIBDISPATCH_COOPERATIVE_POOL_STRICT"] = "1"
+    strict = subprocess.run([str(executable)], env=strict_env, capture_output=True, text=True, timeout=30)
+    if strict.returncode != 0:
+        sys.stderr.write(strict.stdout); sys.stderr.write(strict.stderr)
+    strict.check_returncode()
+    assert json.loads(normal.stdout) == json.loads(strict.stdout), "same Wake binary must pass identical checks in normal and strict configurations"
+    assert binary_sha256 == hashlib.sha256(executable.read_bytes()).hexdigest()
+    # Strict is a repeated configuration of this same suite, not another set of checks.
+    print(json.dumps({"wakeProbeOwnershipStrictRun": {
+        "sameCompiledBinarySHA256": binary_sha256, "exitCode": strict.returncode,
+        "environmentOverride": {"LIBDISPATCH_COOPERATIVE_POOL_STRICT": "1"},
+        "repeatedAssertionCount": json.loads(strict.stdout)["wakeProbeOwnershipChecks"],
+        "stdoutSHA256": hashlib.sha256(strict.stdout.encode()).hexdigest(),
+        "stderrSHA256": hashlib.sha256(strict.stderr.encode()).hexdigest()}}), flush=True)
     print(json.dumps({"wakeProbeOwnershipFixtureSHA256": hashlib.sha256(wake_owner_fixture.encode()).hexdigest(),
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in (ENGINE / "Session/StreamSession+Wake.swift", ENGINE / "Session/StreamSession.swift", ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamSession+Lifecycle.swift")}}))
