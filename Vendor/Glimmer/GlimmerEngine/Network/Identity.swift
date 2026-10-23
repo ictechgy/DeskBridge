@@ -102,6 +102,53 @@ private enum IdentityPrivateStorage {
         try check(fd, directory: false, maximumBytes: maximumBytes)
         guard renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else { throw unsafe }
     }
+    static func entries(_ directory: Int32) throws -> Set<String> {
+        let copy = dup(directory)
+        guard copy >= 0 else { throw unsafe }
+        guard let stream = fdopendir(copy) else { close(copy); throw unsafe }
+        defer { closedir(stream) }
+        rewinddir(stream)
+        var names = Set<String>()
+        while true {
+            errno = 0
+            guard let entry = readdir(stream) else {
+                guard errno == 0 else { throw unsafe }; return names
+            }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
+            }
+            if name != "." && name != ".." { names.insert(name) }
+        }
+    }
+    static func named(_ parent: Int32, name: String, is fd: Int32) -> Bool {
+        var held = stat(), current = stat()
+        return fstat(fd, &held) == 0 && fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
+            held.st_dev == current.st_dev && held.st_ino == current.st_ino
+    }
+    /// Retain the new inode until publication/cleanup; never replace an existing stage entry.
+    static func exclusiveFile(_ parent: Int32, name: String, data: Data, maximumBytes: Int) throws -> Int32 {
+        guard valid(name), !data.isEmpty, data.count <= maximumBytes else { throw unsafe }
+        let fd = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { throw unsafe }
+        do {
+            try check(fd, directory: false, maximumBytes: maximumBytes)
+            try data.withUnsafeBytes { bytes in
+                var offset = 0
+                while offset < bytes.count {
+                    let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                    if count < 0 && errno == EINTR { continue }
+                    guard count > 0 else { throw unsafe }; offset += count
+                }
+            }
+            guard fsync(fd) == 0 else { throw unsafe }
+            try check(fd, directory: false, maximumBytes: maximumBytes)
+            return fd
+        } catch {
+            if named(parent, name: name, is: fd) { _ = unlinkat(parent, name, 0) }
+            close(fd)
+            throw error
+        }
+    }
     private static func valid(_ name: String) -> Bool {
         !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.utf8.contains(0)
     }
@@ -159,6 +206,86 @@ package enum FileIdentityStore {
         for account in [IdentityManager.accountCert, IdentityManager.accountKey, IdentityManager.accountUID] {
             _ = try read(account: account, base: base)
         }
+    }
+
+    /// A first publication may use only absent storage or an already-private empty directory.
+    /// Unknown entries are not a fresh install and must be refused before key generation.
+    package static func validateFreshStorage(base: URL) throws {
+        guard let directory = try openDirectory(base: base, create: false) else { return }
+        defer { close(directory) }
+        guard try IdentityPrivateStorage.entries(directory).isEmpty else { throw IdentityStorageError.unsafeStorage }
+    }
+
+    /// Publish a complete initial identity with one directory rename. Crashes before that
+    /// rename leave only private, unadopted staging directories; crashes after it leave all
+    /// three canonical files. Existing nonempty identities are never replaced or repaired.
+    package static func publishFresh(certificate: Data, privateKey: Data, uniqueID: Data, base: URL) throws {
+        let components = [(certFileName, certificate, limit(IdentityManager.accountCert)),
+                          (keyFileName, privateKey, limit(IdentityManager.accountKey)),
+                          (uidFileName, uniqueID, limit(IdentityManager.accountUID))]
+        guard components.allSatisfy({ !$0.1.isEmpty && $0.1.count <= $0.2 }),
+              let root = try IdentityPrivateStorage.directory(base, create: true)
+        else { throw IdentityStorageError.unsafeStorage }
+        defer { close(root) }
+        guard let glimmer = try IdentityPrivateStorage.child(root, name: "Glimmer", create: true)
+        else { throw IdentityStorageError.unsafeStorage }
+        defer { close(glimmer) }
+        let destination = try IdentityPrivateStorage.child(glimmer, name: "Identity", create: false)
+        defer { if let destination { close(destination) } }
+        if let destination {
+            guard try IdentityPrivateStorage.entries(destination).isEmpty else { throw IdentityStorageError.unsafeStorage }
+        }
+        let stageName = ".identity-" + UUID().uuidString
+        guard let stage = try IdentityPrivateStorage.child(glimmer, name: stageName, create: true, exclusive: true)
+        else { throw IdentityStorageError.unsafeStorage }
+        var files: [(String, Int32)] = []
+        var published = false
+        defer {
+            // Only unlink our retained fresh inodes. An unknown/replaced entry survives,
+            // and AT_REMOVEDIR refuses a nonempty stage. Never clean the canonical name.
+            if !published && IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
+                for (name, fd) in files where IdentityPrivateStorage.named(stage, name: name, is: fd) {
+                    _ = unlinkat(stage, name, 0)
+                }
+                if IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
+                    _ = unlinkat(glimmer, stageName, AT_REMOVEDIR)
+                }
+            }
+            for (_, fd) in files { close(fd) }
+            close(stage)
+        }
+        for (name, data, maximumBytes) in components {
+            try IdentityPrivateStorage.check(stage, directory: true)
+            files.append((name, try IdentityPrivateStorage.exclusiveFile(stage, name: name, data: data, maximumBytes: maximumBytes)))
+        }
+        guard try IdentityPrivateStorage.entries(stage) == Set(components.map(\.0)) else { throw IdentityStorageError.unsafeStorage }
+        for (index, component) in components.enumerated() {
+            let fd = files[index].1
+            try IdentityPrivateStorage.check(fd, directory: false, maximumBytes: component.2)
+            guard IdentityPrivateStorage.named(stage, name: component.0, is: fd) else { throw IdentityStorageError.unsafeStorage }
+        }
+        try IdentityPrivateStorage.check(stage, directory: true)
+        guard fsync(stage) == 0 else { throw IdentityStorageError.unsafeStorage }
+        try IdentityPrivateStorage.check(glimmer, directory: true)
+        guard IdentityPrivateStorage.named(root, name: "Glimmer", is: glimmer),
+              IdentityPrivateStorage.named(glimmer, name: stageName, is: stage)
+        else { throw IdentityStorageError.unsafeStorage }
+        if let destination {
+            try IdentityPrivateStorage.check(destination, directory: true)
+            guard IdentityPrivateStorage.named(glimmer, name: "Identity", is: destination),
+                  try IdentityPrivateStorage.entries(destination).isEmpty
+            else { throw IdentityStorageError.unsafeStorage }
+        } else {
+            var current = stat()
+            guard fstatat(glimmer, "Identity", &current, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT
+            else { throw IdentityStorageError.unsafeStorage }
+        }
+        // POSIX rename replaces only an absent/empty directory. A racing insertion
+        // into the destination makes publication fail without touching those bytes.
+        guard renameat(glimmer, stageName, glimmer, "Identity") == 0 else { throw IdentityStorageError.unsafeStorage }
+        published = true
+        // A sync failure must not roll back the now-complete canonical identity.
+        guard fsync(glimmer) == 0 else { throw IdentityStorageError.unsafeStorage }
     }
 
     package static func write(_ data: Data, account: String, base: URL) throws {

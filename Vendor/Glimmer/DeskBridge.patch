@@ -512,10 +512,11 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +            cached = identity
 +            log.info("Loaded identity from file store")
 +            return identity
-@@ -28,0 +29,2 @@
+@@ -28,0 +29,3 @@
 +        // An established identity disappearing is a recovery error, not a new install.
 +        guard !established else { throw IdentityStorageError.incompleteIdentity }
-@@ -108,6 +110,15 @@
++        try FileIdentityStore.validateFreshStorage(base: storageRoot())
+@@ -108,6 +111,15 @@
 -    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
 -    func loadFromFileStore() throws -> Identity? {
 -        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
@@ -537,7 +538,7 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
 +            else { throw IdentityStorageError.unsafeStorage }
 +            return value
-@@ -115,6 +126,7 @@
+@@ -115,6 +127,7 @@
 -        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
 -              let keyPEM = String(data: keyData, encoding: .utf8),
 -              !keyPEM.isEmpty else {
@@ -551,21 +552,38 @@ diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Networ
 +        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
 +        else { throw IdentityStorageError.incompleteIdentity }
 +        try validateLocalIdentity(certPEM: certPEM, keyPEM: keyPEM)
-@@ -122,4 +134 @@
+@@ -122,4 +135 @@
 -        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
 -           let stored = String(data: uidData, encoding: .utf8)?
 -                    .trimmingCharacters(in: .whitespacesAndNewlines),
 -           !stored.isEmpty {
 +        if let stored = storedUID {
-@@ -128 +137,2 @@
+@@ -128 +138,2 @@
 -            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
 +            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
 +            // Complete an unpublished legacy migration without replacing its valid PEM pair.
-@@ -141 +151,2 @@
+@@ -137,3 +148,2 @@
+-    /// Persist an Identity to the file store. Each component goes through
+-    /// `FileIdentityStore.write` which enforces mode 0600 and verifies it
+-    /// stuck via stat(2).
++    /// First publication is a single directory rename, so no partial canonical
++    /// identity survives a crash between certificate, key, and uniqueID writes.
+@@ -141,7 +151,17 @@
 -        _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
+-        try FileIdentityStore.write(Data(identity.certPEM.utf8),
+-                                    account: Self.accountCert, base: storageRoot())
+-        try FileIdentityStore.write(Data(identity.keyPEM.utf8),
+-                                    account: Self.accountKey, base: storageRoot())
+-        try FileIdentityStore.write(Data(identity.uniqueID.utf8),
+-                                    account: Self.accountUID, base: storageRoot())
 +        try FileIdentityStore.validateStorage(base: storageRoot())
 +        try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
-@@ -147,0 +159,9 @@
++        guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
++        guard defaults.integer(forKey: Self.fileStorageFlag) < Self.fileStorageVersion
++        else { throw IdentityStorageError.incompleteIdentity }
++        try FileIdentityStore.publishFresh(certificate: Data(identity.certPEM.utf8),
++                                           privateKey: Data(identity.keyPEM.utf8),
++                                           uniqueID: Data(identity.uniqueID.utf8), base: storageRoot())
 +    }
 +
 +    /// Invalid local PEM material needs local storage guidance, not host crypto settings.
@@ -580,7 +598,7 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +++ b/GlimmerEngine/Network/Identity.swift
 @@ -7,0 +8 @@
 +import Darwin
-@@ -17,0 +19,89 @@
+@@ -17,0 +19,136 @@
 +}
 +
 +private enum IdentityPrivateStorage {
@@ -667,15 +685,62 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +        try check(fd, directory: false, maximumBytes: maximumBytes)
 +        guard renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else { throw unsafe }
 +    }
++    static func entries(_ directory: Int32) throws -> Set<String> {
++        let copy = dup(directory)
++        guard copy >= 0 else { throw unsafe }
++        guard let stream = fdopendir(copy) else { close(copy); throw unsafe }
++        defer { closedir(stream) }
++        rewinddir(stream)
++        var names = Set<String>()
++        while true {
++            errno = 0
++            guard let entry = readdir(stream) else {
++                guard errno == 0 else { throw unsafe }; return names
++            }
++            let name = withUnsafePointer(to: &entry.pointee.d_name) {
++                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
++            }
++            if name != "." && name != ".." { names.insert(name) }
++        }
++    }
++    static func named(_ parent: Int32, name: String, is fd: Int32) -> Bool {
++        var held = stat(), current = stat()
++        return fstat(fd, &held) == 0 && fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
++            held.st_dev == current.st_dev && held.st_ino == current.st_ino
++    }
++    /// Retain the new inode until publication/cleanup; never replace an existing stage entry.
++    static func exclusiveFile(_ parent: Int32, name: String, data: Data, maximumBytes: Int) throws -> Int32 {
++        guard valid(name), !data.isEmpty, data.count <= maximumBytes else { throw unsafe }
++        let fd = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
++        guard fd >= 0 else { throw unsafe }
++        do {
++            try check(fd, directory: false, maximumBytes: maximumBytes)
++            try data.withUnsafeBytes { bytes in
++                var offset = 0
++                while offset < bytes.count {
++                    let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
++                    if count < 0 && errno == EINTR { continue }
++                    guard count > 0 else { throw unsafe }; offset += count
++                }
++            }
++            guard fsync(fd) == 0 else { throw unsafe }
++            try check(fd, directory: false, maximumBytes: maximumBytes)
++            return fd
++        } catch {
++            if named(parent, name: name, is: fd) { _ = unlinkat(parent, name, 0) }
++            close(fd)
++            throw error
++        }
++    }
 +    private static func valid(_ name: String) -> Bool {
 +        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.utf8.contains(0)
 +    }
-@@ -58,3 +148 @@
+@@ -58,3 +195 @@
 -    /// Returns the bytes if the file exists, nil if it's absent. Anything
 -    /// else (permission denied, IO error mid-read) throws so we don't
 -    /// silently fall through to a destructive "regenerate".
 +    /// Missing storage is distinct from unsafe storage, which must never regenerate.
-@@ -62,8 +150,14 @@
+@@ -62,8 +197,94 @@
 -        guard let url = try fileURL(account: account, base: base) else { return nil }
 -        let fm = FileManager.default
 -        guard fm.fileExists(atPath: url.path) else { return nil }
@@ -698,7 +763,87 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +        }
 +    }
 +
-@@ -71,38 +165,19 @@
++    /// A first publication may use only absent storage or an already-private empty directory.
++    /// Unknown entries are not a fresh install and must be refused before key generation.
++    package static func validateFreshStorage(base: URL) throws {
++        guard let directory = try openDirectory(base: base, create: false) else { return }
++        defer { close(directory) }
++        guard try IdentityPrivateStorage.entries(directory).isEmpty else { throw IdentityStorageError.unsafeStorage }
++    }
++
++    /// Publish a complete initial identity with one directory rename. Crashes before that
++    /// rename leave only private, unadopted staging directories; crashes after it leave all
++    /// three canonical files. Existing nonempty identities are never replaced or repaired.
++    package static func publishFresh(certificate: Data, privateKey: Data, uniqueID: Data, base: URL) throws {
++        let components = [(certFileName, certificate, limit(IdentityManager.accountCert)),
++                          (keyFileName, privateKey, limit(IdentityManager.accountKey)),
++                          (uidFileName, uniqueID, limit(IdentityManager.accountUID))]
++        guard components.allSatisfy({ !$0.1.isEmpty && $0.1.count <= $0.2 }),
++              let root = try IdentityPrivateStorage.directory(base, create: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        defer { close(root) }
++        guard let glimmer = try IdentityPrivateStorage.child(root, name: "Glimmer", create: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        defer { close(glimmer) }
++        let destination = try IdentityPrivateStorage.child(glimmer, name: "Identity", create: false)
++        defer { if let destination { close(destination) } }
++        if let destination {
++            guard try IdentityPrivateStorage.entries(destination).isEmpty else { throw IdentityStorageError.unsafeStorage }
++        }
++        let stageName = ".identity-" + UUID().uuidString
++        guard let stage = try IdentityPrivateStorage.child(glimmer, name: stageName, create: true, exclusive: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        var files: [(String, Int32)] = []
++        var published = false
++        defer {
++            // Only unlink our retained fresh inodes. An unknown/replaced entry survives,
++            // and AT_REMOVEDIR refuses a nonempty stage. Never clean the canonical name.
++            if !published && IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
++                for (name, fd) in files where IdentityPrivateStorage.named(stage, name: name, is: fd) {
++                    _ = unlinkat(stage, name, 0)
++                }
++                if IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
++                    _ = unlinkat(glimmer, stageName, AT_REMOVEDIR)
++                }
++            }
++            for (_, fd) in files { close(fd) }
++            close(stage)
++        }
++        for (name, data, maximumBytes) in components {
++            try IdentityPrivateStorage.check(stage, directory: true)
++            files.append((name, try IdentityPrivateStorage.exclusiveFile(stage, name: name, data: data, maximumBytes: maximumBytes)))
++        }
++        guard try IdentityPrivateStorage.entries(stage) == Set(components.map(\.0)) else { throw IdentityStorageError.unsafeStorage }
++        for (index, component) in components.enumerated() {
++            let fd = files[index].1
++            try IdentityPrivateStorage.check(fd, directory: false, maximumBytes: component.2)
++            guard IdentityPrivateStorage.named(stage, name: component.0, is: fd) else { throw IdentityStorageError.unsafeStorage }
++        }
++        try IdentityPrivateStorage.check(stage, directory: true)
++        guard fsync(stage) == 0 else { throw IdentityStorageError.unsafeStorage }
++        try IdentityPrivateStorage.check(glimmer, directory: true)
++        guard IdentityPrivateStorage.named(root, name: "Glimmer", is: glimmer),
++              IdentityPrivateStorage.named(glimmer, name: stageName, is: stage)
++        else { throw IdentityStorageError.unsafeStorage }
++        if let destination {
++            try IdentityPrivateStorage.check(destination, directory: true)
++            guard IdentityPrivateStorage.named(glimmer, name: "Identity", is: destination),
++                  try IdentityPrivateStorage.entries(destination).isEmpty
++            else { throw IdentityStorageError.unsafeStorage }
++        } else {
++            var current = stat()
++            guard fstatat(glimmer, "Identity", &current, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT
++            else { throw IdentityStorageError.unsafeStorage }
++        }
++        // POSIX rename replaces only an absent/empty directory. A racing insertion
++        // into the destination makes publication fail without touching those bytes.
++        guard renameat(glimmer, stageName, glimmer, "Identity") == 0 else { throw IdentityStorageError.unsafeStorage }
++        published = true
++        // A sync failure must not roll back the now-complete canonical identity.
++        guard fsync(glimmer) == 0 else { throw IdentityStorageError.unsafeStorage }
++    }
++
+@@ -71,38 +292,19 @@
 -        guard let url = try fileURL(account: account, base: base) else {
 -            throw StreamError.crypto("FileIdentityStore: unknown account \(account)")
 -        }
@@ -756,7 +901,7 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +    }
 +
 +    /// Only known, validated ordinary identity files are eligible for cleanup.
-@@ -110,3 +185,7 @@
+@@ -110,3 +312,7 @@
 -        guard let url = try? fileURL(account: account, base: base) else { return }
 -        try? FileManager.default.removeItem(at: url)
 -    }
@@ -767,11 +912,9 @@ diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identi
 +        _ = unlinkat(root, name, 0)
 +    }
 +
-@@ -207 +286,3 @@
--}
+@@ -206,0 +413,2 @@
 +    case unsafeStorage
 +    case incompleteIdentity
-+}
 diff --git a/GlimmerEngine/Network/InputBatcher.swift b/GlimmerEngine/Network/InputBatcher.swift
 --- a/GlimmerEngine/Network/InputBatcher.swift
 +++ b/GlimmerEngine/Network/InputBatcher.swift
@@ -1142,6 +1285,13 @@ diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift b/GlimmerEngine
 -        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
 -        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 +        try Self.configureReceiveTimeout(sock)
+@@ -69 +80,5 @@
+-        guard bound else { close(sock); throw EnetError.socketFailure("bind() errno \(errno)") }
++        guard bound else {
++            let failure = errno
++            close(sock)
++            throw EnetError.socketFailure("bind() errno \(failure)")
++        }
 diff --git a/GlimmerEngine/Network/RtpAudioReceiver.swift b/GlimmerEngine/Network/RtpAudioReceiver.swift
 --- a/GlimmerEngine/Network/RtpAudioReceiver.swift
 +++ b/GlimmerEngine/Network/RtpAudioReceiver.swift
@@ -1587,6 +1737,91 @@ diff --git a/GlimmerEngine/Session/StreamSession+Public.swift b/GlimmerEngine/Se
 +        refreshPowerAssertion()
 +    }
 +
+diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine/Session/StreamSession+Reconnect.swift
+--- a/GlimmerEngine/Session/StreamSession+Reconnect.swift
++++ b/GlimmerEngine/Session/StreamSession+Reconnect.swift
+@@ -38 +38,18 @@
+-              isStreaming, !stopInProgress, !isReconnecting else { return }
++              isStreaming, !stopInProgress else { return }
++        if isReconnecting {
++            // Notification precedes the producer's synchronous stopConnection().
++            // Retain this current replacement's failure across every await, even
++            // if its backend has not latched interrupted yet. Source-less wake
++            // requests and old-backend teardown cannot poison a new attempt.
++            if source != nil, reconnectAttemptID == attemptID {
++                if reconnectAttemptFailure == nil {
++                    reconnectAttemptFailure = code
++                    // Retire decoder callbacks from the failed transport while
++                    // retaining the session's failed-attempt identity for retry.
++                    bridge?.beginAttempt(UUID())
++                    bridge?.emit(.reconnecting)
++                }
++                lastReconnectError = .sessionFailed(code)
++            }
++            return
++        }
+@@ -135,0 +153,2 @@
++        reconnectAttemptID = nil
++        reconnectAttemptFailure = nil
+@@ -176,0 +196 @@
++                let resumedAttempt = attemptID
+@@ -179,0 +200,4 @@
++                // This is the last suspension before committing success. A fatal
++                // callback consumed during the deadline clear OR watchdog re-arm
++                // must leave the banner up and use the remaining bounded retries.
++                guard reconnectAttemptIsHealthy(resumedAttempt) else { continue }
+@@ -180,0 +205 @@
++                reconnectAttemptID = nil
+@@ -201,0 +227 @@
++        reconnectAttemptID = nil
+@@ -231,0 +258,3 @@
++        // Old-backend notifications during refresh/drain belong to the transport
++        // being discarded, not the replacement that has not been selected yet.
++        reconnectAttemptID = nil
+@@ -256,0 +286,3 @@
++        let freshAttempt = attemptID
++        reconnectAttemptID = freshAttempt
++        reconnectAttemptFailure = nil
+@@ -283 +315 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -288 +320 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -296 +328 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -309 +341 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -329,3 +361,3 @@
+-        guard isStreaming, !stopInProgress else {
+-            Diag.notice("reconnect: stop slipped in mid-handshake - "
+-                + "interrupting the freshly-built backend to kill the zombie connection", "Stream")
++        guard reconnectAttemptIsHealthy(freshAttempt) else {
++            Diag.notice("reconnect: replacement ended before success - "
++                + "interrupting the freshly-built backend", "Stream")
+@@ -337 +369,4 @@
+-        guard isStreaming, !stopInProgress, !Task.isCancelled else { return false }
++        guard reconnectAttemptIsHealthy(freshAttempt) else {
++            await tearDownSlippedInReconnect(fresh: fresh, net: net)
++            return false
++        }
+@@ -344,0 +380,14 @@
++    }
++
++    /// Actor-owned attempt state closes notification-before-stop and all await
++    /// windows; callers must commit success synchronously after the final check.
++    private func reconnectAttemptIsHealthy(_ attempt: UUID) -> Bool {
++        !Task.isCancelled && isStreaming && !stopInProgress
++            && reconnectAttemptID == attempt && attemptID == attempt
++            && reconnectAttemptFailure == nil
++    }
++
++    private func checkReconnectAttempt(_ attempt: UUID, deadline: Date) throws {
++        try checkAttempt(deadline: deadline)
++        guard reconnectAttemptID == attempt, attemptID == attempt else { throw CancellationError() }
++        if let code = reconnectAttemptFailure { throw StreamError.sessionFailed(code) }
 diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Session/StreamSession+Start.swift
 --- a/GlimmerEngine/Session/StreamSession+Start.swift
 +++ b/GlimmerEngine/Session/StreamSession+Start.swift
@@ -1595,6 +1830,21 @@ diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Ses
 @@ -180 +181 @@
 -        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
 +        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)
+diff --git a/GlimmerEngine/Session/StreamSession.swift b/GlimmerEngine/Session/StreamSession.swift
+--- a/GlimmerEngine/Session/StreamSession.swift
++++ b/GlimmerEngine/Session/StreamSession.swift
+@@ -193,2 +193,2 @@
+-    /// watchdog) and makes `handleHostTerminate` ignore re-entrant terminates
+-    /// fired by the dead/old backend mid-reconnect.
++    /// watchdog). Current replacement failures are retained for the episode;
++    /// source identity keeps old-backend teardown from failing its replacement.
+@@ -195,0 +196,6 @@
++    /// Only a selected replacement can fail an active attempt. Nil while probing,
++    /// tearing down the old transport, or after the synchronous success commit.
++    package var reconnectAttemptID: UUID?
++    /// Sticky even when notification reaches this actor before the producer has
++    /// latched backend interruption. Cleared only when selecting a new attempt.
++    package var reconnectAttemptFailure: Int32?
 diff --git a/GlimmerEngine/Video/VideoDecoder+Decode.swift b/GlimmerEngine/Video/VideoDecoder+Decode.swift
 --- a/GlimmerEngine/Video/VideoDecoder+Decode.swift
 +++ b/GlimmerEngine/Video/VideoDecoder+Decode.swift

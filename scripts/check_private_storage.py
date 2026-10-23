@@ -114,6 +114,68 @@ func noKeygen(_ label: String) throws {
     try expect(!FileManager.default.fileExists(atPath: marker.path), label)
 }
 
+// Hooks are injected into the extracted source only; production has no fixture switches.
+enum FixturePublicationFailure: Error { case injected }
+enum FixturePublication {
+    static var mode = ""
+    static func checkpoint(_ point: String) throws {
+        if mode == "crash-" + point { kill(getpid(), SIGKILL); _exit(86) }
+        if mode == "throw-" + point { throw FixturePublicationFailure.injected }
+        if mode == "race-" + point {
+            let canonical = fixture.appendingPathComponent("Glimmer/Identity")
+            if mkdir(canonical.path, 0o700) != 0 && errno != EEXIST { fatalError("race directory") }
+            try writeFixture(Data("RACING-MATERIAL".utf8), canonical.appendingPathComponent("racing-material"))
+        }
+        if mode == "swap-before-publish" && point == "before-publish" {
+            let canonical = fixture.appendingPathComponent("Glimmer/Identity")
+            guard rename(canonical.path, fixture.appendingPathComponent("Glimmer/held-empty").path) == 0,
+                  mkdir(canonical.path, 0o700) == 0 else { fatalError("swap directory") }
+        }
+        if mode == "extra-stage-after-stage-1" && point == "after-stage-1" {
+            let glimmer = fixture.appendingPathComponent("Glimmer")
+            let stage = try FileManager.default.contentsOfDirectory(atPath: glimmer.path).first { $0.hasPrefix(".identity-") }!
+            try writeFixture(Data("UNEXPECTED-STAGE-CONTENT".utf8), glimmer.appendingPathComponent(stage + "/unexpected"))
+        }
+    }
+    static func parentSync(_ fd: Int32) -> Int32 {
+        if mode == "parent-sync-failure" { errno = EIO; return -1 }
+        return fsync(fd)
+    }
+}
+if CommandLine.arguments.count > 3 && CommandLine.arguments[3] == "publication-worker" {
+    FixturePublication.mode = CommandLine.arguments[4]
+    let manager = IdentityManager(fixture)
+    manager.defaults!.set("unchanged", forKey: "other-setting")
+    let beforeDefaults = NSDictionary(dictionary: manager.defaults!.values)
+    do {
+        _ = try manager.load()
+        fatalError("publication injection was not reached")
+    } catch FixturePublicationFailure.injected {
+        try expect(FixturePublication.mode.hasPrefix("throw-"), "unexpected injected publication failure")
+    } catch IdentityStorageError.unsafeStorage {
+        try expect(!FixturePublication.mode.hasPrefix("throw-") && !FixturePublication.mode.hasPrefix("crash-"),
+                   "publication failed before checkpoint")
+    }
+    try expect(beforeDefaults.isEqual(NSDictionary(dictionary: manager.defaults!.values)), "failed publication changed defaults/flag")
+    try expect(manager.cached == nil && manager.generations == 1 && manager.uidGenerations == 1,
+               "failed fresh publication changed cached state or generation count")
+    exit(0)
+}
+func publicationChild(_ base: URL, _ mode: String, killed: Bool = false) throws {
+    let child = Process(); child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = [base.path, CommandLine.arguments[2], "publication-worker", mode]
+    try child.run(); child.waitUntilExit()
+    try expect(killed ? child.terminationReason == .uncaughtSignal && child.terminationStatus == SIGKILL :
+               child.terminationReason == .exit && child.terminationStatus == 0,
+               "publication child did not reach expected failure: \(mode)")
+}
+func canonicalBytes(_ base: URL) throws -> [Data?] {
+    try [IdentityManager.accountCert, IdentityManager.accountKey, IdentityManager.accountUID].map {
+        try FileIdentityStore.read(account: $0, base: base)
+    }
+}
+let generatedComponents: [Data?] = [Data("CERT".utf8), Data("KEY".utf8), Data("0123456789abcdef0123456789abcdef".utf8)]
+
 // Lock in Darwin's empty-ACL contract; Linux's zero result has different semantics.
 guard let emptyACL = acl_init(0) else { fatalError("empty ACL fixture") }
 try expect(acl_valid(emptyACL) == 0, "empty Darwin ACL valid")
@@ -401,6 +463,105 @@ for (name, cert, key, expectedFailure) in validationCases {
         }
     }
 }
+// Abruptly kill real child processes after every staged file, before publication,
+// and after publication. No stack unwinding/cleanup runs in these children.
+for emptyDestination in [false, true] {
+    for point in ["after-stage-1", "after-stage-2", "after-stage-3", "before-publish", "after-publish"] {
+        for killed in [false, true] {
+            let label = "\(emptyDestination)-\(point)-\(killed)"
+            let base = try fresh("fresh-publication-" + label)
+            if emptyDestination { _ = try identityRoot(base) }
+            try publicationChild(base, (killed ? "crash-" : "throw-") + point, killed: killed)
+            let published = point == "after-publish"
+            try expect(try canonicalBytes(base) == (published ? generatedComponents : [nil, nil, nil]),
+                       "crash/failure exposed partial canonical identity: \(label)")
+            let glimmer = base.appendingPathComponent("Glimmer")
+            let stages = try FileManager.default.contentsOfDirectory(atPath: glimmer.path).filter { $0.hasPrefix(".identity-") }
+            try expect(stages.count == (killed && !published ? 1 : 0), "wrong retained stage count: \(label)")
+            var orphanBytes: [String: Data] = [:]
+            if let stageName = stages.first {
+                let stageURL = glimmer.appendingPathComponent(stageName)
+                let stageFD = try IdentityPrivateStorage.directory(stageURL, create: false)!
+                defer { close(stageFD) }
+                let entries = try IdentityPrivateStorage.entries(stageFD)
+                try expect(entries.isSubset(of: [FileIdentityStore.certFileName, FileIdentityStore.keyFileName, FileIdentityStore.uidFileName]),
+                           "crash orphan contains unexpected files")
+                for name in entries {
+                    let bytes = try IdentityPrivateStorage.read(stageFD, name: name, maximumBytes: name == FileIdentityStore.uidFileName ? 4096 : 64 * 1024)!
+                    orphanBytes[stageName + "/" + name] = bytes
+                }
+                try expect(entries.count == (point == "after-stage-1" ? 1 : point == "after-stage-2" ? 2 : 3),
+                           "crash did not occur at the requested stage boundary")
+            }
+            if emptyDestination && !published {
+                let empty = try IdentityPrivateStorage.directory(base.appendingPathComponent("Glimmer/Identity"), create: false)!
+                defer { close(empty) }
+                try expect(try IdentityPrivateStorage.entries(empty).isEmpty, "failed publication replaced/filled empty destination")
+            }
+            let retry = IdentityManager(base)
+            _ = try retry.load()
+            try expect(retry.generations == (published ? 0 : 1) && retry.uidGenerations == (published ? 0 : 1),
+                       "retry adopted an orphan or regenerated a published identity: \(label)")
+            try expect(try canonicalBytes(base) == generatedComponents, "retry did not publish/adopt complete identity: \(label)")
+            try expect(retry.defaults!.integer(forKey: IdentityManager.fileStorageFlag) == IdentityManager.fileStorageVersion,
+                       "successful retry did not advance flag")
+            for (name, bytes) in orphanBytes { try unchanged(glimmer.appendingPathComponent(name), bytes, "retry changed unadopted orphan") }
+        }
+    }
+    let syncBase = try fresh("fresh-parent-sync-failure-\(emptyDestination)")
+    if emptyDestination { _ = try identityRoot(syncBase) }
+    try publicationChild(syncBase, "parent-sync-failure")
+    try expect(try canonicalBytes(syncBase) == generatedComponents, "parent fsync failure rolled back complete canonical identity")
+    let syncRetry = IdentityManager(syncBase); _ = try syncRetry.load()
+    try expect(syncRetry.generations == 0 && syncRetry.uidGenerations == 0, "parent fsync failure caused identity replacement")
+    for point in ["before-publish", "at-rename"] {
+        let base = try fresh("fresh-race-\(emptyDestination)-\(point)")
+        if emptyDestination { _ = try identityRoot(base) }
+        try publicationChild(base, "race-" + point)
+        try unchanged(base.appendingPathComponent("Glimmer/Identity/racing-material"), Data("RACING-MATERIAL".utf8),
+                      "publication replaced racing canonical bytes")
+        try expect(try canonicalBytes(base) == [nil, nil, nil], "racing destination received partial identity")
+        let retry = IdentityManager(base)
+        try refused("racing unknown canonical content") { _ = try retry.load() }
+        try expect(retry.generations == 0 && retry.uidGenerations == 0, "racing content was treated as a new install")
+    }
+}
+let swappedEmpty = try fresh("fresh-swapped-empty")
+_ = try identityRoot(swappedEmpty)
+try publicationChild(swappedEmpty, "swap-before-publish")
+try expect(try FileManager.default.contentsOfDirectory(atPath: swappedEmpty.appendingPathComponent("Glimmer").path).sorted() == ["Identity", "held-empty"],
+           "empty destination inode swap was published or removed")
+let unknownStage = try fresh("fresh-unknown-stage")
+try publicationChild(unknownStage, "extra-stage-after-stage-1")
+let retainedStage = try FileManager.default.contentsOfDirectory(atPath: unknownStage.appendingPathComponent("Glimmer").path)
+try expect(retainedStage.count == 1 && retainedStage[0].hasPrefix(".identity-"), "cleanup removed/replaced stage with unknown entry")
+let retainedURL = unknownStage.appendingPathComponent("Glimmer/" + retainedStage[0])
+try expect(try FileManager.default.contentsOfDirectory(atPath: retainedURL.path) == ["unexpected"], "cleanup retained known staged secrets or removed unknown bytes")
+try unchanged(retainedURL.appendingPathComponent("unexpected"), Data("UNEXPECTED-STAGE-CONTENT".utf8), "cleanup removed unknown stage bytes")
+for version in [0, 1] {
+    let base = try fresh("fresh-unknown-entry-\(version)")
+    let directory = try identityRoot(base), unknown = directory.appendingPathComponent("unknown")
+    try writeFixture(Data("DO-NOT-ADOPT".utf8), unknown)
+    let manager = IdentityManager(base); manager.defaults!.set(version, forKey: IdentityManager.fileStorageFlag)
+    let beforeDefaults = NSDictionary(dictionary: manager.defaults!.values)
+    if version == 0 { try refused("unknown identity entries") { _ = try manager.load() } }
+    else { try incomplete("established identity remains incomplete") { _ = try manager.load() } }
+    try expect(manager.generations == 0 && manager.uidGenerations == 0 && manager.cached == nil,
+               "unknown identity entries permitted generation")
+    try expect(beforeDefaults.isEqual(NSDictionary(dictionary: manager.defaults!.values)), "unknown entries changed defaults/flag")
+    try unchanged(unknown, Data("DO-NOT-ADOPT".utf8), "unknown identity entry changed")
+}
+for index in 0..<3 {
+    for empty in [false, true] {
+        let base = try fresh("fresh-size-validation-\(index)-\(empty)")
+        var bytes = [Data("CERT".utf8), Data("KEY".utf8), Data("UID".utf8)]
+        bytes[index] = empty ? Data() : Data(repeating: 65, count: index == 2 ? 4097 : 64 * 1024 + 1)
+        try refused("fresh identity component size") {
+            try FileIdentityStore.publishFresh(certificate: bytes[0], privateKey: bytes[1], uniqueID: bytes[2], base: base)
+        }
+        try expect(try FileManager.default.contentsOfDirectory(atPath: base.path).isEmpty, "size refusal created storage/stage")
+    }
+}
 try noKeygen("all refusal tests precede real keygen")
 let sshBase = try fresh("ssh-success"), generated = try SSHKeyManager.generate(in: sshBase)
 try expect(generated.publicKey.hasPrefix("ssh-ed25519 "), "fresh SSH key success")
@@ -460,6 +621,20 @@ if [ "${DESKBRIDGE_FIXTURE_FAIL:-0}" = 1 ]; then exit 1; fi
     identity = (ROOT / "Vendor/Glimmer/GlimmerEngine/Network/Identity.swift").read_text()
     extracted = identity.split("// MARK: - IdentityManager", 1)[0]
     extracted = extracted.replace("private enum IdentityPrivateStorage", "enum IdentityPrivateStorage")
+    checkpoints = {
+        '            files.append((name, try IdentityPrivateStorage.exclusiveFile(stage, name: name, data: data, maximumBytes: maximumBytes)))':
+        '            files.append((name, try IdentityPrivateStorage.exclusiveFile(stage, name: name, data: data, maximumBytes: maximumBytes)))\n            try FixturePublication.checkpoint("after-stage-\\(files.count)")',
+        '        guard fsync(stage) == 0 else { throw IdentityStorageError.unsafeStorage }':
+        '        guard fsync(stage) == 0 else { throw IdentityStorageError.unsafeStorage }\n        try FixturePublication.checkpoint("before-publish")',
+        '        guard renameat(glimmer, stageName, glimmer, "Identity") == 0 else { throw IdentityStorageError.unsafeStorage }':
+        '        try FixturePublication.checkpoint("at-rename")\n        guard renameat(glimmer, stageName, glimmer, "Identity") == 0 else { throw IdentityStorageError.unsafeStorage }',
+        '        published = true': '        published = true\n        try FixturePublication.checkpoint("after-publish")',
+        '        guard fsync(glimmer) == 0 else { throw IdentityStorageError.unsafeStorage }':
+        '        guard FixturePublication.parentSync(glimmer) == 0 else { throw IdentityStorageError.unsafeStorage }',
+    }
+    for original, replacement in checkpoints.items():
+        assert extracted.count(original) == 1, f"publication checkpoint drift: {original}"
+        extracted = extracted.replace(original, replacement)
     # Compile the actual public error cases too; do not mirror their taxonomy.
     extracted += "\npublic enum IdentityStorageError" + identity.split("public enum IdentityStorageError", 1)[1]
     loading = (ROOT / "Vendor/Glimmer/GlimmerEngine/Network/Identity+Loading.swift").read_text()

@@ -190,9 +190,15 @@ public actor StreamSession {
     package var reachedLiveState = false
     /// True while a reconnect episode is being driven. Makes the frame/present
     /// watchdogs go quiet (the episode owns the bounded retry/give-up, not the
-    /// watchdog) and makes `handleHostTerminate` ignore re-entrant terminates
-    /// fired by the dead/old backend mid-reconnect.
+    /// watchdog). Current replacement failures are retained for the episode;
+    /// source identity keeps old-backend teardown from failing its replacement.
     package var isReconnecting = false
+    /// Only a selected replacement can fail an active attempt. Nil while probing,
+    /// tearing down the old transport, or after the synchronous success commit.
+    package var reconnectAttemptID: UUID?
+    /// Sticky even when notification reaches this actor before the producer has
+    /// latched backend interruption. Cleared only when selecting a new attempt.
+    package var reconnectAttemptFailure: Int32?
     /// Attempt counter for the current reconnect episode.
     package var reconnectAttempts = 0
     /// The last attempt's classified failure; a give-up hands it to the launcher so the copy names the fix.

@@ -284,6 +284,26 @@ class HostChecks(unittest.TestCase):
         self.assertTrue(caught.exception.cleanup_failed)
         self.assertNotIn('synthetic cleanup', str(caught.exception))
 
+    def test_export_cleanup_failure_after_publish_records_cleanup_guidance_flag(self):
+        import runtime
+        pin, opener = self.fixture_download(b'fixture!', 8)
+        package = download(pin, self.store, threading.Event(), opener=opener)
+        publish, residue = runtime.publish_new, []
+        destination = self.base / 'published-copy.deb'
+        def publish_with_fresh_residue(source, target):
+            publish(source, target)
+            Path(source).write_bytes(b'synthetic residue after publication')
+            residue.append(Path(source))
+        with patch('runtime.publish_new', side_effect=publish_with_fresh_residue), \
+             patch('runtime.os.unlink', side_effect=OSError(errno.EIO, 'synthetic private cleanup path')), self.assertRaises(Failure) as caught:
+            save_package(pin, package, destination)
+        self.assertEqual(destination.read_bytes(), b'fixture!')
+        self.assertEqual(caught.exception.key, 'export_destination')
+        self.assertTrue(caught.exception.cleanup_failed)
+        self.assertNotIn('synthetic private cleanup path', str(caught.exception))
+        self.assertEqual(len(residue), 1); self.assertTrue(residue[0].exists())
+        residue[0].unlink()
+
     def test_nonreaping_child_retains_ownership_and_failed_cleanup(self):
         events = []; host = OwnedHost()
         class Child:
@@ -531,30 +551,25 @@ class HostChecks(unittest.TestCase):
                         control.connect('github.com', 443, context, 20)
                     self.assertEqual(caught.exception.key, 'cancel' if cancel else 'download')
                     self.assertLessEqual(clock[0] - began, 20.000001)
-                    self.assertEqual(len(created), 1 if cancel else 8)
+                    self.assertEqual(len(created), 1 if cancel else 2 * len(rows))
                     for sock in created: sock.close.assert_called_once()
                     context.wrap_socket.assert_not_called()
                 finally: control.close()
 
-    def test_final_or_only_candidate_retains_remaining_shared_deadline(self):
-        for count in (1, 2):
-            control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
-            rows = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.' + str(i), 443]) for i in range(1, count + 1)]
-            sockets = [Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0)) for _ in rows]
-            elapsed = [0.0]
-            def ready(_readers, writers, _exceptional, timeout):
-                clock[0] += timeout
-                if writers == [sockets[-1]]:
-                    elapsed[0] += timeout
-                    if elapsed[0] >= 3: return [], writers, []
-                return [], [], []
-            try:
-                with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
-                     patch('runtime.socket.socket', side_effect=sockets), patch('runtime.select.select', side_effect=ready):
-                    self.assertIs(control._connect_tcp('fixture.invalid', 443, began + 20, None), sockets[-1])
-                self.assertGreaterEqual(elapsed[0], 3); self.assertLess(clock[0] - began, 20)
-                if count == 2: sockets[0].close.assert_called_once()
-            finally: control.close()
+    def test_only_candidate_retains_remaining_shared_deadline(self):
+        control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
+        rows = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443])]
+        sock = Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0))
+        def ready(_readers, writers, _exceptional, timeout):
+            clock[0] += timeout
+            return ([], writers, []) if clock[0] - began >= 18 else ([], [], [])
+        try:
+            with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                 patch('runtime.socket.socket', return_value=sock) as create, patch('runtime.select.select', side_effect=ready):
+                self.assertIs(control._connect_tcp('fixture.invalid', 443, began + 20, None), sock)
+            self.assertGreaterEqual(clock[0] - began, 18); self.assertLess(clock[0] - began, 20)
+            create.assert_called_once(); sock.close.assert_not_called()
+        finally: control.close()
 
     def test_locally_capped_candidate_retries_after_later_route_rejects(self):
         control = TransferControl(threading.Event()); clock = [time.monotonic()]; began = clock[0]
@@ -576,6 +591,39 @@ class HostChecks(unittest.TestCase):
             retried.connect_ex.assert_called_once_with(('2001:db8::1', 443, 0, 0))
             self.assertAlmostEqual(elapsed[id(first)], control.CONNECT_ATTEMPT_SECONDS)
             self.assertGreaterEqual(elapsed[id(retried)], 3); self.assertLess(clock[0] - began, 6)
+        finally: control.close()
+
+    def test_final_first_pass_blackhole_leaves_retry_budget_without_http_replay(self):
+        cancel = threading.Event(); control = TransferControl(cancel)
+        clock = [time.monotonic()]; began = clock[0]
+        rows = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::1', 443, 0, 0]),
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['192.0.2.1', 443]),
+                (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ['2001:db8::2', 443, 0, 0])]
+        first, blackhole, retried = [Mock(connect_ex=Mock(return_value=errno.EINPROGRESS), getsockopt=Mock(return_value=0)) for _ in range(3)]
+        rejected = Mock(connect_ex=Mock(return_value=errno.ECONNREFUSED))
+        tls = Mock(do_handshake=Mock(return_value=None)); context = Mock(wrap_socket=Mock(return_value=tls))
+        elapsed = {id(sock): 0.0 for sock in (first, blackhole, retried)}
+        def ready(_readers, writers, _exceptional, timeout):
+            clock[0] += timeout; elapsed[id(writers[0])] += timeout
+            return ([], writers, []) if writers != [blackhole] and elapsed[id(writers[0])] >= 3 else ([], [], [])
+        pin, response = self.fixture_download(b'fixture!', 8)
+        def open_response(*_args, **_kwargs):
+            control.connect('github.com', 443, context, 20)
+            return response.open()
+        opener = Mock(open=Mock(side_effect=open_response))
+        try:
+            with patch('runtime.time.monotonic', side_effect=lambda: clock[0]), patch.object(control, '_resolve', return_value=rows), \
+                 patch('runtime.socket.socket', side_effect=[first, rejected, blackhole, retried]) as create, \
+                 patch('runtime.select.select', side_effect=ready):
+                package = download(pin, self.store, cancel, opener=opener, control=control)
+            self.assertEqual(package.read_bytes(), b'fixture!'); self.assertEqual(create.call_count, 4)
+            self.assertAlmostEqual(elapsed[id(first)], control.CONNECT_ATTEMPT_SECONDS)
+            self.assertAlmostEqual(elapsed[id(blackhole)], control.CONNECT_ATTEMPT_SECONDS)
+            self.assertGreaterEqual(elapsed[id(retried)], 3); self.assertLess(clock[0] - began, 9)
+            for sock in (first, rejected, blackhole): sock.close.assert_called_once()
+            retried.close.assert_not_called(); opener.open.assert_called_once()
+            context.wrap_socket.assert_called_once_with(retried, server_hostname='github.com', do_handshake_on_connect=False)
+            tls.do_handshake.assert_called_once(); tls.settimeout.assert_called_once_with(20)
         finally: control.close()
 
     def test_permanently_rejected_candidates_are_not_retried(self):
@@ -774,6 +822,7 @@ sys.stdin.read()
                 primary = str(error) if isinstance(error, Failure) else str(Failure('operation'))
                 self.assertEqual(len(values), 1); self.assertTrue(values[0].startswith(primary))
                 self.assertIn('임시 패키지 사본', values[0]); self.assertNotIn('synthetic', values[0])
+                self.assertIn('.deskbridge-package-', values[0]); self.assertIn('숨김', values[0])
                 completed.assert_not_called(); self.assertFalse(state.busy); self.assertIsNone(state.operation_kind)
 
 

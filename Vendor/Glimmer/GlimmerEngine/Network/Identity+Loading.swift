@@ -28,6 +28,7 @@ extension IdentityManager {
         }
         // An established identity disappearing is a recovery error, not a new install.
         guard !established else { throw IdentityStorageError.incompleteIdentity }
+        try FileIdentityStore.validateFreshStorage(base: storageRoot())
 
         // The keychain-era flag means the earliest plaintext defaults were already wiped.
         let legacyKeychainOnly = defaults.integer(forKey: Self.legacyKeychainOnlyFlag) >= 1
@@ -144,18 +145,17 @@ extension IdentityManager {
         return Identity(uniqueID: uid, certPEM: certPEM, keyPEM: keyPEM)
     }
 
-    /// Persist an Identity to the file store. Each component goes through
-    /// `FileIdentityStore.write` which enforces mode 0600 and verifies it
-    /// stuck via stat(2).
+    /// First publication is a single directory rename, so no partial canonical
+    /// identity survives a crash between certificate, key, and uniqueID writes.
     func writeIdentityToFileStore(_ identity: Identity) throws {
         try FileIdentityStore.validateStorage(base: storageRoot())
         try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
-        try FileIdentityStore.write(Data(identity.certPEM.utf8),
-                                    account: Self.accountCert, base: storageRoot())
-        try FileIdentityStore.write(Data(identity.keyPEM.utf8),
-                                    account: Self.accountKey, base: storageRoot())
-        try FileIdentityStore.write(Data(identity.uniqueID.utf8),
-                                    account: Self.accountUID, base: storageRoot())
+        guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
+        guard defaults.integer(forKey: Self.fileStorageFlag) < Self.fileStorageVersion
+        else { throw IdentityStorageError.incompleteIdentity }
+        try FileIdentityStore.publishFresh(certificate: Data(identity.certPEM.utf8),
+                                           privateKey: Data(identity.keyPEM.utf8),
+                                           uniqueID: Data(identity.uniqueID.utf8), base: storageRoot())
     }
 
     /// Invalid local PEM material needs local storage guidance, not host crypto settings.

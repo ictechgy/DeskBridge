@@ -111,13 +111,17 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
             run("inspect-staged-host-supervisor-dependencies", ["/usr/bin/otool", "-L", str(supervisor)]), supervisor)
     except SystemDependencyError as error:
         raise SystemExit(str(error))
-    packaged_supervisor = supervisor_package_record(completed["hostSupervisor"], host_supervisor_snapshot(app), args.mode == "release")
+    try:
+        packaged_supervisor = supervisor_package_record(completed["hostSupervisor"], host_supervisor_snapshot(app), args.mode == "release")
+    except BuildSnapshotError as error:
+        raise SystemExit("Discard the staged package and rebuild before packaging: " + str(error)) from None
     run("verify-staged-app", ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)])
     entitlements = run("inspect-staged-entitlements", ["/usr/bin/codesign", "--display", "--entitlements", "-", "--xml", str(app)])
     if plistlib.loads(entitlements) != {"com.apple.security.device.camera": True}:
         raise SystemExit("The packaged app must contain exactly the camera permission entitlement.")
     (stage / "Applications").symlink_to("/Applications", target_is_directory=True)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
+    shutil.copy2(ROOT / "INSTALLATION.md", stage / "INSTALLATION.md")
     (stage / "INSTALL.txt").write_text("Knot.app을 Applications 폴더로 드래그하세요.\nApple Silicon / macOS 26+\n" +
         "업데이트: 기존 앱을 종료하고 이전 DeskBridge.app 번들만 제거하세요. 같은 번들 ID의 두 앱을 함께 두지 마세요.\n" +
         "Application Support·설정·인증서는 보존하세요. macOS 권한을 다시 요청할 수 있습니다.\n" +

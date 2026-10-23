@@ -773,3 +773,496 @@ with tempfile.TemporaryDirectory(prefix="knot-audio-socket-", dir="/tmp") as dir
                       "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                                                  for path in (ENGINE / "Network/RtpAudioReceiver+Socket.swift",
                                                               ENGINE / "Session/NativeBackend+Pipeline.swift")}}))
+
+
+# A fatal current replacement used to vanish while isReconnecting was true.
+# Exercise the actual actor consumer, complete bounded episode, success suffix,
+# ordered callback adapter and native cleanup with controlled inert await seams.
+reconnect = (ENGINE / "Session/StreamSession+Reconnect.swift").read_text()
+session_source = (ENGINE / "Session/StreamSession.swift").read_text()
+events_source = (ENGINE / "Session/NativeConnectionEvents.swift").read_text()
+terminate = block(reconnect, "package func handleHostTerminate(")
+terminate_prefix = terminate[:terminate.index("        // The uplink is dead")]
+selection_start = reconnect.index("        let fresh = makeBackend()")
+selection_end = reconnect.index("        await MainActor.run {", selection_start)
+selection = reconnect[selection_start:selection_end]
+tail_start = reconnect.index("        await net.setRequestDeadline(nil)", selection_end)
+tail_end = reconnect.index("    /// Actor-owned attempt state", tail_start)
+attempt_tail = reconnect[tail_start:tail_end].rstrip()
+# The closing brace belongs to reconnectInPlace; the fixture supplies its header.
+assert attempt_tail.endswith("}")
+attempt_tail = attempt_tail[:-1]
+# Full production consumer wiring is checked in addition to executing slices.
+assert "package var reconnectAttemptID: UUID?" in session_source
+assert "package var reconnectAttemptFailure: Int32?" in session_source
+assert reconnect.index("reconnectAttemptID = nil", reconnect.index("private func reconnectInPlace")) < selection_start
+assert selection.index("attemptID = UUID()") < selection.index("reconnectAttemptID = freshAttempt")
+assert "try checkReconnectAttempt(freshAttempt, deadline: deadline)" in block(reconnect, "private func reconnectInPlace(")
+assert "enqueueSessionEvent { await session.handleHostTerminate(code: code, from: backend) }" in events_source
+success = block(reconnect, "if resumed {")
+assert success.index("await MainActor.run") < success.index("guard reconnectAttemptIsHealthy(resumedAttempt)")
+commit = success[success.index("guard reconnectAttemptIsHealthy(resumedAttempt)"):success.index("bridge?.emit(.reconnected)")]
+assert "await " not in commit
+assert "reconnectAttemptID = nil" in commit
+teardown = block(reconnect, "private func teardownConnectionForReconnect()")
+teardown = teardown[:teardown.index("        if let state = connectFlowState")] + "    }"
+reconnect_fixture = r'''
+import Foundation
+import os
+
+final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Value
+    init(_ value: Value) { self.value = value }
+    func use<T>(_ body: (inout Value) -> T) -> T { lock.lock(); defer { lock.unlock() }; return body(&value) }
+}
+func wait(_ semaphore: DispatchSemaphore) { precondition(semaphore.wait(timeout: .now() + 5) == .success, "controlled schedule timed out") }
+final class Resource: @unchecked Sendable {
+    let cleanups = Locked(0)
+    func stop() {}; func interrupt() {}; func close() {}; func requestIdrFrame() {}
+    func setNegotiatedBitrateKbps(_ value: Int) {}
+    func cleanup() { cleanups.use { $0 += 1 } }
+}
+final class Receiver: @unchecked Sendable {
+    var onReceiveFailed: (@Sendable () -> Void)?
+    func stop() {}
+}
+let stopHook = Locked<(@Sendable () -> Void)?>(nil)
+let rearmHook = Locked<(@Sendable () -> Void)?>(nil)
+final class NativeBackend: @unchecked Sendable {
+    static let logCategory = "inert"
+    let stateLock = NSLock(), teardownLock = NSRecursiveLock()
+    var interrupted = false, inputReady = true
+    var videoReceiver: Receiver?, videoSink: Resource?, audioSink: Resource?
+    var enetChannel: Resource? = Resource(), rtspClient: Resource? = Resource()
+    var audioReceiver: Resource?, inputBatcher: Resource?
+    func withState<T>(_ body: () -> T) -> T { stateLock.lock(); defer { stateLock.unlock() }; return body() }
+    func wire(receiver: Receiver, events: NativeConnectionEvents) { __VIDEO_FAILURE_CLOSURE__ }
+    __BACKEND_METHODS__
+    func requestIdrFrame() { withState { enetChannel }?.requestIdrFrame() }
+}
+typealias StreamingBackend = NativeBackend
+enum StreamError: Error { case sessionFailed(Int32), hostTimedOut, hostUnreachable(String) }
+struct TakeoverRequired: Error { let appID: Int }
+enum StreamEvent { case connectionTerminated(errorCode: Int32, error: StreamError? = nil), reconnecting, reconnected }
+enum DisconnectReason { case hostClosedClean, hostError }
+enum Privacy { case `private`, `public` }
+struct Message: ExpressibleByStringInterpolation {
+    init(stringLiteral: String) {}; init(stringInterpolation: StringInterpolation) {}
+    static func + (_ lhs: Message, _ rhs: Message) -> Message { Message(stringLiteral: "") }
+    struct StringInterpolation: StringInterpolationProtocol {
+        init(literalCapacity: Int, interpolationCount: Int) {}
+        mutating func appendLiteral(_ value: String) {}
+        mutating func appendInterpolation<T>(_ value: T, privacy: Privacy = .public) {}
+    }
+}
+enum Diag {
+    static func info(_ message: Message, _ category: String) { stopHook.use { $0 }?() }
+    static func error(_ message: Message, _ category: String) {}
+    static func notice(_ message: Message, _ category: String) {}
+}
+final class Counter: @unchecked Sendable {
+    let value = Locked(0)
+    func increment() { value.use { $0 += 1 } }
+}
+final class P2: @unchecked Sendable { func setDisconnectReason(_ reason: DisconnectReason) {} }
+final class TelemetryCounters: Sendable {
+    static let shared = TelemetryCounters()
+    let p2 = P2(), reconnectTotal = Counter()
+}
+final class Bridge: @unchecked Sendable {
+    weak var session: StreamSession?
+    let values = Locked<[String]>([])
+    func beginAttempt(_ id: UUID) {}
+    func emit(_ event: StreamEvent) {
+        values.use { value in
+            switch event {
+            case .reconnected: value.append("reconnected")
+            case .reconnecting: value.append("reconnecting")
+            case .connectionTerminated: value.append("terminated")
+            }
+        }
+    }
+}
+final class NativeConnectionEvents: @unchecked Sendable {
+    static let logCategory = "inert"
+    weak var bridge: Bridge?, backend: NativeBackend?
+    private let sessionEvents = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
+    private var isCurrent: Bool { true } // Session actor still checks actual backend identity.
+    init(bridge: Bridge, backend: NativeBackend) { self.bridge = bridge; self.backend = backend }
+    private func emit(_ event: StreamEvent) { bridge?.emit(event) }
+    __EVENT_METHODS__
+    func drain() async { let tail = sessionEvents.withLock { $0 }; await tail?.value }
+}
+@MainActor final class Presentation {
+    var values = [String?]()
+    func showRecovery(_ value: String?) { values.append(value) }
+}
+final class Input: Sendable {
+    func prepareForReplacement(attempt: UUID) {}; func rebind(to: NativeBackend, attempt: UUID) {}
+    @MainActor func quiesce() {}; @MainActor func setReady(_ ready: Bool) {}
+}
+struct SyntheticClock: Sendable {
+    let schedule: Schedule
+    func sleep(_ duration: Duration) async throws { try Task.checkCancellation(); await schedule.sleep() }
+}
+actor NetworkClient {
+    let schedule: Schedule
+    let backend: NativeBackend
+    let events: NativeConnectionEvents
+    var shutdowns = 0
+    init(schedule: Schedule, backend: NativeBackend, events: NativeConnectionEvents) {
+        self.schedule = schedule; self.backend = backend; self.events = events
+    }
+    func setRequestDeadline(_ deadline: Date?) async { await schedule.deadlineCleared(backend: backend, events: events) }
+    func shutdown() { shutdowns += 1 }
+}
+struct BackendStreamConfig { let bitrate: Int32 = 20_000 }
+actor Schedule {
+    enum Mode: Sendable { case healthy, deadlineFatal, rearmFatal, notifyBeforeStop, stale, wake, cancel, taskCancel, allFatal }
+    let mode: Mode
+    weak var session: StreamSession?
+    var backends = [NativeBackend](), resources = [Resource](), events = [NativeConnectionEvents]()
+    var sleepCalls = 0, setupCount = 0, interruptedBeforeRelease: Bool?
+    let callbackDone = DispatchSemaphore(value: 0), releaseStop = DispatchSemaphore(value: 0)
+    var retainedReceiver: Receiver?
+    init(_ mode: Mode) { self.mode = mode }
+    func setSession(_ session: StreamSession) { self.session = session }
+    func sleep() {
+        sleepCalls += 1
+        if mode == .notifyBeforeStop && sleepCalls == 2 {
+            stopHook.use { $0 = nil }; releaseStop.signal(); wait(callbackDone)
+        }
+    }
+    func register(_ backend: NativeBackend, _ resource: Resource, _ event: NativeConnectionEvents) {
+        // Production teardown must finish before another setup touches the sink.
+        precondition(resources.allSatisfy { $0.cleanups.use { $0 } == 1 }, "replacement overlapped previous cleanup")
+        backends.append(backend); resources.append(resource); events.append(event); setupCount += 1
+    }
+    func deadlineCleared(backend: NativeBackend, events: NativeConnectionEvents) async {
+        let index = setupCount
+        if mode == .allFatal || (mode == .deadlineFatal && index == 1) {
+            backend.videoReceiver?.onReceiveFailed?(); await events.drain()
+        } else if mode == .cancel && index == 1 {
+            await session?.cancelCurrent()
+        } else if mode == .taskCancel && index == 1 {
+            withUnsafeCurrentTask { $0?.cancel() }
+        } else if mode == .stale && index == 1 {
+            // Even an already-queued adapter that passed its bridge gate is fenced.
+            await session?.handleHostTerminate(code: -1, from: NativeBackend())
+        } else if mode == .wake && index == 1 {
+            await session?.handleHostTerminate(code: -1)
+        } else if (mode == .rearmFatal || mode == .notifyBeforeStop) && index == 1 {
+            let beforeStop = mode == .notifyBeforeStop
+            let stopped = DispatchSemaphore(value: 0), receiver = backend.videoReceiver!
+            let callbackDone = self.callbackDone, releaseStop = self.releaseStop
+            let drained = DispatchSemaphore(value: 0)
+            retainedReceiver = receiver
+            rearmHook.use { hook in hook = {
+                rearmHook.use { $0 = nil }
+                if beforeStop { stopHook.use { hook in hook = { stopped.signal(); wait(releaseStop) } } }
+                DispatchQueue.global().async { receiver.onReceiveFailed?(); callbackDone.signal() }
+                if beforeStop { wait(stopped) } else { wait(callbackDone) }
+                Task { await events.drain(); drained.signal() }
+                wait(drained)
+                if beforeStop { precondition(!backend.withState { backend.interrupted }, "failure must be retained before stop latch") }
+            } }
+        }
+    }
+    func stats() -> (Int, [Int], Int) { (setupCount, resources.map { $0.cleanups.use { $0 } }, sleepCalls) }
+}
+actor StreamSession {
+    static let deadPeerTerminationCode: Int32 = -1, reconnectAttemptCap = 3
+    static let reconnectWindowSeconds: TimeInterval = 30
+    let schedule: Schedule, clock: SyntheticClock, bridge: Bridge?
+    var backend = NativeBackend(), attemptID = UUID()
+    var reconnectAttemptID: UUID?, reconnectAttemptFailure: Int32?
+    var isStreaming = true, stopInProgress = false, isReconnecting = false, reconnectAttempts = 0
+    var lastReconnectError: StreamError?, normalTerminations = 0, publicInput: Input? = Input(), input: Input? = Input()
+    var network: NetworkClient?
+    var presentation: Presentation?
+    nonisolated(unsafe) var frameWatchdogArmedAt: Double = 0
+    nonisolated var uptimeSeconds: Double { rearmHook.use { $0 }?(); return 1 }
+    init(schedule: Schedule, bridge: Bridge, presentation: Presentation) {
+        self.schedule = schedule; self.clock = SyntheticClock(schedule: schedule); self.bridge = bridge; self.presentation = presentation
+    }
+    func setWaitingForVideo(_ waiting: Bool) {}; func resetStallLatches() {}
+    func makeBackend() -> NativeBackend { NativeBackend() }
+    func checkAttempt(deadline: Date? = nil) throws {
+        guard !Task.isCancelled, isStreaming, !stopInProgress else { throw CancellationError() }
+    }
+    __TERMINATE_PREFIX__
+        normalTerminations += 1 // Ordinary-live handling is outside this regression's slice.
+    }
+    __ATTEMPT_METHODS__
+    __EPISODE__
+    __TEARDOWN__
+    func reconnectInPlace(deadline: Date) async throws(TakeoverRequired) -> Bool {
+        reconnectAttemptID = nil
+        await teardownConnectionForReconnect()
+        guard !Task.isCancelled, isStreaming, !stopInProgress else { return false }
+        __SELECTION__
+        let dec = Resource(), backendConfig = BackendStreamConfig()
+        let receiver = Receiver(), events = NativeConnectionEvents(bridge: bridge!, backend: fresh)
+        fresh.videoReceiver = receiver; fresh.videoSink = dec; fresh.wire(receiver: receiver, events: events)
+        await schedule.register(fresh, dec, events)
+        let net = NetworkClient(schedule: schedule, backend: fresh, events: events)
+        network = net
+        __ATTEMPT_TAIL__
+    }
+    func cancelCurrent() { isStreaming = false; stopInProgress = true; backend.stopConnection() }
+    func stop(cause: DisconnectReason) async { cancelCurrent() }
+    func endStreamClosedByPC() async { cancelCurrent() }
+    func run() async { await runReconnectEpisode(code: -1, cause: "synthetic") }
+    func state() -> (Bool, Int, Int32?) { (isReconnecting, normalTerminations, reconnectAttemptFailure) }
+    func finalCleanup() { backend.stopConnection() }
+}
+__BUDGET__
+@main struct Checks {
+    static func main() async throws {
+        var checks = 0
+        func expect(_ value: Bool, _ name: String) { precondition(value, name); checks += 1 }
+        for mode: Schedule.Mode in [.healthy, .deadlineFatal, .rearmFatal, .notifyBeforeStop, .stale, .wake, .cancel, .taskCancel, .allFatal] {
+            let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session)
+            let before = TelemetryCounters.shared.reconnectTotal.value.use { $0 }
+            await Task { await session.run() }.value
+            let stats = await schedule.stats(), state = await session.state()
+            let values = bridge.values.use { $0 }
+            let banners = await MainActor.run { presentation.values }
+            let succeeds = mode != .cancel && mode != .taskCancel && mode != .allFatal
+            expect(values.filter { $0 == "reconnected" }.count == (succeeds ? 1 : 0), "only a healthy attempt emits one reconnected")
+            expect(TelemetryCounters.shared.reconnectTotal.value.use { $0 } - before == (succeeds ? 1 : 0), "telemetry agrees with accepted attempts")
+            expect(!state.0, "episode finishes its ownership")
+            let retried = mode == .deadlineFatal || mode == .rearmFatal || mode == .notifyBeforeStop
+            expect(stats.0 == (retried ? 2 : (mode == .allFatal ? 3 : 1)), "failure consumes remaining attempts instead of false success")
+            expect(stats.1.dropLast().allSatisfy { $0 == 1 }, "old failed sinks clean exactly once before replacement")
+            expect(banners.count == 2 && banners.first! == "Reconnecting…" && banners.last! == nil, "failed attempts do not hide/recreate recovery banner")
+            if mode == .allFatal { expect(values == Array(repeating: "reconnecting", count: 4) + ["terminated"], "each failed attempt reasserts recovery without a false success") }
+            if mode == .cancel || mode == .taskCancel { expect(stats.1 == [1], "cancel cleanup remains singular") }
+            if succeeds {
+                await session.handleHostTerminate(code: -1, from: await session.backend)
+                expect(await session.state().1 == 1, "post-commit current failure follows ordinary live handling")
+            }
+            await session.finalCleanup()
+            expect(await schedule.stats().1.allSatisfy { $0 == 1 }, "every synthetic sink cleaned exactly once")
+            stopHook.use { $0 = nil }; rearmHook.use { $0 = nil }
+        }
+        print("{\"status\":\"passed\",\"reconnectFatalRaceChecks\":\(checks),\"scope\":\"production actor termination/success/bounded episode, event adapter, callback and native cleanup slices; inert network/deadline/watchdog schedules, no device\"}")
+    }
+}
+'''
+reconnect_fixture = reconnect_fixture.replace("__VIDEO_FAILURE_CLOSURE__", block(pipeline, "receiver.onReceiveFailed ="))
+reconnect_fixture = reconnect_fixture.replace("__BACKEND_METHODS__", "\n".join(
+    block(backend, signature).replace("package func", "func", 1)
+    for signature in ("package func stopConnection()", "package func interruptConnection()")))
+reconnect_fixture = reconnect_fixture.replace("__EVENT_METHODS__", "\n".join(
+    block(events_source, signature).replace("package func", "func", 1)
+    for signature in ("private func enqueueSessionEvent(", "package func connectionTerminated(")))
+reconnect_fixture = reconnect_fixture.replace("__TERMINATE_PREFIX__", terminate_prefix.replace("package func", "func", 1))
+reconnect_fixture = reconnect_fixture.replace("__ATTEMPT_METHODS__", "\n".join(
+    block(reconnect, signature) for signature in ("private func reconnectAttemptIsHealthy(",
+                                                "private func checkReconnectAttempt(", "private func tearDownSlippedInReconnect(")))
+reconnect_fixture = reconnect_fixture.replace("__EPISODE__", block(reconnect, "private func runReconnectEpisode("))
+reconnect_fixture = reconnect_fixture.replace("__TEARDOWN__", teardown)
+reconnect_fixture = reconnect_fixture.replace("__SELECTION__", selection)
+reconnect_fixture = reconnect_fixture.replace("__ATTEMPT_TAIL__", attempt_tail)
+reconnect_fixture = reconnect_fixture.replace("__BUDGET__", block(reconnect, "package struct ReconnectBudget").replace("package ", ""))
+with tempfile.TemporaryDirectory(prefix="knot-reconnect-fatal-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"
+    source.write_text(reconnect_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O",
+            "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"reconnectFatalFixtureSHA256": hashlib.sha256(reconnect_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in (ENGINE / "Session/StreamSession.swift", ENGINE / "Session/StreamSession+Reconnect.swift",
+                                                              ENGINE / "Session/NativeConnectionEvents.swift", ENGINE / "Session/NativeBackend.swift",
+                                                              ENGINE / "Session/NativeBackend+Pipeline.swift")}}))
+
+
+
+# Public recovery must become honest again if a replacement dies after its first
+# decoded frame. Execute current production callback wiring, bridge fencing,
+# ordered public event source, termination prefix and complete shell reducer.
+# Only backend/video/presentation resources are inert; no sockets or media open.
+import re
+
+recovery_paths = {
+    "reconnect": ENGINE / "Session/StreamSession+Reconnect.swift",
+    "start": ENGINE / "Session/StreamSession+Start.swift",
+    "bridge": ENGINE / "Session/StreamBridgeContext.swift",
+    "events": ENGINE / "Session/SessionEventSource.swift",
+    "public": ENGINE / "Session/StreamSession+Public.swift",
+    "presentation": ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift",
+}
+recovery_sources = {key: path.read_text() for key, path in recovery_paths.items()}
+recovery_terminate = block(recovery_sources["reconnect"], "package func handleHostTerminate(")
+recovery_prefix = recovery_terminate[:recovery_terminate.index("        // The uplink is dead")] + "    }"
+recovery_types = (ENGINE / "Models/Types.swift").read_text()
+recovery_constants = "\n".join(re.findall(
+    r"^    package static let (?:deadPeer|protectedContent|frameConversion|noVideoTraffic|noVideoFrame)TerminationCode[^\n]*",
+    (ENGINE / "Session/StreamSession.swift").read_text() + "\n" +
+    (ENGINE / "Session/StreamSession+FrameWatchdog.swift").read_text(), re.M))
+assert len(recovery_constants.splitlines()) == 5
+recovery_contract = "\n".join([
+    block(recovery_types, "public enum StreamEvent:"),
+    block(recovery_types, "public enum ConnectionQuality:"),
+    block(recovery_types, "public enum StreamError:"),
+    (ENGINE / "Models/StreamFailure.swift").read_text(),
+    (ENGINE / "Models/StreamFailureCopy.swift").read_text(),
+    "public enum StreamConnection {\n" + block((ENGINE / "Session/StreamConnection.swift").read_text(), "public enum Failure:") + "\n}",
+    block((ENGINE / "Session/StreamSession+Attempt.swift").read_text(), "package struct TakeoverRequired:"),
+    "public enum StreamInput { public enum Event: Sendable {} }",
+])
+recovery_fixture = r'''
+import Foundation
+__CONTRACT__
+__PRESENTATION__
+__EVENT_SOURCE__
+final class NativeBackend: @unchecked Sendable {}
+final class StreamBridgeContext: @unchecked Sendable {
+    private let sourceLock = NSLock()
+    private var attemptID = UUID()
+    private var eventSource: ObjectIdentifier?
+    private var audioEventsQuiesced = false
+    let publicEvents: SessionEventSource?
+    var eventContinuation: AsyncStream<StreamEvent>.Continuation?
+    init(_ events: SessionEventSource) { publicEvents = events }
+    __BRIDGE_METHODS__
+}
+@MainActor final class Video {
+    var onHDRActiveChanged: ((Bool) -> Void)?
+    var onFirstDecodedFrame: (() -> Void)?
+}
+@MainActor final class SessionPresentation { var firstFrame: () -> Void = {} }
+struct SessionMedia { let video: Video; let presentation: SessionPresentation }
+public final class StreamSession: @unchecked Sendable {
+    __UPDATE__
+    __CONSTANTS__
+    let backend = NativeBackend()
+    var bridge: StreamBridgeContext?
+    var isStreaming = true, stopInProgress = false, isReconnecting = true
+    var attemptID: UUID, reconnectAttemptID: UUID?, reconnectAttemptFailure: Int32?
+    var lastReconnectError: StreamError?
+    init(bridge: StreamBridgeContext, attempt: UUID) {
+        self.bridge = bridge; attemptID = attempt; reconnectAttemptID = attempt
+    }
+    @MainActor __TERMINATION_PREFIX__
+    @MainActor __WIRE__
+}
+@main struct PublicRecoveryChecks {
+    @MainActor static func main() async throws {
+        var checks = 0
+        func expect(_ condition: @autoclosure () -> Bool, _ name: String) throws {
+            guard condition() else { throw NSError(domain: name, code: checks) }; checks += 1
+        }
+        func label(_ event: StreamEvent) -> String {
+            switch event {
+            case .firstFrame: "frame"
+            case .reconnecting: "reconnecting"
+            default: "unexpected"
+            }
+        }
+        func collect(_ source: SessionEventSource) async -> [StreamSession.Update] {
+            source.finish()
+            var values: [StreamSession.Update] = []
+            for await update in source.stream { values.append(update) }
+            return values
+        }
+        let source = SessionEventSource(); _ = source.stream
+        let bridge = StreamBridgeContext(source), attempt = UUID()
+        let session = StreamSession(bridge: bridge, attempt: attempt)
+        bridge.setEventSource(session.backend, attempt: attempt)
+        let video = Video(), presentation = SessionPresentation()
+        var deliveredFrames = 0
+        presentation.firstFrame = { deliveredFrames += 1 }
+        let media = SessionMedia(video: video, presentation: presentation)
+        session.wireMediaCallbacks(setup: media, bridge: bridge, attempt: attempt)
+        let failedFrame = video.onFirstDecodedFrame!
+        bridge.emit(.reconnecting); failedFrame()
+        await session.handleHostTerminate(code: -1, from: session.backend)
+        let retiredEpoch = bridge.currentAttempt
+        try expect(retiredEpoch != attempt, "first current failure retires callback epoch")
+        try expect(session.attemptID == attempt && session.reconnectAttemptID == attempt,
+                   "callback fence preserves session and sticky-latch attempt IDs")
+        try expect(session.reconnectAttemptFailure == -1, "current failure stays latched")
+        try expect(!bridge.acceptsEvent(from: session.backend, attempt: attempt), "failed native callback attempt rejected")
+        failedFrame()
+        bridge.emit(.firstFrame, source: session.backend, attempt: attempt)
+        try expect(deliveredFrames == 1, "late failed decoder frame never reaches presentation callback")
+        await session.handleHostTerminate(code: -2, from: session.backend)
+        try expect(bridge.currentAttempt == retiredEpoch && session.reconnectAttemptFailure == -1,
+                   "duplicate failure neither resets epoch nor replaces first failure")
+        let next = UUID()
+        session.attemptID = next; session.reconnectAttemptID = next; session.reconnectAttemptFailure = nil
+        bridge.setEventSource(session.backend, attempt: next)
+        session.wireMediaCallbacks(setup: media, bridge: bridge, attempt: next)
+        video.onFirstDecodedFrame?()
+        try expect(deliveredFrames == 2 && bridge.acceptsEvent(from: session.backend, attempt: next),
+                   "next fresh attempt decoder and native callbacks accepted")
+        let updates = await collect(source)
+        try expect(updates.map { label($0.event) } == ["reconnecting", "frame", "reconnecting", "frame"],
+                   "one failure reassertion and no late/duplicate public frame")
+        try expect(updates[1].attemptID == attempt && updates[2].attemptID == retiredEpoch && updates[3].attemptID == next,
+                   "ordered public updates retain actual epochs")
+        var recovery = DesktopRecoveryPresentation()
+        recovery.receive(updates[0].event); recovery.receive(updates[1].event)
+        try expect(recovery.phase == .live && recovery.message == nil, "actual reducer is live after original frame")
+        recovery.receive(updates[2].event)
+        try expect(recovery.phase == .reconnecting && recovery.message != nil, "actual reducer restores recovery card after current failure")
+        recovery.receive(updates[3].event)
+        try expect(recovery.phase == .live && recovery.message == nil, "only next fresh frame clears recovery card")
+        for mode in ["stale", "wake", "stopping", "stopped", "old-drain"] {
+            let events = SessionEventSource(); _ = events.stream
+            let bridge = StreamBridgeContext(events), id = UUID()
+            let session = StreamSession(bridge: bridge, attempt: id)
+            bridge.setEventSource(session.backend, attempt: id)
+            let video = Video(), media = SessionMedia(video: video, presentation: SessionPresentation())
+            session.wireMediaCallbacks(setup: media, bridge: bridge, attempt: id)
+            bridge.emit(.reconnecting); video.onFirstDecodedFrame?()
+            if mode == "stopping" { session.stopInProgress = true }
+            if mode == "stopped" { session.isStreaming = false }
+            if mode == "old-drain" { session.reconnectAttemptID = nil }
+            let producer: NativeBackend? = mode == "wake" ? nil : (mode == "stale" ? NativeBackend() : session.backend)
+            await session.handleHostTerminate(code: -1, from: producer)
+            try expect(bridge.currentAttempt == id && session.reconnectAttemptFailure == nil,
+                       "\(mode) does not retire epoch or latch failure")
+            let values = await collect(events)
+            try expect(values.map { label($0.event) } == ["reconnecting", "frame"],
+                       "\(mode) does not add a recovery reset")
+        }
+        print("{\"status\":\"passed\",\"publicRecoveryChecks\":\(checks),\"scope\":\"current production termination prefix, decoder callback wiring, bridge methods, public FIFO and complete shell reducer; inert backend/video only\"}")
+    }
+}
+'''
+recovery_fixture = recovery_fixture.replace("__CONTRACT__", recovery_contract)
+recovery_fixture = recovery_fixture.replace("__PRESENTATION__", recovery_sources["presentation"])
+recovery_fixture = recovery_fixture.replace("__EVENT_SOURCE__", recovery_sources["events"])
+recovery_fixture = recovery_fixture.replace("__UPDATE__", block(recovery_sources["public"], "public struct Update:"))
+recovery_fixture = recovery_fixture.replace("__CONSTANTS__", recovery_constants)
+recovery_fixture = recovery_fixture.replace("__TERMINATION_PREFIX__", recovery_prefix)
+recovery_fixture = recovery_fixture.replace("__WIRE__", block(recovery_sources["start"], "package func wireMediaCallbacks("))
+recovery_fixture = recovery_fixture.replace("__BRIDGE_METHODS__", "\n".join(
+    block(recovery_sources["bridge"], signature) for signature in (
+        "package var currentAttempt:", "package func beginAttempt(", "package func setEventSource(",
+        "package func acceptsEvent(", "package func emit(")))
+recovery_fixture = recovery_fixture.replace("package ", "").replace("import GlimmerEngine\n", "")
+with tempfile.TemporaryDirectory(prefix="knot-public-recovery-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"
+    source.write_text(recovery_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O",
+            "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"publicRecoveryFixtureSHA256": hashlib.sha256(recovery_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in recovery_paths.values()}}))

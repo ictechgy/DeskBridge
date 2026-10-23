@@ -111,7 +111,7 @@ class Window(Gtk.Window):
             except Exception as error:
                 failure = str(error) if isinstance(error, Failure) else str(Failure('operation'))
                 if getattr(error, 'cleanup_failed', False):
-                    failure += ' 임시 패키지 사본을 정리하지 못했습니다. 선택한 저장 폴더를 직접 확인하세요.'
+                    failure += ' 임시 패키지 사본을 정리하지 못했습니다. 선택한 저장 폴더에서 숨김 파일을 표시하고 .deskbridge-package-로 시작하는 임시 사본을 확인하세요.'
             GLib.idle_add(finish, result, failure)
         def finish(result, failure):
             self.busy = False; self.operation_kind = None

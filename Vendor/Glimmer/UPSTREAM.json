@@ -1384,7 +1384,9 @@
     "GlimmerEngine/Session/StreamConnection+Configuration.swift",
     "GlimmerEngine/Session/StreamSession+Connect.swift",
     "GlimmerEngine/Session/StreamSession+Public.swift",
+    "GlimmerEngine/Session/StreamSession+Reconnect.swift",
     "GlimmerEngine/Session/StreamSession+Start.swift",
+    "GlimmerEngine/Session/StreamSession.swift",
     "GlimmerEngine/Video/VideoDecoder+Decode.swift"
   ],
   "newFiles": [

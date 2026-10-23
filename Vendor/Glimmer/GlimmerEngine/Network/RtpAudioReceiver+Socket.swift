@@ -77,7 +77,11 @@ extension RtpAudioReceiver {
                 }
             }
         }
-        guard bound else { close(sock); throw EnetError.socketFailure("bind() errno \(errno)") }
+        guard bound else {
+            let failure = errno
+            close(sock)
+            throw EnetError.socketFailure("bind() errno \(failure)")
+        }
 
         if !SocketTimestamp.enable(on: sock) {
             Diag.notice("Kernel receive timestamps unavailable errno \(errno)", Self.cat)

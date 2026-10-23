@@ -357,8 +357,10 @@ sys.stdout.buffer.write(data)
         other = [row for row in rows if row[0] != rows[0][0]]
         ordered = [row for pair in itertools.zip_longest(first, other) for row in pair if row is not None]
         deferred = []
-        # Retry locally capped routes once if later routes reject promptly. This
-        # remains TCP setup only and shares the original DNS/TCP/TLS deadline.
+        # Keep half of a multi-address setup budget for one retry pass, including
+        # when the final first-pass route blackholes or the resolver has many rows.
+        first_pass_seconds = min(self.CONNECT_ATTEMPT_SECONDS, self._remaining(expires) / (2 * len(ordered)))
+        # Retries remain TCP setup only and share the original DNS/TCP/TLS deadline.
         for candidates, retrying in ((ordered, False), (deferred, True)):
             for index, (family, kind, protocol, address) in enumerate(candidates):
                 self._remaining(expires)
@@ -376,9 +378,13 @@ sys.stdout.buffer.write(data)
                     if status not in (0, errno.EISCONN):
                         if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
                             raise OSError(status, os.strerror(status))
-                        # Reserve fallback time only while another candidate remains.
-                        # A slow final/only route retains the shared connection budget.
-                        attempt_expires = expires if index == len(candidates) - 1 else min(expires, time.monotonic() + self.CONNECT_ATTEMPT_SECONDS)
+                        # A single route retains its full budget. Deferred routes
+                        # share remaining time fairly; prompt rejects release their
+                        # unused share to later routes, with no further retry pass.
+                        attempt_expires = expires
+                        if len(ordered) > 1:
+                            seconds = self._remaining(expires) / (len(candidates) - index) if retrying else first_pass_seconds
+                            attempt_expires = min(expires, time.monotonic() + seconds)
                         try:
                             self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
                         except TimeoutError:
@@ -656,7 +662,10 @@ def save_package(pin, package, destination):
         if temporary is not None and os.path.lexists(temporary):
             try: os.unlink(temporary)
             except OSError:
-                if primary is None: raise Failure('export_destination') from None
+                if primary is None:
+                    primary = Failure('export_destination')
+                    primary.cleanup_failed = True
+                    raise primary from None
                 # Preserve the authored primary failure, recording cleanup failure
                 # without embedding paths or raw OS text into user guidance.
                 primary.cleanup_failed = True
