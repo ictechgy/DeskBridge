@@ -115,7 +115,7 @@ Native Windows runtime notices from the pinned Zig distribution are retained und
 
 The launcher build records the selected native compiler executable SHA256. Matching its version string alone does not authenticate that executable; local/signing hosts must independently verify their toolchain archive and retain that evidence. CI verifies its pinned archive. Runtime notice source hashes are checked before building, and Windows installer output includes `WindowsRuntime-NOTICE.txt` beside the quick EXE.
 
-`WINDOWS-SHA256SUMS` covers the installer EXE, quick-setup EXE and `WindowsRuntime-NOTICE.txt`. Windows CI uploads the entire `dist/release` directory, including that notice. Vendored files disable checkout line-ending conversion to preserve upstream digest pins on Windows.
+`WINDOWS-SHA256SUMS` covers the installer EXE, quick-setup EXE, `WindowsRuntime-NOTICE.txt`, `Knot-Windows.build.json` and `Knot-Windows.checks.json`. Windows CI uploads the entire `dist/release` directory, including those records. Vendored files disable checkout line-ending conversion to preserve upstream digest pins on Windows. Other text files can use Git's Windows checkout line endings; the build manifest hashes the actual checkout bytes, so comparisons with a source tar archive must account for that conversion.
 
 The managed broker always requests a fixed `operation-success` receipt in its fresh protected payload stage. The backend creates it with CreateNew only after a completed operation, immediately before success exit. Zero process status without that empty ordinary receipt fails closed, including Windows PowerShell `-File` Ctrl+C exits. No caller-supplied receipt path or request field exists.
 

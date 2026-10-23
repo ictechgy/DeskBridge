@@ -286,12 +286,14 @@ private final class SFTPSession {
                 guard count > 0, count <= 4096, count <= 100_000 - rawEntries else {
                     throw SFTPError.protocolViolation("directory entry limit exceeded")
                 }
-                rawEntries += count // Charge dot entries before filtering them out.
+                rawEntries += count // Charge every name before filtering unsupported entries.
                 for _ in 0..<count {
                     let name = try body.string(); _ = try body.bytes(maximum: 16384)
                     let attrs = try SFTPAttributes.decode(&body)
                     if name == "." || name == ".." { continue }
-                    let fullPath = try SFTPPaths.append(name, to: path)
+                    let fullPath: String
+                    do { fullPath = try SFTPPaths.append(name, to: path) }
+                    catch SFTPError.invalidPath(_) { continue }
                     let stringBytes = name.utf8.count + fullPath.utf8.count
                     guard stringBytes <= 32 * 1024 * 1024 - retainedStringBytes else {
                         throw SFTPError.protocolViolation("directory path byte limit exceeded")
@@ -327,7 +329,7 @@ private final class SFTPSession {
             throw SFTPError.unsupportedFile
         }
         let size = UInt64(initial.st_size)
-        guard size <= maximumFileSize else { throw SFTPError.localIO("file exceeds 128 GiB MVP limit") }
+        guard size <= maximumFileSize else { throw SFTPError.unsupportedFile }
         let parent = try checkedPath(remoteDirectory, directory: true)
         let job = try SFTPPaths.append("deskbridge-\(UUID().uuidString.lowercased())", to: parent)
         _ = try status(request(14) { $0.string(job); $0.uint32(0) })

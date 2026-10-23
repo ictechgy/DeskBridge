@@ -209,7 +209,7 @@ import Foundation
     try expect(!transfers.busy && transfers.identityPath == configuredIdentity && transfers.errorMessage != nil,
                "key generation replaced configured identity without explicit confirmation")
     transfers.errorMessage = nil
-    transfers.generateKey(replacingIdentity: configuredIdentity + "-stale")
+    transfers.generateKey(replacingIdentity: .init(savedPath: transfers.keyReplacementSnapshot.savedPath, draftPath: configuredIdentity + "-stale"))
     try expect(!transfers.busy && transfers.identityPath == configuredIdentity && transfers.errorMessage != nil,
                "key generation accepted confirmation for a different identity")
     var releaseQuit: CheckedContinuation<Void, Never>?

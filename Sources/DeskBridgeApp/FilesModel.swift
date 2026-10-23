@@ -42,7 +42,22 @@ final class FilesModel: ObservableObject {
         return "파일 작업을 완료하지 못했습니다. 설정 파일과 개인 키의 접근 권한을 확인한 뒤 다시 시도하세요."
     }
     var canExchangeSetup: Bool { !shuttingDown && desktop.supportsFiles && !busy && !connected && desktop.canChoosePC }
-    var requiresKeyReplacementConfirmation: Bool { !identityPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    struct KeyReplacementSnapshot: Equatable {
+        let savedPath: String
+        let draftPath: String
+        var requiresConfirmation: Bool {
+            [savedPath, draftPath].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+    }
+    var keyReplacementSnapshot: KeyReplacementSnapshot {
+        .init(savedPath: desktop.settings.sshIdentityPath, draftPath: identityPath)
+    }
+    var requiresKeyReplacementConfirmation: Bool { keyReplacementSnapshot.requiresConfirmation }
+    func requireKeyReplacementSelection(_ snapshot: KeyReplacementSnapshot) throws {
+        guard keyReplacementSnapshot == snapshot else {
+            throw AppFailure("저장된 SSH 키나 입력 중인 키가 바뀌었습니다. 현재 키를 확인한 뒤 다시 시도하세요.")
+        }
+    }
     static func connectionMatches(connected: Bool, connectedAddress: String?, validatedAddress: String) -> Bool {
         guard connected, let connectedAddress,
               let canonical = try? EndpointPolicy.validatedAddress(validatedAddress), canonical == validatedAddress else { return false }
@@ -221,20 +236,21 @@ final class FilesModel: ObservableObject {
             status = "파일 연결을 끊었습니다."
         }
     }
-    func generateKey(replacingIdentity confirmedIdentity: String? = nil) {
+    func generateKey(replacingIdentity confirmedIdentity: KeyReplacementSnapshot? = nil) {
         guard !shuttingDown, desktop.supportsFiles, !busy, !connected else { return }
-        let previousIdentity = identityPath
-        guard !requiresKeyReplacementConfirmation || confirmedIdentity == previousIdentity else {
+        let requestedIdentity = keyReplacementSnapshot
+        guard !requestedIdentity.requiresConfirmation || confirmedIdentity == requestedIdentity else {
             errorMessage = "설정된 SSH 키를 바꾸려면 먼저 확인하세요. 새 공개 키는 Windows에 다시 등록해야 합니다."
             return
         }
         perform { [self] in
             try desktop.assertStorageReady()
+            try requireKeyReplacementSelection(requestedIdentity)
             let directory = desktop.store.directory
             let result = try await Task.detached(priority: .userInitiated) { try SSHKeyManager.generate(in: directory) }.value
             try Task.checkCancellation()
             guard !connected else { throw AppFailure("파일 연결을 끊은 뒤 키를 변경하세요.") }
-            guard identityPath == previousIdentity else { throw AppFailure("설정된 SSH 키가 바뀌었습니다. 현재 키를 확인한 뒤 다시 시도하세요.") }
+            try requireKeyReplacementSelection(requestedIdentity)
             try desktop.rememberFileIdentity(path: result.privateKey.path)
             identityPath = result.privateKey.path; generatedPublicKey = result.publicKey
             status = "Mac 전용 키를 만들었습니다. 아래 공개 키를 Windows 설정 도우미에 등록하세요."

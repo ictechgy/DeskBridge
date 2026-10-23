@@ -12,7 +12,7 @@ struct FilesPage: View {
     @State private var manualTrustExpanded = false
     @State private var addressDraft = ""
     @State private var confirmingKeyReplacement = false
-    @State private var identityToReplace = ""
+    @State private var identityToReplace: FilesModel.KeyReplacementSnapshot?
 
     private var settingsLocked: Bool { model.busy || model.connected }
     private var targetLocked: Bool { settingsLocked || desktop.busy || desktop.streaming }
@@ -59,10 +59,15 @@ struct FilesPage: View {
         .onChange(of: desktop.address) { _, address in addressDraft = address }
         .onChange(of: model.connected) { _, connected in configurationExpanded = !connected }
         .confirmationDialog("설정된 SSH 키를 바꿀까요?", isPresented: $confirmingKeyReplacement, titleVisibility: .visible) {
-            Button("새 키 만들고 연결 설정 변경", role: .destructive) { model.generateKey(replacingIdentity: identityToReplace) }
+            Button("새 키 만들고 연결 설정 변경", role: .destructive) {
+                guard let identityToReplace else { return }
+                model.generateKey(replacingIdentity: identityToReplace)
+            }
             Button("취소", role: .cancel) {}
         } message: {
-            Text("현재 키: \(identityToReplace)\n새 공개 키를 Windows에 다시 등록해야 파일을 연결할 수 있습니다. 기존 키 파일은 지우지 않습니다.")
+            if let identityToReplace {
+                Text("저장된 키: \(identityToReplace.savedPath.isEmpty ? "없음" : identityToReplace.savedPath)\n입력 중인 키: \(identityToReplace.draftPath.isEmpty ? "없음" : identityToReplace.draftPath)\n새 공개 키를 Windows에 다시 등록해야 파일을 연결할 수 있습니다. 기존 키 파일은 지우지 않습니다.")
+            }
         }
     }
 
@@ -230,7 +235,7 @@ struct FilesPage: View {
                 HStack {
                     Button("Mac 전용 키 만들기") {
                         if model.requiresKeyReplacementConfirmation {
-                            identityToReplace = model.identityPath
+                            identityToReplace = model.keyReplacementSnapshot
                             confirmingKeyReplacement = true
                         } else { model.generateKey() }
                     }
@@ -290,7 +295,7 @@ struct FilesPage: View {
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             .padding(.top, 12)
-            .disabled(settingsLocked || desktop.busy || desktop.streaming)
+            .disabled(!model.canExchangeSetup)
         }
     }
 

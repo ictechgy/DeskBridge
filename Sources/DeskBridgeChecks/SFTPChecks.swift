@@ -34,6 +34,7 @@ private final class SFTPFixtureTransport: SFTPTransport, @unchecked Sendable {
         if listingMode == .longPaths { directories.insert(Self.longParent) }
     }
     func contents(_ path: String) -> Data? { lock.lock(); defer { lock.unlock() }; return files[path] }
+    func insertSyntheticFile(_ name: String) { lock.lock(); defer { lock.unlock() }; files["/files/" + name] = Data() }
     func injectMismatchedID() { lock.lock(); mismatch = true; lock.unlock() }
     func injectDirectoryStatus(_ code: UInt32) { lock.lock(); nextDirectoryStatus = code; lock.unlock() }
     func injectCloseFailure() { lock.lock(); failNextClose = true; lock.unlock() }
@@ -216,10 +217,14 @@ public func runSFTPChecks() async throws -> Int {
     catch { checks += 1 }
 
     let peer = SFTPFixtureTransport(), client = SFTPClient(configuration: config, transportFactory: { peer })
+    let unsupportedNames = ["hidden\u{200B}.txt", "invoice\u{202E}cod.exe", "family👩\u{200D}👧.txt"]
+    for name in unsupportedNames { peer.insertSyntheticFile(name) }
     try await client.connect()
     let entries = try await client.list(path: "/files")
     try sftpCheck(entries.contains { $0.name == "한글 [draft].txt" && $0.kind == .file && $0.size == 140_123 }, "structured directory listing lost a filename"); checks += 1
     try sftpCheck(!entries.contains { $0.name == "." || $0.name == ".." }, "ordinary dot entries were retained"); checks += 1
+    try sftpCheck(entries.count == 2 && !entries.contains { unsupportedNames.contains($0.name) } && !peer.isClosed,
+                  "unsupported names blocked safe siblings or escaped listing filtering"); checks += 1
     do { _ = try await client.list(path: "/files/../escape"); throw SFTPCheckFailure(message: "traversal accepted") }
     catch is SFTPCheckFailure { throw SFTPCheckFailure(message: "traversal accepted") }
     catch { checks += 1 }

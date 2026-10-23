@@ -124,6 +124,7 @@ fixture = fixture.replace("__ACTUAL_PRESENTATION__", presentation.replace("impor
 # of their decisions. Codec/backlog/presentation dependencies are inert fakes;
 # the gate, epoch commit, drop consumer, and watchdog methods are production bodies.
 suppression = (ENGINE / "Video/VideoDecoder+Suppression.swift").read_text()
+backlog = (ENGINE / "Video/VideoDecoder+Backlog.swift").read_text()
 watchdog = (ENGINE / "Session/StreamSession+FrameWatchdog.swift").read_text()
 recovery_methods = "\n".join([
     block(suppression, "enum DecodeGateDisposition:"),
@@ -135,6 +136,10 @@ recovery_methods = "\n".join([
     block(suppression, "private func liftDecodeGate()"),
     block(lifecycle, "struct PendingDecode"),
     block(lifecycle, "nonisolated func decodeAssembledFrame("),
+    block(backlog, "nonisolated func reserveDecodeSlot(isIDR: Bool)").replace(
+        "func reserveDecodeSlot(", "func productionReserveDecodeSlot(", 1),
+    block(backlog, "nonisolated func releaseInFlightDecode("),
+    block(output, "nonisolated func tearDownDecompressionSession()"),
 ])
 watchdog_methods = "\n".join([
     block(watchdog, "package static func watchdogTerminationCode("),
@@ -148,8 +153,9 @@ import os
 
 // No VideoToolbox, display, preferences, live media, socket, or real backend.
 struct QuietLog: Sendable { func notice(_ value: String) {} }
-struct QuietSignposter: Sendable { func emitEvent(_ name: String, _ value: String) {} }
-enum OSSignposter { static let decode = QuietSignposter() }
+enum OSSignposter {
+    static let decode = os.OSSignposter(logger: Logger(subsystem: "org.deskbridge.synthetic", category: "inert-decoder"))
+}
 enum Diag {
     static func notice(_ value: String, _ context: String) {}
     static func error(_ value: String, _ context: String) {}
@@ -173,6 +179,7 @@ final class Pacer: @unchecked Sendable {
 final class DecodeStats: @unchecked Sendable {
     var discards = 0
     func recordDecoderDiscard() { discards += 1 }
+    func dropPendingDecodeSubmits() {}
 }
 final class VideoDecoder: @unchecked Sendable {
     enum DecodeSlotDecision { case reserved, reservedForStallRecreate, dropAndFlush }
@@ -182,11 +189,20 @@ final class VideoDecoder: @unchecked Sendable {
     var _decodeGateLiftedAtNanos: UInt64?
     let framePacer: Pacer? = Pacer()
     let statsCollector = DecodeStats()
-    let log = QuietLog()
+    let log = Logger(subsystem: "org.deskbridge.synthetic", category: "inert-decoder")
     let decodeQueue = DispatchQueue(label: "synthetic.reference-drop")
     var decision = DecodeSlotDecision.reserved
     var beforeReserve: (() -> Void)?
-    var reservations = 0, slots = 0
+    let inFlightDecodeLock = NSLock()
+    var inFlightDecodes = 0, consecutiveBacklogOverflow = 0
+    var lastVtDecodeFailed = false, useProductionReservation = false
+    let maxInFlightDecodes = 3, maxInFlightDecodeCeiling = 6
+    static let decodeStallEscalateSeconds = 10.0, decodeStallWindowSeconds = 1.0
+    var slots: Int { get { inFlightDecodes } set { inFlightDecodes = newValue } }
+    var reservations = 0
+    var decompressionSession: Int? = 1
+    var sessionEvents: [String] = []
+    func releaseOutputCallbackRefcon() { sessionEvents.append("retired") }
     var submitted: [PendingDecode] = []
     var decodedIdle = Double.infinity, gateLiftIdle = Double.infinity, receiveIdle = 0.1
     var presentSuppressed: Bool { _presentSuppressed }
@@ -195,12 +211,17 @@ final class VideoDecoder: @unchecked Sendable {
     func secondsSinceDecodeGateLifted() -> Double { gateLiftIdle }
     func secondsSinceLastReceivedFrame() -> Double { receiveIdle }
     func reserveDecodeSlot(isIDR: Bool) -> DecodeSlotDecision {
-        reservations += 1; beforeReserve?()
-        if decision != .dropAndFlush { slots += 1 }
-        return decision
+        reservations += 1
+        let result = useProductionReservation ? productionReserveDecodeSlot(isIDR: isIDR) : decision
+        if !useProductionReservation && result != .dropAndFlush { slots += 1 }
+        beforeReserve?()
+        return result
     }
-    func releaseInFlightDecode() { slots -= 1 }
-    func runDecodeOnQueue(_ pending: PendingDecode) { submitted.append(pending); releaseInFlightDecode() }
+    func runDecodeOnQueue(_ pending: PendingDecode) {
+        sessionEvents.append(decompressionSession == nil ? "fresh-decode" : "old-decode")
+        if decompressionSession == nil { decompressionSession = 2 }
+        submitted.append(pending); releaseInFlightDecode()
+    }
     func submit(idr: Bool = false) -> Int32 {
         decodeAssembledFrame(pictureData: Data([0]), newSps: nil, newPps: nil, newVps: nil,
             isIDR: idr, rtpTimestamp: 1, totalLength: 1)
@@ -314,6 +335,26 @@ actor StreamSession {
                    "gate racing slot reservation must release slot without committing IDR")
         try expect(TelemetryCounters.shared.decodeGatedDropTotal.value == beforeGateDrops + 1,
                    "commit-time gate refusal must count only this one drop")
+        let gatedStall = VideoDecoder()
+        gatedStall.useProductionReservation = true
+        gatedStall.inFlightDecodes = gatedStall.maxInFlightDecodes
+        gatedStall.lastVtDecodeFailed = true
+        gatedStall.beforeReserve = { gatedStall._decodeGated = true; gatedStall._awaitingResyncIdr = true }
+        // Hold the serial queue so resume and its IDR arrive before teardown runs.
+        let releaseQueue = DispatchSemaphore(value: 0)
+        gatedStall.decodeQueue.async { releaseQueue.wait() }
+        try expect(gatedStall.submit(idr: true) == StreamProtocol.DR_OK && gatedStall.slots == 0 &&
+                   !gatedStall.lastVtDecodeFailed && gatedStall._idrEpoch == 0 && gatedStall.submitted.isEmpty,
+                   "stall reservation refused by gate must balance its abandoned backlog without hidden IDR")
+        gatedStall.beforeReserve = nil
+        gatedStall.resume(); gatedStall.gateLiftIdle = 0
+        try expect(gatedStall.submit(idr: true) == StreamProtocol.DR_OK,
+                   "resumed IDR must reserve normally after gate-lift resets darkness")
+        releaseQueue.signal(); gatedStall.decodeQueue.sync {}
+        try expect(gatedStall.sessionEvents == ["retired", "fresh-decode"] &&
+                   gatedStall.submitted.count == 1 && gatedStall.submitted[0].isIDR &&
+                   !gatedStall.submitted[0].forceSessionRecreate && gatedStall.slots == 0 && gatedStall._idrEpoch == 1,
+                   "refused stall IDR must retire wedged session before fresh resumed decode, with balanced reservations")
         let failedDuringReserve = VideoDecoder()
         failedDuringReserve.beforeReserve = { _ = failedDuringReserve.armResyncAfterDecodeError(epoch: 0) }
         try expect(failedDuringReserve.submit() == StreamProtocol.DR_NEED_IDR && failedDuringReserve.slots == 0,
@@ -375,6 +416,7 @@ actor StreamSession {
 }
 '''
 recovery_fixture = recovery_fixture.replace("__ACTUAL_REFERENCE_RECOVERY_METHODS__", recovery_methods)
+recovery_fixture = recovery_fixture.replace("import os\n", "import os\nfunc VTDecompressionSessionInvalidate(_ session: Int) {}\n", 1)
 recovery_fixture = recovery_fixture.replace("__ACTUAL_WATCHDOG_METHODS__", watchdog_methods)
 with tempfile.TemporaryDirectory(prefix="deskbridge-decoder-lifecycle-", dir="/tmp") as directory:
     temporary = Path(directory)

@@ -244,6 +244,13 @@ extension VideoDecoder {
         case .feed(let committedEpoch):
             epoch = committedEpoch
         case .dropQuietly:
+            if forceSessionRecreate {
+                // Reservation abandoned the wedged session's backlog. A gate
+                // may refuse this IDR, but cannot cancel that replacement:
+                // retire the session before any later receive-thread submit
+                // can enqueue its resumed IDR on this same serial queue.
+                decodeQueue.async { [self] in self.tearDownDecompressionSession() }
+            }
             releaseInFlightDecode()
             return StreamProtocol.DR_OK
         case .resyncToIdr:

@@ -19,9 +19,11 @@ enum ConnectionQRReader {
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               (1...8192).contains(width), (1...8192).contains(height), width * height <= 16_777_216,
+              // Preserve small QR regions inside an otherwise valid image. The
+              // source stays capped at 16MP (64MiB for an RGBA8 bitmap).
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0,
                 [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                 kCGImageSourceThumbnailMaxPixelSize: 2048,
+                 kCGImageSourceThumbnailMaxPixelSize: max(width, height),
                  kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
         else { throw AppFailure("8MB 이하의 QR 이미지 한 장을 선택하세요. PNG·JPEG·HEIC·TIFF·BMP를 사용할 수 있습니다.") }
         try Task.checkCancellation()

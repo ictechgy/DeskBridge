@@ -79,7 +79,9 @@ try {
     Write-SetupSuccessReceipt
     exit 0
 } catch {
-    Write-Host $_.Exception.Message -ForegroundColor Red
+    $failure=$_
+    if ($lifecycleLease) {try {$lifecycleLease.Dispose()} finally {$lifecycleLease=$null}}
+    Write-Host $failure.Exception.Message -ForegroundColor Red
     if (-not $NoPause) {
         [void](Read-Host 'Setup failed. Press Enter to close this administrator window')
         # Only a displayed and acknowledged interactive error is reported as handled.

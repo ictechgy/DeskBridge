@@ -89,7 +89,18 @@ private struct ControlHardeningSyntheticChecks {
             try rejects { _ = try XMLTreeBuilder.parse(data: nested) }
         }
         try rejects { _ = try XMLTreeBuilder.parse(data: Data(("<root>" + String(repeating: "<a/>", count: XMLTreeBuilder.maximumNodes) + "</root>").utf8)) }
-        try rejects { _ = try XMLTreeBuilder.parse(data: Data(repeating: 32, count: XMLTreeBuilder.maximumSourceBytes + 1)) }
+        var boundaryXML = Data(repeating: 32, count: XMLTreeBuilder.maximumSourceBytes - 7)
+        boundaryXML.append(contentsOf: "<root/>".utf8)
+        try require(try XMLTreeBuilder.parse(data: boundaryXML).firstChild(named: "root") != nil,
+                    "well-formed XML at the exact source budget must parse")
+        boundaryXML.append(32)
+        do {
+            _ = try XMLTreeBuilder.parse(data: boundaryXML)
+            throw ControlCheckFailure(message: "over-budget valid XML was accepted")
+        } catch let error as NSError {
+            try require(error.domain == "Glimmer.XML" && error.code == -3,
+                        "over-budget XML must fail at the source guard")
+        }
         for value in ["", " ", "-1", "+1", "no", "1, 1", String(repeating: "9", count: 100)] {
             try rejects { _ = try ControlTransport.contentLengthHeader(in: Data("HTTP/1.1 200 OK\r\nContent-Length: \(value)".utf8)) }
         }
