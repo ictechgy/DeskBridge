@@ -87,11 +87,13 @@ def verify_virtual_display_inputs(root):
         raise ValueError('Invalid trusted virtual display deployment profiles')
     for profile in profiles:
         deployed = profile.get('files', [])
-        if (not re.fullmatch('[0-9a-f]{64}', profile.get('archiveSha256', '')) or
+        if (set(profile) != {'manifestId', 'archiveSha256', 'driverVersion', 'catalogSignerCertificateSha256', 'files'} or
+                not re.fullmatch('[0-9a-f]{64}', profile.get('archiveSha256', '')) or
                 not re.fullmatch('[0-9a-f]{64}', profile.get('catalogSignerCertificateSha256', '')) or
                 not re.fullmatch(r'[0-9]+(?:\.[0-9]+){3}', profile.get('driverVersion', '')) or
                 len(deployed) != 4 or {entry.get('name') for entry in deployed} != required_files or
-                any(type(entry.get('bytes')) is not int or not 0 < entry['bytes'] <= 300000 or
+                any(set(entry) != {'name', 'bytes', 'sha256'} or
+                    type(entry.get('bytes')) is not int or not 0 < entry['bytes'] <= 300000 or
                     not re.fullmatch('[0-9a-f]{64}', entry.get('sha256', '')) for entry in deployed)):
             raise ValueError('Invalid trusted virtual display deployment inventory')
     current = profiles[ids.index(deployments['currentManifestId'])]

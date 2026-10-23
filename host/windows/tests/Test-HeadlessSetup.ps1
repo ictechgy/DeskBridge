@@ -479,8 +479,17 @@ try {
     $device.DriverInf='OEM42.INF'; Assert-KnotDevices @($device) $j -Installed; $script:Checks++
 
     function New-SyntheticFileSystem([object] $State) {
+        # Explicit local capture works in both Windows PowerShell 5.1 and Core.
+        # Windows paths are case insensitive; every fixture remains under its fresh root.
+        $fixturePrefix=[IO.Path]::GetFullPath($root)+[IO.Path]::DirectorySeparatorChar
+        $pathComparison=[StringComparison]::Ordinal
+        if ([IO.Path]::DirectorySeparatorChar -eq [char]92) { $pathComparison=[StringComparison]::OrdinalIgnoreCase }
         return @{
-            AssertDirectory={ param($path) if (-not [IO.Directory]::Exists($path) -or -not $path.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::Ordinal) -or -not $State.AclAllowed) { throw 'synthetic private directory guard' } }.GetNewClosure()
+            AssertDirectory={ param($path)
+                $exists=[IO.Directory]::Exists($path)
+                $inside=[IO.Path]::GetFullPath($path).StartsWith($fixturePrefix,$pathComparison)
+                if (-not $exists -or -not $inside -or -not $State.AclAllowed) { throw "synthetic private directory guard (exists=$exists, withinFixture=$inside, acl=$($State.AclAllowed))" }
+            }.GetNewClosure()
             AssertFile={ param($path) if (-not [IO.File]::Exists($path) -or ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -or -not $State.AclAllowed -or $State.LinkCount -ne 1) { throw 'synthetic private file guard' } }.GetNewClosure()
             CreateDirectory={ param($path) if (Test-Path -LiteralPath $path) { throw 'synthetic existing path' }; [void][IO.Directory]::CreateDirectory($path); [void]$State.Created.Add($path) }.GetNewClosure()
             MoveDirectory={ param($source,$destination)

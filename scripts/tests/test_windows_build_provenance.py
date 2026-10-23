@@ -92,6 +92,21 @@ class VirtualDisplayPolicy(unittest.TestCase):
                 verify_virtual_display_inputs(self.root)
         path.write_text(json.dumps(original))
 
+    def test_profile_and_file_unknown_fields_match_runtime_rejection(self):
+        path = self.folder / 'VirtualDisplayDeployments.json'
+        original = json.loads(path.read_text())
+        import copy
+        for target in ('profile', 'file'):
+            changed = copy.deepcopy(original)
+            record = changed['profiles'][0]
+            if target == 'file':
+                record = record['files'][0]
+            record['annotation'] = 'synthetic future metadata'
+            path.write_text(json.dumps(changed))
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                verify_virtual_display_inputs(self.root)
+        path.write_text(json.dumps(original))
+
     def test_native_verification_version_is_bound_to_current_driver(self):
         path = self.folder / 'HeadlessNative.cs'
         path.write_text(path.read_text().replace('11.30.4.434', '1.2.3.4'))
