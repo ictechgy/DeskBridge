@@ -34,7 +34,7 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
                            'headless-setup': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-setup'],
                                'freshSyntheticOnly': True, 'nativeApisInvoked': False},
                            'headless-status': {'status': 'passed', 'checks': MINIMUM_WINDOWS_CHECKS['headless-status'],
-                               'freshSyntheticOnly': True, 'nativeApisInvoked': False}},
+                               'bootstrapPolicyComposed': True, 'freshSyntheticOnly': True, 'nativeApisInvoked': False}},
                        'invocations': [{'label': label + '-synthetic-checks', 'exitCode': 0} for label in ('headless-native', 'headless-setup', 'headless-status')],
                        'reverseClient': {
                            'schema': 1, 'status': 'passed', 'suites': ['reverse-client', 'reverse-discovery'],
@@ -181,11 +181,22 @@ class WindowsPayloadCheckRecordTests(unittest.TestCase):
             with self.subTest(host=host, framework=framework), patch('test_windows_launcher.os') as platform:
                 platform.name = host
                 if accepted:
-                    result = run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'])
+                    result = run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'], 'synthetic-native-policy')
                     self.assertIs(result['headless-native']['frameworkCompiler'], framework)
                 else:
                     with self.assertRaisesRegex(ValueError, 'Framework compiler boundary'):
-                        run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'])
+                        run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'], 'synthetic-native-policy')
+
+    def test_native_bootstrap_composition_proof_is_required(self):
+        for value in (False, None, 'true', 1):
+            changed = copy.deepcopy(self.checks)
+            changed['headless']['headless-status']['bootstrapPolicyComposed'] = value
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_windows_check_record(changed, self.build)
+        def invoke(label, argv):
+            return {'stdout': json.dumps(self.checks['headless'][label.removesuffix('-synthetic-checks')])}
+        with self.assertRaisesRegex(ValueError, 'compiled native bootstrap policy'):
+            run_headless_checks('synthetic-powershell', invoke, self.build['sourceManifest'])
 
     def test_embedded_binding_and_identity_proofs_are_required(self):
         for key in ('embeddedDecoderBindingTested', 'decoderResolverIdentityTested', 'decoderInitializationIdempotent'):

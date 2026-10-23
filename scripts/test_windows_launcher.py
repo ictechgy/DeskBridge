@@ -19,7 +19,7 @@ def fixture_module(name):
     return module
 
 
-def run_headless_checks(powershell, invoke, snapshot):
+def run_headless_checks(powershell, invoke, snapshot, bootstrap_policy_runner=None):
     """Compile actual native source and exercise production setup with inert fixtures."""
     if not powershell:
         if os.name != 'nt':
@@ -27,7 +27,12 @@ def run_headless_checks(powershell, invoke, snapshot):
         powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     results = {'sourceSha256': {path: snapshot[path] for path in HEADLESS_SOURCE_PATHS}}
     for label, script in [('headless-native', 'Test-HeadlessNative.ps1'), ('headless-setup', 'Test-HeadlessSetup.ps1'), ('headless-status', 'Test-HeadlessStatus.ps1')]:
-        entry = invoke(label + '-synthetic-checks', [powershell, '-NoProfile', '-NonInteractive', '-File', ROOT / 'host/windows/tests' / script])
+        argv = [powershell, '-NoProfile', '-NonInteractive', '-File', ROOT / 'host/windows/tests' / script]
+        if label == 'headless-status':
+            if not bootstrap_policy_runner:
+                raise ValueError('Supply the compiled native bootstrap policy for mandatory composed result checks')
+            argv += ['-BootstrapPolicyRunner', bootstrap_policy_runner]
+        entry = invoke(label + '-synthetic-checks', argv)
         lines = entry['stdout'].strip().splitlines()
         if not lines:
             raise ValueError(label + ' checker returned no terminal result')
@@ -40,6 +45,8 @@ def run_headless_checks(powershell, invoke, snapshot):
             raise ValueError('Headless native fixture did not identify its compiler path')
         if label == 'headless-native' and os.name == 'nt' and result['frameworkCompiler'] is not True:
             raise ValueError('Windows headless checks require the protected Framework compiler boundary')
+        if label == 'headless-status' and result.get('bootstrapPolicyComposed') is not True:
+            raise ValueError('Actual wrapper results were not composed with the compiled native bootstrap policy')
         results[label] = result
     return results
 
@@ -134,7 +141,7 @@ if __name__ == '__main__':
                 reverse_qr_windows.get('status') != ('PASS' if os.name == 'nt' else 'COMPILED_ONLY') or
                 reverse_qr_windows.get('windowsImageCodecTested') is not (os.name == 'nt')):
             raise ValueError('Native Windows QR fixture result is incomplete or mislabeled')
-        headless = run_headless_checks(args.powershell, invoke, snapshot)
+        headless = run_headless_checks(args.powershell, invoke, snapshot, native_checks)
     if source_snapshot(ROOT) != snapshot or hashlib.sha256(native.read_bytes()).hexdigest() != record['sha256']:
         raise ValueError('Inputs changed during Windows checks; rerun')
     if args.mac_checker and hashlib.sha256(args.mac_checker.read_bytes()).hexdigest() != mac_checker_sha:

@@ -1,5 +1,6 @@
 ﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-only
+param([string] $BootstrapPolicyRunner)
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path (Split-Path $PSScriptRoot -Parent) 'HeadlessStatus.psm1') -Force
 $count=0
@@ -56,6 +57,16 @@ try {
             $receipt=Join-Path $directory $name; $exists=[IO.File]::Exists($receipt)
             Check ($exists -eq ($name -cin $case.Receipts) -and (-not $exists -or (Get-Item -LiteralPath $receipt).Length -eq 0)) ('Wrapper receipt mismatch: '+$case.Status+'/'+$name)
         }
+        if ($BootstrapPolicyRunner) {
+            $policyInput=$actualExit
+            if ([IO.Path]::DirectorySeparatorChar -ne [char]92 -and $actualExit -eq (3010 -band 255) -and $case.Code -eq 3010) { $policyInput=3010 }
+            $policyOutput=@(& $BootstrapPolicyRunner --headless-result RemoveVirtualDisplay $policyInput)
+            if ($LASTEXITCODE -ne 0 -or $policyOutput.Count -ne 1) { throw 'Compiled outer bootstrap policy returned no result' }
+            $policy=$policyOutput[0] | ConvertFrom-Json
+            $expectedFinal=$case.Code; if ($expectedFinal -eq 1) { $expectedFinal=2 }
+            Check ($policy.exitCode -eq $expectedFinal) ('Actual wrapper result lost at compiled native boundary: '+$case.Status)
+            Check ($policy.showFailure -is [bool] -and $policy.showFailure -eq ($case.Code -eq 1)) ('Native boundary showed unexpected generic guidance: '+$case.Status)
+        }
     }
 } finally { [IO.Directory]::Delete($root,$true) }
-[pscustomobject]@{status='passed';checks=$count;freshSyntheticOnly=$true;nativeApisInvoked=$false} | ConvertTo-Json -Compress
+[pscustomobject]@{status='passed';checks=$count;freshSyntheticOnly=$true;nativeApisInvoked=$false;bootstrapPolicyComposed=[bool]$BootstrapPolicyRunner} | ConvertTo-Json -Compress

@@ -106,8 +106,21 @@ static db_operation db_dispatch(int argc,const wchar_t *const *argv) {
         (enable && (!db_equal(argv[6],L"--desktop-user-sid") || !db_desktop_sid(argv[7])))) return DB_INVALID;
     return enable?DB_ENABLE:DB_EXPORT;
 }
+/* Headless continuation/recovery statuses are meaningful only for these two
+ * fixed operations; they already carry actionable managed guidance. */
+static int db_headless_status(int exit_code,db_operation operation) {
+    return (operation==DB_INSTALL_DISPLAY || operation==DB_REMOVE_DISPLAY) && (exit_code==12 || exit_code==13);
+}
 /* Exit 2 means the managed helper already displayed its failure; it is still failure. */
-static int db_show_failure(int exit_code,int silent) { return exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent; }
+static int db_show_failure(int exit_code,int silent,db_operation operation) {
+    return !db_headless_status(exit_code,operation) && exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent;
+}
+static int db_complete_exit_code(int exit_code,int silent,db_operation operation,int acknowledged) {
+    if (db_headless_status(exit_code,operation)) return exit_code;
+    /* A non-headless child cannot introduce a valid headless status. */
+    if (exit_code==12 || exit_code==13) exit_code=1;
+    return db_show_failure(exit_code,silent,operation) && acknowledged?2:exit_code;
+}
 static int db_env_name(const wchar_t *entry,const wchar_t *name,int prefix) {
     size_t i;
     if (!entry || !name) return 0;
