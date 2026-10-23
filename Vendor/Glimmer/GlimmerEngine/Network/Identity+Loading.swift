@@ -12,20 +12,23 @@ extension IdentityManager {
         guard protectedDataAvailable() else { throw IdentityStorageError.unavailable }
         guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
         if let cached { return cached }
-        _ = try storageRoot()
+        try FileIdentityStore.validateStorage(base: storageRoot())
 
         // -----------------------------------------------------------------
         // Step 1 - file-store fast path.
         // -----------------------------------------------------------------
-        if defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion {
-            if let identity = try loadFromFileStore() {
-                cached = identity
-                log.info("Loaded identity from file store")
-                return identity
-            }
-            // A missing file store regenerates as before; an actual read failure must throw.
-            log.error("identityFileStorageVersion flag set but file store is empty - regenerating")
+        let established = defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion
+        if let identity = try loadFromFileStore(requireComplete: established) {
+            // Complete an interrupted migration without replacing the valid file identity.
+            wipeUserDefaultsPlaintext(defaults: defaults)
+            defaults.set(Self.fileStorageVersion, forKey: Self.fileStorageFlag)
+            cached = identity
+            log.info("Loaded identity from file store")
+            return identity
         }
+        // An established identity disappearing is a recovery error, not a new install.
+        guard !established else { throw IdentityStorageError.incompleteIdentity }
+        try FileIdentityStore.validateFreshStorage(base: storageRoot())
 
         // The keychain-era flag means the earliest plaintext defaults were already wiped.
         let legacyKeychainOnly = defaults.integer(forKey: Self.legacyKeychainOnlyFlag) >= 1
@@ -105,27 +108,35 @@ extension IdentityManager {
 
     // MARK: File store (current backend)
 
-    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
-    func loadFromFileStore() throws -> Identity? {
-        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
-              let certPEM = String(data: certData, encoding: .utf8),
-              !certPEM.isEmpty else {
-            return nil
+    /// Only an unflagged first install/migration may fall through or synthesize a missing ID.
+    /// Once published, all three identity components must remain present.
+    func loadFromFileStore(requireComplete: Bool) throws -> Identity? {
+        let certificate = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot())
+        let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
+        let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
+        if certificate == nil && privateKey == nil && uniqueID == nil { return nil }
+        // Existing malformed bytes remain a storage validation failure even if
+        // another component is absent. Missing ordinary material instead needs
+        // recovery guidance; changing permissions cannot restore those bytes.
+        func text(_ data: Data?) throws -> String? {
+            guard let data else { return nil }
+            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
+            else { throw IdentityStorageError.unsafeStorage }
+            return value
         }
-        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
-              let keyPEM = String(data: keyData, encoding: .utf8),
-              !keyPEM.isEmpty else {
-            return nil
-        }
-        _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
+        let certificatePEM = try text(certificate)
+        let privateKeyPEM = try text(privateKey)
+        let storedUID = try text(uniqueID)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
+        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
+        else { throw IdentityStorageError.incompleteIdentity }
+        try validateLocalIdentity(certPEM: certPEM, keyPEM: keyPEM)
         let uid: String
-        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
-           let stored = String(data: uidData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-           !stored.isEmpty {
+        if let stored = storedUID {
             uid = stored
         } else {
-            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
+            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
+            // Complete an unpublished legacy migration without replacing its valid PEM pair.
             uid = try generateUniqueID()
             let uidBytes = Data(uid.utf8)
             try FileIdentityStore.write(uidBytes, account: Self.accountUID, base: storageRoot())
@@ -134,17 +145,26 @@ extension IdentityManager {
         return Identity(uniqueID: uid, certPEM: certPEM, keyPEM: keyPEM)
     }
 
-    /// Persist an Identity to the file store. Each component goes through
-    /// `FileIdentityStore.write` which enforces mode 0600 and verifies it
-    /// stuck via stat(2).
+    /// First publication is a single directory rename, so no partial canonical
+    /// identity survives a crash between certificate, key, and uniqueID writes.
     func writeIdentityToFileStore(_ identity: Identity) throws {
-        _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
-        try FileIdentityStore.write(Data(identity.certPEM.utf8),
-                                    account: Self.accountCert, base: storageRoot())
-        try FileIdentityStore.write(Data(identity.keyPEM.utf8),
-                                    account: Self.accountKey, base: storageRoot())
-        try FileIdentityStore.write(Data(identity.uniqueID.utf8),
-                                    account: Self.accountUID, base: storageRoot())
+        try FileIdentityStore.validateStorage(base: storageRoot())
+        try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
+        guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
+        guard defaults.integer(forKey: Self.fileStorageFlag) < Self.fileStorageVersion
+        else { throw IdentityStorageError.incompleteIdentity }
+        try FileIdentityStore.publishFresh(certificate: Data(identity.certPEM.utf8),
+                                           privateKey: Data(identity.keyPEM.utf8),
+                                           uniqueID: Data(identity.uniqueID.utf8), base: storageRoot())
+    }
+
+    /// Invalid local PEM material needs local storage guidance, not host crypto settings.
+    private func validateLocalIdentity(certPEM: String, keyPEM: String) throws {
+        do {
+            _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
+        } catch StreamError.crypto {
+            throw IdentityStorageError.unsafeStorage
+        }
     }
 
     // MARK: UserDefaults plaintext cleanup

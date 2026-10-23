@@ -97,6 +97,29 @@ private struct ControlHardeningSyntheticChecks {
         try require(try closeDelimited.receive(Data("HTTP/1.1 200 OK\r\n\r\npartial".utf8), done: false, error: nil) == nil, "close-delimited body waits for clean EOF")
         try rejects { _ = try closeDelimited.receive(nil, done: false, error: StreamError.hostUnreachable("synthetic reset")) }
         try require(try closeDelimited.receive(nil, done: true, error: nil) != nil, "clean close may complete a close-delimited response")
+        // A separator can straddle any callback boundary, including one-byte chunks.
+        for split in 1..<4 {
+            var fragmented = ControlTransport.ResponseBuffer()
+            let prefix = Data("HTTP/1.1 200 OK\r\nContent-Length: 2".utf8)
+            _ = try fragmented.append(prefix + Data("\r\n\r\n".utf8).prefix(split))
+            try require(try fragmented.append(Data("\r\n\r\n".utf8).dropFirst(split) + Data("ok".utf8)),
+                        "split header terminator was missed")
+        }
+        var drip = ControlTransport.ResponseBuffer()
+        let dripHeader = Data(("HTTP/1.1 200 OK\r\nX-Padding: " + String(repeating: "x", count: 32 * 1024) + "\r\n\r\n").utf8)
+        for byte in dripHeader { _ = try drip.append(Data([byte])) }
+        try require(try ControlTransport.parse(drip.finish()).status == 200, "one-byte headers must remain parseable")
+        var missingTerminator = ControlTransport.ResponseBuffer()
+        try rejects { _ = try missingTerminator.append(Data(repeating: 65, count: ControlTransport.maxHeaderBytes)) }
+        var oversizedHeader = ControlTransport.ResponseBuffer()
+        try rejects { _ = try oversizedHeader.append(Data(repeating: 65, count: ControlTransport.maxHeaderBytes) + Data("\r\n\r\n".utf8)) }
+        var largeBody = ControlTransport.ResponseBuffer()
+        let body = Data(repeating: 65, count: 128 * 1024)
+        try require(try largeBody.append(Data("HTTP/1.1 200 OK\r\nContent-Length: \(body.count)\r\n\r\n".utf8) + body),
+                    "header ceiling must not cap valid response bodies")
+        try require(try ControlTransport.parse(largeBody.bytes).body == body, "large XML body changed")
+        var oversizedResponse = ControlTransport.ResponseBuffer()
+        try rejects { _ = try oversizedResponse.append(Data(repeating: 65, count: ControlTransport.maxResponseBytes + 1)) }
         let fallback = Data(repeating: 7, count: 16)
         try require(try NetworkClient.sessionKeyField(nil, fallback: fallback) == fallback, "absent legacy key fallback")
         try require(try NetworkClient.sessionKeyField(String(repeating: "a0", count: 16), fallback: fallback) == Data(repeating: 160, count: 16), "valid 128-bit host key")

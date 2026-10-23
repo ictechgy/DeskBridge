@@ -175,6 +175,13 @@ internal static class Launcher
         if (source.ReadByte() != -1) throw new InvalidDataException("Sunshine 설치 파일 크기가 다릅니다.");
     }
 
+    private static int InterpretSunshineInstallerResult(int result)
+    {
+        // Preserve only documented installer outcomes consumed by the setup UI.
+        if (result == 0 || result == 3010 || result == 1641 || result == 1618 || result == 1602) return result;
+        throw new InvalidOperationException("Sunshine 설치를 완료하지 못했습니다. 설치 상태를 확인한 뒤 다시 시도하세요.");
+    }
+
     private static int RunElevatedOperation(BrokerRequest request, string directory, List<string> written)
     {
         if (request.Operation == "InstallVirtualDisplay" || request.Operation == "RemoveVirtualDisplay")
@@ -202,10 +209,7 @@ internal static class Launcher
                 var install = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "msiexec.exe"), "/i " + Quote(msi));
                 install.UseShellExecute = false;
                 install.WorkingDirectory = directory;
-                int exit = RunAndWait(install);
-                if (exit == 1602) return 1602;
-                if (exit != 0 && exit != 3010) throw new InvalidOperationException("Sunshine 설치를 완료하지 못했습니다.");
-                return exit;
+                return InterpretSunshineInstallerResult(RunAndWait(install));
             }
         }
         if (request.Operation != "EnableFiles" && request.Operation != "Export" && request.Operation != "DisableFiles")

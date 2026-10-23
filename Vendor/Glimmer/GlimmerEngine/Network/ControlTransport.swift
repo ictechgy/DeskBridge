@@ -280,12 +280,15 @@ package enum ControlTransport {
     /// Ceiling for one control response. Real replies are tens of KiB of XML at
     /// most, so anything past this is a broken or hostile responder.
     package static let maxResponseBytes = 4 * 1024 * 1024
+    /// Bound incomplete headers separately from the (potentially larger) XML body.
+    package static let maxHeaderBytes = 64 * 1024
 
     /// One reply as it arrives: whole at `Content-Length` when the PC sends one, else at close.
     struct ResponseBuffer {
         private(set) var bytes = Data()
         private var headerEnd: Int?
         private var contentLength: Int?
+        private var headerSearchOffset = 0
 
         init() {}
 
@@ -298,10 +301,26 @@ package enum ControlTransport {
 
         /// Adds a chunk; true once the body has reached `Content-Length`.
         mutating func append(_ chunk: Data) throws -> Bool {
+            guard chunk.count <= maxResponseBytes - bytes.count else {
+                throw StreamError.hostUnreachable("control response too large")
+            }
             bytes.append(chunk)
-            if headerEnd == nil, let separator = bytes.range(of: Data("\r\n\r\n".utf8)) {
-                headerEnd = separator.upperBound
-                contentLength = try contentLengthHeader(in: bytes[bytes.startIndex..<separator.lowerBound])
+            if headerEnd == nil {
+                // Revisit only the three-byte overlap: a peer delivering one byte per
+                // callback must not force a rescan of the entire accumulated header.
+                if let separator = bytes.range(of: Data("\r\n\r\n".utf8),
+                                                in: headerSearchOffset..<bytes.endIndex) {
+                    guard separator.upperBound <= maxHeaderBytes else {
+                        throw StreamError.hostUnreachable("control response headers too large")
+                    }
+                    headerEnd = separator.upperBound
+                    contentLength = try contentLengthHeader(in: bytes[bytes.startIndex..<separator.lowerBound])
+                } else {
+                    guard bytes.count < maxHeaderBytes else {
+                        throw StreamError.hostUnreachable("control response headers too large")
+                    }
+                    headerSearchOffset = max(0, bytes.count - 3)
+                }
             }
             if bytes.count > maxResponseBytes || (contentLength ?? 0) > maxResponseBytes {
                 throw StreamError.hostUnreachable("control response too large")

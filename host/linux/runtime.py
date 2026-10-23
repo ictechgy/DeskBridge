@@ -6,6 +6,7 @@ import errno
 import fcntl
 import hashlib
 import http.client
+import itertools
 import json
 import os
 from pathlib import Path
@@ -53,18 +54,52 @@ def digest_file(path, maximum, uid=None, private=False):
 def trusted_program(path):
     """System symlinks are accepted only when every link/target is root-controlled."""
     p = Path(path)
-    # resolve() could cross a writable symlink directory: inspect both lexical and resolved ancestors.
+    if not p.is_absolute():
+        raise Failure('install')
+    resolved, pending, links = Path(p.anchor), list(p.parts[1:]), 0
     try:
-        for leaf in (p, p.resolve(strict=True)):
-            for item in (leaf, *leaf.parents):
-                s = item.lstat()
-                if s.st_uid != 0 or (not stat.S_ISLNK(s.st_mode) and s.st_mode & 0o022):
-                    raise Failure('install')
+        s = resolved.lstat()
+        if s.st_uid != 0 or not stat.S_ISDIR(s.st_mode) or s.st_mode & 0o022:
+            raise Failure('install')
+        # Walk each hop before resolving it. Checking only the final realpath
+        # could miss a user-controlled link in an otherwise trusted chain.
+        while pending:
+            part = pending.pop(0)
+            if part == '..':
+                resolved = resolved.parent
+                continue
+            item = resolved / part
+            s = item.lstat()
+            if s.st_uid != 0 or (not stat.S_ISLNK(s.st_mode) and s.st_mode & 0o022):
+                raise Failure('install')
+            if stat.S_ISLNK(s.st_mode):
+                links += 1
+                if links > 40: raise Failure('install')
+                target = Path(os.readlink(item))
+                if target.is_absolute():
+                    resolved = Path(target.anchor)
+                    pending = list(target.parts[1:]) + pending
+                else:
+                    pending = list(target.parts) + pending
+            else:
+                if pending and not stat.S_ISDIR(s.st_mode): raise Failure('install')
+                resolved = item
     except OSError:
         raise Failure('install') from None
-    if not p.is_file() or not os.access(p, os.X_OK):
+    if not resolved.is_file() or not os.access(resolved, os.X_OK):
         raise Failure('install')
-    return str(p)
+    return str(resolved)
+
+
+def resolve_pinned_binary(pin):
+    program = trusted_program(pin['binary'])
+    try:
+        installed_digest = digest_file(program, 64 * 1024 * 1024, 0)[1]
+    except (OSError, Failure):
+        raise Failure('install') from None
+    if installed_digest != pin['binarySHA256']:
+        raise Failure('install')
+    return program
 
 
 class Store:
@@ -224,6 +259,7 @@ data=json.dumps([[family,kind,protocol,address] for family,kind,protocol,_,addre
 if len(data) > 16384: raise SystemExit(1)
 sys.stdout.buffer.write(data)
 '''
+    CONNECT_ATTEMPT_SECONDS = 2.5
 
     def __init__(self, cancel, seconds=600):
         self.cancel, self.deadline = cancel, time.monotonic() + seconds
@@ -298,9 +334,13 @@ sys.stdout.buffer.write(data)
             finally:
                 child.stdout.close()
 
-    def _ready(self, sock, expires, writing):
+    def _ready(self, sock, expires, writing, attempt_expires=None):
         while True:
             wait = min(0.05, self._remaining(expires))
+            if attempt_expires is not None:
+                attempt_remaining = attempt_expires - time.monotonic()
+                if attempt_remaining <= 0: raise TimeoutError('TCP candidate timed out')
+                wait = min(wait, attempt_remaining)
             try:
                 readable, writable, _ = select.select([] if writing else [sock], [sock] if writing else [], [], wait)
             except InterruptedError:
@@ -309,33 +349,58 @@ sys.stdout.buffer.write(data)
             if readable or writable: return
 
     def _connect_tcp(self, host, port, expires, source_address):
-        for family, kind, protocol, address in self._resolve(host, port, expires):
-            self._remaining(expires)
-            sock = None
-            try:
-                sock = socket.socket(family, kind, protocol)
-                self.attach(sock)
-                sock.setblocking(False)
-                if source_address: sock.bind(source_address)
+        rows = self._resolve(host, port, expires)
+        if not rows: raise Failure('download')
+        # Preserve the resolver's first-family preference, then alternate
+        # families so several unreachable IPv6 rows cannot starve IPv4.
+        first = [row for row in rows if row[0] == rows[0][0]]
+        other = [row for row in rows if row[0] != rows[0][0]]
+        ordered = [row for pair in itertools.zip_longest(first, other) for row in pair if row is not None]
+        deferred = []
+        # Keep half of a multi-address setup budget for one retry pass, including
+        # when the final first-pass route blackholes or the resolver has many rows.
+        first_pass_seconds = min(self.CONNECT_ATTEMPT_SECONDS, self._remaining(expires) / (2 * len(ordered)))
+        # Retries remain TCP setup only and share the original DNS/TCP/TLS deadline.
+        for candidates, retrying in ((ordered, False), (deferred, True)):
+            for index, (family, kind, protocol, address) in enumerate(candidates):
+                self._remaining(expires)
+                sock = None
                 try:
-                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                except OSError as error:
-                    if error.errno != errno.ENOPROTOOPT: raise
-                status = sock.connect_ex(tuple(address))
-                if status not in (0, errno.EISCONN):
-                    if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
-                        raise OSError(status, os.strerror(status))
-                    self._ready(sock, expires, writing=True)
-                    status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    if status: raise OSError(status, os.strerror(status))
-                self._remaining(expires)
-                return sock
-            except OSError:
-                if sock is not None: sock.close()
-                self._remaining(expires)
-            except BaseException:
-                if sock is not None: sock.close()
-                raise
+                    sock = socket.socket(family, kind, protocol)
+                    self.attach(sock)
+                    sock.setblocking(False)
+                    if source_address: sock.bind(source_address)
+                    try:
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    except OSError as error:
+                        if error.errno != errno.ENOPROTOOPT: raise
+                    status = sock.connect_ex(tuple(address))
+                    if status not in (0, errno.EISCONN):
+                        if status not in (errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY, errno.EINTR):
+                            raise OSError(status, os.strerror(status))
+                        # A single route retains its full budget. Deferred routes
+                        # share remaining time fairly; prompt rejects release their
+                        # unused share to later routes, with no further retry pass.
+                        attempt_expires = expires
+                        if len(ordered) > 1:
+                            seconds = self._remaining(expires) / (len(candidates) - index) if retrying else first_pass_seconds
+                            attempt_expires = min(expires, time.monotonic() + seconds)
+                        try:
+                            self._ready(sock, expires, writing=True, attempt_expires=attempt_expires)
+                        except TimeoutError:
+                            if not retrying and attempt_expires < min(expires, self.deadline):
+                                deferred.append((family, kind, protocol, address))
+                            raise
+                        status = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        if status: raise OSError(status, os.strerror(status))
+                    self._remaining(expires)
+                    return sock
+                except OSError:
+                    if sock is not None: sock.close()
+                    self._remaining(expires)
+                except BaseException:
+                    if sock is not None: sock.close()
+                    raise
         raise Failure('download')
 
     def connect(self, host, port, context, timeout, source_address=None):
@@ -447,26 +512,21 @@ def addresses():
 def preflight(pin, env=None):
     env = dict(os.environ if env is None else env)
     validate_session(platform.freedesktop_os_release(), platform.machine(), os.getuid(), env)
-    program = trusted_program(pin['binary'])
-    try:
-        installed_digest = digest_file(program, 64 * 1024 * 1024, 0)[1]
-    except (OSError, Failure):
-        raise Failure('install') from None
-    if installed_digest != pin['binarySHA256']:
-        raise Failure('install')
+    program = resolve_pinned_binary(pin)
     version = metadata_command(['/usr/bin/dpkg-query', '-W', '-f=${Version}', 'sunshine']).decode('ascii')
     if version != pin['packageVersion']:
         raise Failure('install')
     if not os.access('/dev/uinput', os.R_OK | os.W_OK):
         raise Failure('input')
     trusted_program('/usr/bin/setpriv')
+    expected_commands = {b'sunshine', os.fsencode(Path(program).name)[:15]}
     # Detect any existing Sunshine without reading argv/environment/logs/configuration.
     for index, entry in enumerate(Path('/proc').iterdir()):
         if index > 32768: raise Failure('existing')
         if entry.name.isdecimal():
             try:
                 with (entry / 'comm').open('rb') as f:
-                    if f.read(128).strip() == b'sunshine': raise Failure('existing')
+                    if f.read(128).strip() in expected_commands: raise Failure('existing')
             except (FileNotFoundError, PermissionError, ProcessLookupError):
                 pass
     ports = []
@@ -483,7 +543,7 @@ def preflight(pin, env=None):
         raise Failure('existing') from None
     finally:
         for s in ports: s.close()
-    return env
+    return env, program
 
 
 class OwnedHost:
@@ -495,10 +555,11 @@ class OwnedHost:
     def start(self, pin, store, name, username='', password=''):
         with self.lock:
             if self.child is not None: raise Failure('existing')
-            env = preflight(pin)
+            host_arguments = arguments(store.root, name)
+            env, program = preflight(pin)
             store.prepare()
             store.prepare_web_credentials(username, password)
-            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', pin['binary']] + arguments(store.root, name)
+            argv = ['/usr/bin/setpriv', '--no-new-privs', '--', program] + host_arguments
             self._spawn(argv, child_environment(env, store.root))
 
     def _spawn(self, argv, env):
@@ -568,19 +629,47 @@ def save_package(pin, package, destination):
     if digest_file(package, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
         raise Failure('download')
     destination = Path(destination)
-    fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
+    temporary = None
+    primary = None
     try:
-        with os.fdopen(fd, 'wb') as out, ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
-            while data := source.read(65536): out.write(data)
-            out.flush(); os.fsync(out.fileno())
-        if digest_file(temporary, pin['bytes'], os.getuid(), True) != (pin['bytes'], pin['sha256']):
-            raise Failure('download')
-        publish_new(temporary, destination)
-        return destination
-    except FileExistsError:
-        raise Failure('collision') from None
+        try:
+            with ordinary_read(package, pin['bytes'], os.getuid(), True) as source:
+                try:
+                    fd, temporary = tempfile.mkstemp(prefix='.deskbridge-package-', dir=destination.parent)
+                    with os.fdopen(fd, 'wb') as out:
+                        while True:
+                            try: data = source.read(65536)
+                            except OSError: raise Failure('download') from None
+                            if not data: break
+                            out.write(data)
+                        out.flush(); os.fsync(out.fileno())
+                    # The public copy is not the privileged installation source.
+                    try: verified = digest_file(temporary, pin['bytes'], os.getuid())
+                    except (OSError, Failure): raise Failure('export_destination') from None
+                    if verified != (pin['bytes'], pin['sha256']): raise Failure('export_destination')
+                    publish_new(temporary, destination)
+                    temporary = None  # Rename consumed it; a recreated name belongs to someone else.
+                    return destination
+                except FileExistsError:
+                    raise Failure('collision') from None
+                except OSError:
+                    raise Failure('export_destination') from None
+        except OSError:
+            raise Failure('download') from None
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        if os.path.lexists(temporary): os.unlink(temporary)
+        if temporary is not None and os.path.lexists(temporary):
+            try: os.unlink(temporary)
+            except OSError:
+                if primary is None:
+                    primary = Failure('export_destination')
+                    primary.cleanup_failed = True
+                    raise primary from None
+                # Preserve the authored primary failure, recording cleanup failure
+                # without embedding paths or raw OS text into user guidance.
+                primary.cleanup_failed = True
 
 
 def cleanup_owned(host, store, finished, failed):

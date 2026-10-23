@@ -113,7 +113,8 @@ static int db_headless_status(int exit_code,db_operation operation) {
 }
 /* Exit 2 means the managed helper already displayed its failure; it is still failure. */
 static int db_show_failure(int exit_code,int silent,db_operation operation) {
-    return !db_headless_status(exit_code,operation) && exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent;
+    int installer_status=operation==DB_INSTALL && (exit_code==1641 || exit_code==1618);
+    return !installer_status && !db_headless_status(exit_code,operation) && exit_code!=0 && exit_code!=2 && exit_code!=1602 && exit_code!=3010 && !silent;
 }
 static int db_complete_exit_code(int exit_code,int silent,db_operation operation,int acknowledged) {
     if (db_headless_status(exit_code,operation)) return exit_code;

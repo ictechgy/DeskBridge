@@ -15,6 +15,49 @@
 //
 
 import Foundation
+import CryptoKit
+
+/// Binds a successfully admitted envelope to its original transport labels for duplicate ACKs.
+/// The fixed ring bounds storage to 65,536 SHA-256 digests (2 MiB plus label/index bookkeeping),
+/// retaining neither ciphertext nor plaintext. Label lookup and eviction take constant time.
+struct EnetAuthenticatedReliableHistory {
+    static let capacity = ControlReplayWindow.capacity
+    private struct Entry {
+        let fingerprint: SHA256.Digest
+        let slot: Int
+    }
+    private var entries: [UInt32: Entry] = [:]
+    private var labels: [UInt32] = []
+    private var nextSlot = 0
+    var count: Int { entries.count }
+    var retainedSlotCount: Int { labels.count }
+
+    func matches(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) -> Bool {
+        guard let entry = entries[Self.label(channelID, relSeq)] else { return false }
+        return entry.fingerprint == SHA256.hash(data: bytes)
+    }
+
+    mutating func record(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
+        let label = Self.label(channelID, relSeq)
+        let slot: Int
+        if labels.count < Self.capacity {
+            slot = labels.count
+            labels.append(label)
+        } else {
+            slot = nextSlot
+            let evicted = labels[slot]
+            // A reused UInt16 label may already have a newer record in another slot.
+            if entries[evicted]?.slot == slot { entries.removeValue(forKey: evicted) }
+            labels[slot] = label
+            nextSlot = (slot + 1) % Self.capacity
+        }
+        entries[label] = Entry(fingerprint: SHA256.hash(data: bytes), slot: slot)
+    }
+
+    private static func label(_ channelID: UInt8, _ relSeq: UInt16) -> UInt32 {
+        (UInt32(channelID) << 16) | UInt32(relSeq)
+    }
+}
 
 extension EnetControlChannel {
     func startReceiveLoop() {
@@ -90,8 +133,13 @@ extension EnetControlChannel {
     ) -> Bool {
         switch command {
         case Enet.cmdVerifyConnect:
-            handleVerifyConnect(&reader)
-            // VERIFY_CONNECT has FLAG_ACKNOWLEDGE → must ACK it.
+            // VERIFY_CONNECT is peer control, never an authenticated data-channel
+            // command. Consume its exact fixed body even on a wrong channel so a
+            // following coalesced command still has a known offset.
+            guard let body = reader.take(40) else { return false }
+            guard channelID == Enet.peerChannelID else { return true }
+            var verification = ByteReader(body)
+            handleVerifyConnect(&verification)
             ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
                            flags: flags, sentTime: sentTime)
         case Enet.cmdAcknowledge:
@@ -102,46 +150,64 @@ extension EnetControlChannel {
             declarePeerDead(code: -1, reason: "ENet received DISCONNECT during/after handshake")
             return false
         case Enet.cmdPing:
-            // PING has no body; ACK if requested.
-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
-                           flags: flags, sentTime: sentTime)
+            // Unencrypted peer commands must not retire an outstanding encrypted
+            // reliable with the same (data channel, sequence) transport labels.
+            if channelID == Enet.peerChannelID {
+                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+                               flags: flags, sentTime: sentTime)
+            }
         case Enet.cmdSendReliable:
             guard let dataLength = reader.u16BE(),
                   let inner = reader.take(Int(dataLength)) else { return false }
-            // ACK unconditionally, duplicates included, as real ENet does in
-            // enet_peer_queue_incoming_command's discardCommand path; withholding
-            // an ACK keeps the PC retransmitting until its peer timeout.
+            // Authenticate new payloads before ACKing: a rejected body must not cancel
+            // the host's genuine reliable retransmit while leaving our cursor behind.
+            guard let result = acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq) else {
+                return true
+            }
             ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
                            flags: flags, sentTime: sentTime)
-            acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq)
+            // TERMINATION and other callbacks may close the socket, so ACK after
+            // admission but before dispatching any authenticated due payloads.
+            dispatchInboundDue(result, channelID: channelID, reason: "hold full")
         default:
             // Consume unused bodies exactly: a reliable command (say, retransmitted HDR)
             // often follows, and losing it stalls the PC's reliable backlog. A fragment
             // can't be authenticated, so it takes no turn; control messages never fragment.
             guard skipCommandBody(command: command, reader: &reader) else { return false }
-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
-                           flags: flags, sentTime: sentTime)
+            // Only these supported peer-control commands have an unencrypted ACK
+            // path. Ignored unreliable/unsequenced/fragment data is never ACKed,
+            // even if its unauthenticated command byte carries ACKNOWLEDGE.
+            if channelID == Enet.peerChannelID,
+               command == Enet.cmdBandwidthLimit || command == Enet.cmdThrottleConfigure {
+                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+                               flags: flags, sentTime: sentTime)
+            }
         }
         return true
     }
 
-    /// Drop duplicates, already ACKed; authenticate and check the global host replay
-    /// window before any other packet can hold or move a channel cursor. ENet's outer
-    /// channel and reliable sequence remain unauthenticated transport metadata.
-    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
+    /// Return ACK-eligible due payloads only after admission, or an empty result for
+    /// an exact known duplicate. Outer ENet labels remain unauthenticated metadata;
+    /// matching history must never admit a replay at a current/future reliable label.
+    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16)
+        -> (due: [[UInt8]], skipped: Int)? {
         let order = inboundOrder[channelID] ?? EnetInboundOrder()
         if order.isDuplicate(relSeq) {
+            guard inboundReliableHistory.matches(bytes, channelID: channelID, relSeq: relSeq) else {
+                rejectInboundControl("reliable duplicate has no matching authenticated envelope")
+                return nil
+            }
             if !loggedFirstDuplicateReliable {
                 loggedFirstDuplicateReliable = true
                 Diag.info("ENet dropped duplicate inbound reliable (ch \(channelID) "
                     + "relSeq \(relSeq), next \(order.next)); ACKed, first sighting this session", Self.logCategory)
             }
-            return
+            return ([], 0)
         }
-        guard let inner = openInboundControl(bytes) else { return }
-        let result = inboundOrder[channelID, default: EnetInboundOrder()]
+        guard let inner = openInboundControl(bytes) else { return nil }
+        inboundReliableHistory.record(bytes, channelID: channelID, relSeq: relSeq)
+        return inboundOrder[channelID, default: EnetInboundOrder()]
             .accept(relSeq, payload: inner)
-        dispatchInboundDue(result, channelID: channelID, reason: "hold full")
     }
 
     private func dispatchInboundDue(_ result: (due: [[UInt8]], skipped: Int),
@@ -183,8 +249,9 @@ extension EnetControlChannel {
         return true
     }
 
-    /// Send an ACK for a received command iff it requested one AND the datagram
-    /// carried a sent-time (ENet's ACK echoes the sender's serviceTime).
+    /// Send an ACK for an admitted reliable or allowlisted peer-control command
+    /// iff it requested one. Callers enforce admission; sent-time only selects
+    /// the timestamp to echo and is not an additional ACK requirement.
     func ackIfRequested(_ commandByte: UInt8, channelID: UInt8, relSeq: UInt16,
                         flags: UInt16, sentTime: UInt16) {
         guard commandByte & Enet.flagAcknowledge != 0 else { return }
@@ -251,7 +318,7 @@ extension EnetControlChannel {
         case CtrlV2.termination:
             let code = parseTerminationCode(payload)
             declarePeerDead(code: code, reason: "ENet TERMINATION received "
-                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))")
+                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))", authenticatedTermination: true)
         case CtrlV2.hdrInfo:
             handleHdrInfo(payload)
         case CtrlV2.rumbleData:

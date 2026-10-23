@@ -18,15 +18,17 @@ extension RtpAudioReceiver {
 
     /// Validate ciphertext before it can establish or restart queue order. CBC has
     /// no authentication, but failed padding must never advance the receive cursor.
-    /// The normal in-order path still decrypts only once, at the decode hand-off.
+    /// Validate every data packet, including the in-order fast path. Keep the
+    /// original ciphertext in the queue because FEC parity covers those bytes;
+    /// decode decrypts again when a packet is actually played. Valid padding is
+    /// only a format check, not authentication of the host's CBC protocol.
     func acceptsAudioPayload(_ buf: [UInt8], count: Int) -> Bool {
         let payload = buf[RtpAudioQueue.fixedRtpHeaderSize..<count]
         guard !payload.isEmpty else { return false }
         guard audioEncryption else { return true }
         guard payload.count.isMultiple(of: kCCBlockSizeAES128) else { return false }
         let sequence = UInt16(buf[2]) << 8 | UInt16(buf[3])
-        return !queue.requiresPayloadValidation(sequence: sequence)
-            || decryptCbc(payload, sequenceNumber: sequence) != nil
+        return decryptCbc(payload, sequenceNumber: sequence) != nil
     }
 
     /// Decode one assembled RTP packet: strip the 12-byte RTP header, optionally

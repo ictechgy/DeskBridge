@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -13,7 +12,7 @@ namespace DeskBridge.Reverse
     {
         private readonly EngineStore store;
         private readonly HostPlatform platform;
-        private readonly TextBox status = new TextBox();
+        private readonly StatusTextBox status = new StatusTextBox();
         private readonly TextBox link = new TextBox();
         private readonly TextBox manual = new TextBox();
         private readonly ComboBox candidates = new ComboBox();
@@ -33,20 +32,21 @@ namespace DeskBridge.Reverse
         private CancellationTokenSource operation;
         private EngineProcess ownedProcess;
         private string selectedAddress;
-        private bool busy, closing, allowClose;
+        private long selectionGeneration;
+        private bool busy, closing, allowClose, qrReading;
 
         internal ClientForm(HostPlatform platform = HostPlatform.Mac)
         {
             this.platform = platform;
-            Text = HostText("Knot · Mac 열기");
+            Text = HostText(ClientMessage.Title);
             Font = new Font("Malgun Gothic", 9.5f);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(1000, 790); MinimumSize = new Size(720, 540);
-            BackColor = Color.FromArgb(246, 247, 249);
+            BackColor = SystemColors.Control; ForeColor = SystemColors.ControlText;
             store = new EngineStore();
             Build();
-            status.Text = HostText("Mac에서 ‘이 Mac 공유’를 시작한 뒤 QR/링크 또는 같은 Wi-Fi 검색으로 주소를 선택하세요. 아직 연결을 확인하지 않았습니다.");
+            SetStatus(HostText(ClientMessage.Initial));
             Shown += delegate
             {
                 Rectangle area = Screen.FromControl(this).WorkingArea;
@@ -59,66 +59,62 @@ namespace DeskBridge.Reverse
             UpdateControls();
         }
 
-        private string HostText(string text)
-        {
-            if (platform == HostPlatform.Mac) return text;
-            if (text.Contains("화면 녹화") || text.StartsWith("Mac에서 ‘이 Mac 공유’"))
-                return "Ubuntu 24.04 LTS amd64의 X11 데스크톱에서 Knot 공유를 시작한 뒤 QR/링크 또는 같은 Wi-Fi 검색으로 주소를 선택하세요. Linux 파일 전송·Wayland·로그인 화면은 아직 지원하지 않습니다. PIN으로 PC를 확인하세요.";
-            if (text.Contains("Ctrl↔Command")) return "Linux 연결은 시스템 키 전달을 끈 상태로 시작합니다. Windows 키·Alt+Tab 등은 로컬 Windows에서 처리될 수 있습니다. Ctrl은 Control, Alt는 Alt로 사용하며 입력 결과는 실제 연결에서 확인하세요.";
-            if (text.Contains("FileVault")) return "로그인 전 화면·잠금 해제·절전 복귀·모니터 없는 사용은 보장하지 않습니다. 실제 연결 상태와 페어링 오류는 Moonlight 창에서 확인하세요.";
-            return text.Replace("Mac Command", "Super").Replace("Mac", "Linux").Replace("Option", "Alt");
-        }
+        private string HostText(ClientMessage message)
+        { return ReverseClientText.Get(message, platform); }
 
         private void Build()
         {
-            var footer = new Panel { Dock = DockStyle.Bottom, Height = 118, Padding = new Padding(20, 10, 20, 14), BackColor = Color.White };
+            var footer = new Panel { Dock = DockStyle.Bottom, Height = 118, Padding = new Padding(20, 10, 20, 14), BackColor = SystemColors.Control, ForeColor = SystemColors.ControlText };
             cancel.Text = "작업 취소"; cancel.AutoSize = true; cancel.Dock = DockStyle.Right; cancel.MinimumSize = new Size(110, 0);
             cancel.Click += delegate { CancelOwned(); };
             status.ReadOnly = true; status.Multiline = true; status.ScrollBars = ScrollBars.Vertical; status.Dock = DockStyle.Fill;
-            status.BorderStyle = BorderStyle.None; status.BackColor = Color.White; status.AccessibleName = "현재 작업 상태";
+            status.BorderStyle = BorderStyle.None; status.BackColor = SystemColors.Window; status.ForeColor = SystemColors.WindowText; status.AccessibleName = "현재 작업 상태";
+            status.AccessibleDescription = "현재 작업 상태와 다음 단계 안내입니다. 내용을 선택해 복사할 수 있습니다.";
             footer.Controls.Add(status); footer.Controls.Add(cancel); Controls.Add(footer);
-            var sidebar = new Panel { Dock = DockStyle.Left, Width = 168, BackColor = Color.FromArgb(234, 237, 241), Padding = new Padding(20, 26, 12, 0) };
-            sidebar.Controls.Add(new Label { Dock = DockStyle.Top, AutoSize = true, Text = HostText("Knot\r\n\r\nMac 열기\r\n\r\n① 주소 선택\r\n② PIN 연결\r\n③ 화면 열기"), Font = new Font(Font, FontStyle.Bold) });
+            var sidebar = new Panel { Dock = DockStyle.Left, Width = 168, BackColor = SystemColors.Control, ForeColor = SystemColors.ControlText, Padding = new Padding(20, 26, 12, 0) };
+            sidebar.Controls.Add(new Label { Dock = DockStyle.Top, AutoSize = true, Text = HostText(ClientMessage.Sidebar), Font = new Font(Font, FontStyle.Bold) });
             Controls.Add(sidebar);
             var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(24) };
             content.ColumnCount = 1; content.RowCount = 0; content.AutoSize = true; content.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             content.Dock = DockStyle.Top; content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             scroll.Controls.Add(content); Controls.Add(scroll); scroll.BringToFront();
             scroll.ClientSizeChanged += delegate { UpdateWrapping(); };
-            Add(Heading(HostText("Windows에서 Mac 열기")));
-            Add(Description(HostText("같은 Wi-Fi 또는 이미 연결된 Tailscale을 사용합니다. Mac에서 Knot의 ‘이 Mac 공유’를 켜고 화면 녹화·손쉬운 사용 권한을 허용하세요. 로그인한 Mac의 Desktop을 엽니다.")));
+            Add(Heading(HostText(ClientMessage.Heading)));
+            Add(Description(HostText(ClientMessage.Setup)));
 
-            Add(Heading(HostText("1. Mac 주소 선택")));
+            Add(Heading(HostText(ClientMessage.AddressHeading)));
             Add(Description("QR·검색 결과는 미확인 주소 안내입니다. 선택만으로 페어링하거나 접속하지 않습니다."));
-            link.Multiline = true; link.Height = 65; link.MaxLength = 1536; link.Dock = DockStyle.Fill; link.AccessibleName = HostText("Mac 연결 링크");
+            link.Multiline = true; link.Height = 65; link.MaxLength = 1536; link.Dock = DockStyle.Fill; link.AccessibleName = HostText(ClientMessage.LinkName);
+            link.AccessibleDescription = "QR 이미지나 연결 링크는 주소 후보만 표시합니다. 주소를 선택한 뒤 PIN 승인이 필요합니다.";
+            link.TextChanged += delegate { selectionGeneration++; };
             Add(link); changing.Add(link);
             var entryButtons = Row();
             entryButtons.Controls.Add(ActionButton("링크 미리보기", delegate { PreviewLink(); }));
-            entryButtons.Controls.Add(ActionButton("QR 이미지 가져오기…", delegate { ImportQr(); }));
+            entryButtons.Controls.Add(ActionButton("QR 이미지 가져오기…", async delegate { await ImportQrAsync(); }));
             entryButtons.Controls.Add(ActionButton("같은 Wi-Fi에서 찾기", async delegate { await DiscoverAsync(); }));
             Add(entryButtons);
             candidates.DropDownStyle = ComboBoxStyle.DropDownList; candidates.Dock = DockStyle.Fill;
-            candidates.AccessibleName = HostText("미확인 Mac 주소 후보"); Add(candidates); changing.Add(candidates);
+            candidates.AccessibleName = HostText(ClientMessage.CandidateName); candidates.AccessibleDescription = "선택한 주소 사용을 눌러야 연결 대상이 바뀝니다. 아직 연결하거나 기기를 신뢰하지 않았습니다."; Add(candidates); changing.Add(candidates);
             var choose = Row(); choose.Controls.Add(ActionButton("선택한 주소 사용", delegate { ChooseCandidate(); })); Add(choose);
             advanced.Text = "고급: IPv4 주소 직접 입력"; advanced.AutoSize = true;
             advanced.CheckedChanged += delegate { manualPanel.Visible = advanced.Checked; }; changing.Add(advanced); Add(advanced);
-            manual.Width = 190; manual.MaxLength = 15; manual.AccessibleName = HostText("Mac의 LAN 또는 Tailscale IPv4 주소");
+            manual.Width = 190; manual.MaxLength = 15; manual.AccessibleName = HostText(ClientMessage.ManualName);
             manualPanel.AutoSize = true; manualPanel.WrapContents = true; manualPanel.Visible = false;
             manualPanel.Controls.Add(manual); manualPanel.Controls.Add(ActionButton("이 주소 사용", delegate { ChooseManual(); }));
             changing.Add(manual); Add(manualPanel);
-            target.AutoSize = true; target.Text = HostText("선택한 Mac 없음 · 연결 미확인"); target.Font = new Font(Font, FontStyle.Bold); wrapping.Add(target); Add(target);
+            target.AutoSize = true; target.Text = HostText(ClientMessage.NoTarget); target.AccessibleName = "현재 선택한 연결 대상"; target.AccessibleDescription = target.Text; target.Font = new Font(Font, FontStyle.Bold); wrapping.Add(target); Add(target);
             Add(Description("LAN과 Tailscale 주소는 별도 연결로 보관해 각각 PIN 승인이 필요할 수 있습니다. 저장된 인증서를 다른 주소로 자동 복사하지 않습니다."));
 
             Add(Heading("2. 화면 엔진과 PIN 연결"));
             Add(Description("처음 한 번 공식 Moonlight Portable " + EnginePin.Version + "를 인터넷에서 받습니다. 고정 크기·SHA-256과 모든 엔진 파일을 확인하며 관리자 권한은 사용하지 않습니다. 기존 Moonlight 설정과 분리해 이 앱 전용 폴더에 저장합니다."));
-            Add(Description(HostText("화면은 선택한 Mac에 직접 연결합니다. Moonlight는 별도로 호환성·게임패드 목록·업데이트 유무를 온라인에서 조회할 수 있습니다. 이 프리뷰는 보안 서명이 없으며, 파일 전송 기능은 역방향에서 아직 지원하지 않습니다.")));
+            Add(Description(HostText(ClientMessage.EngineNetwork)));
             var engineActions = Row();
             install.Text = "화면 엔진 받기"; install.AutoSize = true; install.Click += async delegate { await InstallAsync(); }; engineActions.Controls.Add(install);
-            pair.Text = HostText("PIN으로 Mac 연결"); pair.AutoSize = true; pair.Click += async delegate { await LaunchAsync(true); }; engineActions.Controls.Add(pair); Add(engineActions);
-            progress.Minimum = 0; progress.Maximum = 100; progress.Visible = false; progress.Dock = DockStyle.Fill; Add(progress);
-            Add(Description(HostText("PIN은 Moonlight 창에서 표시됩니다. 선택한 Mac의 Sunshine 설정 화면에 직접 입력하고 기기를 승인하세요. QR·링크나 프로그램 종료 코드만으로 Mac의 신원을 확인했다고 표시하지 않습니다.")));
+            pair.Text = HostText(ClientMessage.PairButton); pair.AutoSize = true; pair.Click += async delegate { await LaunchAsync(true); }; engineActions.Controls.Add(pair); Add(engineActions);
+            progress.Minimum = 0; progress.Maximum = 100; progress.Visible = false; progress.Dock = DockStyle.Fill; progress.AccessibleName = "화면 엔진 다운로드와 검증 진행률"; Add(progress);
+            Add(Description(HostText(ClientMessage.PinInstructions)));
 
-            Add(Heading(HostText("3. Mac 화면 열기")));
+            Add(Heading(HostText(ClientMessage.StreamHeading)));
             var settings = Row();
             ConfigureChoice(resolution, new[] { "1920x1080", "2560x1440", "1280x720" }, 125, "해상도");
             ConfigureChoice(fps, new[] { "60", "30" }, 65, "초당 프레임");
@@ -127,13 +123,13 @@ namespace DeskBridge.Reverse
             settings.Controls.Add(new Label { Text = "FPS", AutoSize = true, Margin = new Padding(8, 7, 6, 0) }); settings.Controls.Add(fps);
             settings.Controls.Add(new Label { Text = "Kbps", AutoSize = true, Margin = new Padding(8, 7, 6, 0) }); settings.Controls.Add(bitrate);
             fullscreen.Text = "전체 화면"; fullscreen.AutoSize = true; fullscreen.Checked = true; settings.Controls.Add(fullscreen); changing.Add(fullscreen); Add(settings);
-            macCommandKeys.Text = HostText("Windows 키를 Mac Command로 보내기 (전체 화면)");
+            macCommandKeys.Text = HostText(ClientMessage.CommandOption);
             macCommandKeys.Visible = platform == HostPlatform.Mac; macCommandKeys.AutoSize = true; changing.Add(macCommandKeys); Add(macCommandKeys);
             fullscreen.CheckedChanged += delegate { if (!fullscreen.Checked) macCommandKeys.Checked = false; macCommandKeys.Enabled = !busy && !closing && fullscreen.Checked && platform == HostPlatform.Mac; };
-            var streamActions = Row(); connect.Text = HostText("Mac 화면 열기"); connect.AutoSize = true; connect.Click += async delegate { await LaunchAsync(false); }; streamActions.Controls.Add(connect); Add(streamActions);
-            Add(Description(HostText("기본은 Win+Ctrl+←/→ 등 Windows 단축키를 유지합니다. 위 옵션을 켜면 Windows 키가 Mac Command로 전달되고 Alt+Tab 같은 조합도 Mac으로 갈 수 있습니다. Ctrl은 Mac Control, Alt는 Option이며 Ctrl↔Command 자동 교환은 하지 않습니다.")));
-            Add(Description(HostText("화면에서 Ctrl+Alt+Shift+K로 시스템 키 전달을 켜고 끌 수 있고, Ctrl+Alt+Shift+Q로 화면 연결을 닫습니다. 먼저 전달을 끄면 Windows 데스크톱을 전환할 수 있습니다. 한/영 전환은 Mac 입력기 설정을 확인하세요. 다른 앱을 종료하겠다는 Moonlight 안내는 취소하세요.")));
-            Add(Description(HostText("로그인 전 화면·FileVault·잠금 해제·절전 복귀·모니터 없는 사용은 보장하지 않습니다. 실제 연결 상태와 페어링 오류는 Moonlight 창에서 확인하세요.")));
+            var streamActions = Row(); connect.Text = HostText(ClientMessage.StreamButton); connect.AutoSize = true; connect.Click += async delegate { await LaunchAsync(false); }; streamActions.Controls.Add(connect); Add(streamActions);
+            Add(Description(HostText(ClientMessage.Keyboard)));
+            Add(Description(HostText(ClientMessage.Shortcuts)));
+            Add(Description(HostText(ClientMessage.Availability)));
         }
 
         private void Add(Control control)
@@ -143,7 +139,7 @@ namespace DeskBridge.Reverse
             content.Controls.Add(control, 0, content.RowCount++);
         }
         private Label Heading(string text) { return new Label { Text = text, AutoSize = true, Font = new Font(Font.FontFamily, 13f, FontStyle.Bold) }; }
-        private Label Description(string text) { var label = new Label { Text = text, AutoSize = true, ForeColor = Color.FromArgb(75, 82, 94) }; wrapping.Add(label); return label; }
+        private Label Description(string text) { var label = new Label { Text = text, AutoSize = true, ForeColor = SystemColors.ControlText }; wrapping.Add(label); return label; }
         private FlowLayoutPanel Row() { return new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true, Dock = DockStyle.Fill, Margin = new Padding(0) }; }
         private Button ActionButton(string text, EventHandler handler)
         { var button = new Button { Text = text, AutoSize = true, Padding = new Padding(4) }; button.Click += handler; changing.Add(button); return button; }
@@ -164,22 +160,69 @@ namespace DeskBridge.Reverse
             {
                 ReverseInvitation invitation = ConnectionPolicy.Parse(link.Text);
                 ConnectionPolicy.RequireRole(invitation, platform);
-                candidates.Items.Clear();
-                foreach (string address in invitation.Addresses) candidates.Items.Add(new CandidateItem(invitation.Name, address));
-                candidates.SelectedIndex = 0;
-                SetStatus(HostText("링크를 읽었습니다. 미확인 Mac 주소를 확인하고 ‘선택한 주소 사용’을 누르세요. 아직 접속하지 않았습니다."));
+                PreviewInvitation(invitation);
             }
             catch (Exception error) { ShowFailure(error); }
         }
-        private void ImportQr()
+        private void PreviewInvitation(ReverseInvitation invitation)
         {
-            if (busy) return;
-            using (var dialog = new OpenFileDialog { Title = HostText("Mac 연결 QR 이미지 선택"), Filter = "QR 이미지|*.png;*.jpg;*.jpeg;*.bmp", CheckFileExists = true, Multiselect = false, DereferenceLinks = false })
+            ClearSelectedTarget();
+            candidates.Items.Clear();
+            foreach (string address in invitation.Addresses) candidates.Items.Add(new CandidateItem(invitation.Name, address));
+            candidates.SelectedIndex = 0;
+            SetStatus(HostText(ClientMessage.LinkPreview));
+        }
+        private void ClearSelectedTarget()
+        {
+            selectedAddress = null;
+            selectionGeneration++;
+            target.Text = HostText(ClientMessage.NoTarget);
+            target.AccessibleDescription = target.Text;
+            UpdateControls();
+        }
+        private async Task ImportQrAsync()
+        {
+            if (busy || closing) return;
+            string path;
+            using (var dialog = new OpenFileDialog { Title = HostText(ClientMessage.QrTitle), Filter = "QR 이미지|*.png;*.jpg;*.jpeg;*.bmp", CheckFileExists = true, Multiselect = false, DereferenceLinks = false })
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK) return;
-                try { link.Text = ReverseQrReader.Read(dialog.FileName); PreviewLink(); }
-                catch (Exception error) { ShowFailure(error); }
+                path = dialog.FileName;
             }
+            var request = new QrImportRequest(platform, selectedAddress, link.Text, selectionGeneration);
+            qrReading = true;
+            if (!Begin("선택한 QR 이미지를 이 PC에서 읽는 중입니다. ‘QR 결과 사용 취소’로 결과를 버릴 수 있습니다. 이미지 판독은 즉시 중단할 수 없어 취소·창 닫기는 판독이 끝날 때까지 기다립니다.")) { qrReading = false; return; }
+            CancellationTokenSource pending = operation;
+            try
+            {
+                QrImportResult result = await request.ReadAsync(path, pending.Token);
+                if (closing || IsDisposed || Disposing || operation != pending) return;
+                if (pending.IsCancellationRequested)
+                {
+                    SetStatus("QR 이미지 판독이 끝났습니다. 취소한 결과는 사용하지 않았습니다. 새 QR 이미지나 링크를 선택할 수 있습니다.");
+                    return;
+                }
+                if (!request.Matches(platform, selectedAddress, link.Text, selectionGeneration))
+                {
+                    SetStatus("QR을 읽는 동안 연결 대상이나 링크가 바뀌어 결과를 사용하지 않았습니다. QR 이미지를 다시 선택하세요.");
+                    return;
+                }
+                // Decoding and role validation finished for this exact source. Loading
+                // candidates still requires an explicit address choice and PIN action.
+                ConnectionPolicy.RequireRole(result.Invitation, platform);
+                link.Text = result.Link;
+                PreviewInvitation(result.Invitation);
+            }
+            catch (Exception error)
+            {
+                if (!closing && !IsDisposed && !Disposing && operation == pending &&
+                    request.Matches(platform, selectedAddress, link.Text, selectionGeneration))
+                {
+                    if (pending.IsCancellationRequested) SetStatus("QR 이미지 판독이 끝났습니다. 취소한 결과는 사용하지 않았습니다. 새 QR 이미지나 링크를 선택할 수 있습니다.");
+                    else ShowFailure(error);
+                }
+            }
+            finally { qrReading = false; End(); }
         }
         private void ChooseCandidate()
         {
@@ -191,14 +234,16 @@ namespace DeskBridge.Reverse
         private void ChooseManual()
         {
             if (busy) return;
-            try { Choose(HostText("직접 입력한 Mac"), ConnectionPolicy.Address(manual.Text)); }
+            try { Choose(HostText(ClientMessage.ManualTarget), ConnectionPolicy.Address(manual.Text)); }
             catch (Exception error) { ShowFailure(error); }
         }
         private void Choose(string name, string address)
         {
             selectedAddress = ConnectionPolicy.Address(address);
+            selectionGeneration++;
             target.Text = name + " · " + selectedAddress + " · 연결 미확인";
-            SetStatus(HostText("주소를 선택했습니다. Mac에서 ‘이 Mac 공유’를 시작한 뒤 PIN으로 연결하세요. 주소만으로 기기 신원을 신뢰하지 않습니다."));
+            target.AccessibleDescription = target.Text;
+            SetStatus(HostText(ClientMessage.AddressSelected));
             UpdateControls();
         }
         private async Task DiscoverAsync()
@@ -208,11 +253,12 @@ namespace DeskBridge.Reverse
             {
                 IList<ReverseCandidate> found = await ReverseDiscovery.FindAsync(operation.Token);
                 if (closing) return;
+                ClearSelectedTarget();
                 candidates.Items.Clear();
                 foreach (ReverseCandidate item in found)
                     if (ConnectionPolicy.ValidName(item.Name)) candidates.Items.Add(new CandidateItem(item.Name, ConnectionPolicy.Address(item.Address)));
                 if (candidates.Items.Count != 0) candidates.SelectedIndex = 0;
-                SetStatus(candidates.Items.Count == 0 ? HostText("주변 주소 안내를 찾지 못했습니다. Mac의 QR/링크를 사용하세요. Tailscale 기기는 Wi-Fi 검색에 나타나지 않을 수 있습니다.") : HostText("검색 결과는 미확인 Sunshine 기기입니다. 사용하려는 Mac과 주소를 확인하고 선택하세요."));
+                SetStatus(candidates.Items.Count == 0 ? HostText(ClientMessage.DiscoveryEmpty) : HostText(ClientMessage.DiscoveryFound));
             }
             catch (Exception error) { ShowFailure(error); }
             finally { End(); }
@@ -224,7 +270,7 @@ namespace DeskBridge.Reverse
             try
             {
                 await store.InstallAsync(new Progress<int>(value => { if (!closing && !IsDisposed) progress.Value = Math.Max(0, Math.Min(100, value)); }), operation.Token);
-                SetStatus(HostText("화면 엔진 파일 검증을 완료했습니다. 다음으로 Mac의 PIN 승인을 진행하세요. 아직 Mac 연결은 확인하지 않았습니다."));
+                SetStatus(HostText(ClientMessage.EngineReady));
             }
             catch (Exception error) { ShowFailure(error); }
             finally { progress.Visible = false; End(); }
@@ -251,9 +297,9 @@ namespace DeskBridge.Reverse
                     using (var child = new EngineProcess())
                     {
                         ownedProcess = child;
-                        SetStatus(pairing ? HostText("Moonlight의 PIN 연결 창을 실행했습니다. PIN을 선택한 Mac의 Sunshine에 직접 입력하세요. 실제 결과는 Moonlight 창에서 확인합니다.") : "Moonlight 화면 창을 실행했습니다. 연결 상태는 그 창에서 확인하세요. ‘작업 취소’는 이 앱이 실행한 로컬 화면 엔진만 종료합니다.");
+                        SetStatus(pairing ? HostText(ClientMessage.PairStarted) : "Moonlight 화면 창을 실행했습니다. 연결 상태는 그 창에서 확인하세요. ‘작업 취소’는 이 앱이 실행한 로컬 화면 엔진만 종료합니다.");
                         int exit = await child.RunAsync(lease, profile.Path, arguments, operation.Token);
-                        SetStatus(exit == 0 ? (pairing ? HostText("PIN 연결 창이 종료되었습니다. Moonlight에서 성공을 확인했다면 ‘Mac 화면 열기’를 누르세요.") : HostText("화면 엔진이 종료되었습니다. Mac의 앱은 종료 요청하지 않았습니다.")) : HostText("화면 엔진이 정상 완료되지 않았습니다. Moonlight의 오류 안내와 Mac의 공유 상태·권한을 확인한 뒤 다시 시도하세요."));
+                        SetStatus(exit == 0 ? (pairing ? HostText(ClientMessage.PairFinished) : HostText(ClientMessage.StreamFinished)) : HostText(ClientMessage.EngineFailed));
                     }
                     }
                 }
@@ -267,12 +313,18 @@ namespace DeskBridge.Reverse
         private void End()
         {
             if (operation != null) { operation.Dispose(); operation = null; }
-            busy = false; UpdateControls();
+            busy = false;
+            if (IsDisposed || Disposing) return;
+            UpdateControls();
             if (closing) { allowClose = true; Close(); }
         }
         private void CancelOwned()
         {
-            if (operation != null && !operation.IsCancellationRequested) { SetStatus("작업을 취소하고 이 앱이 실행한 로컬 작업만 정리하는 중입니다."); operation.Cancel(); }
+            if (operation != null && !operation.IsCancellationRequested)
+            {
+                SetStatus(qrReading ? "QR 결과 사용을 취소했습니다. 이미지 판독은 즉시 중단할 수 없어 완료될 때까지 기다리는 중입니다. 결과는 주소 후보에 적용하지 않습니다." : "작업을 취소하고 이 앱이 실행한 로컬 작업만 정리하는 중입니다.");
+                operation.Cancel();
+            }
             if (ownedProcess != null) ownedProcess.Stop();
             cancel.Enabled = false;
         }
@@ -283,17 +335,29 @@ namespace DeskBridge.Reverse
         }
         private void UpdateControls()
         {
+            if (IsDisposed || Disposing) return;
             foreach (Control control in changing) control.Enabled = !busy && !closing;
             if (platform != HostPlatform.Mac) macCommandKeys.Checked = false;
             macCommandKeys.Enabled = !busy && !closing && fullscreen.Checked && platform == HostPlatform.Mac;
             install.Enabled = !busy && !closing; install.Text = store.Installed ? "화면 엔진 파일 다시 확인" : "화면 엔진 받기";
             pair.Enabled = connect.Enabled = !busy && !closing && store.Installed && selectedAddress != null;
             cancel.Enabled = busy && !closing; cancel.Visible = busy;
+            cancel.Text = qrReading ? "QR 결과 사용 취소" : "작업 취소";
         }
-        private void SetStatus(string text) { if (!IsDisposed) status.Text = text; }
+        private void SetStatus(string text) { if (!IsDisposed && !Disposing) status.SetMessage(text); }
         private void ShowFailure(Exception error)
         {
-            SetStatus(ReverseErrors.ForOperation(error));
+            SetStatus(ReverseErrors.ForOperation(error, platform));
+        }
+        private sealed class StatusTextBox : TextBox
+        {
+            internal void SetMessage(string text)
+            {
+                Text = text;
+                // Framework 4.8 supports MSAA value changes; no newer UIA live-region
+                // API is required. Actual Narrator behavior remains a device check.
+                if (IsHandleCreated) AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);
+            }
         }
         private sealed class CandidateItem
         {

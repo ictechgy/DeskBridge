@@ -40,6 +40,7 @@ extension StreamSession {
         // sleep before the first frame; released in `stop()`. Idempotent against
         // the `!isStreaming` guard above, so we never stack assertions.
         beginPowerAssertion()
+        refreshPowerAssertion()
         // Release the assertion on any UNSUCCESSFUL exit from start() - an early
         // throw (pairing failure, host unreachable) happens before stop() is
         // reachable, so without this the Mac would stay awake forever after a
@@ -177,7 +178,7 @@ extension StreamSession {
 
     package func refreshPowerAssertion() {
         guard isStreaming, !stopInProgress, activityHeld else { return }
-        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
+        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)
     }
 
     /// Step 1 of start(): fetch /serverinfo, stamp its launch sub-leg, log the handshake line, and

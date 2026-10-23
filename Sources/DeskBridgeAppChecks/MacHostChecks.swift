@@ -68,6 +68,14 @@ import Foundation
     let stateMode = try FileManager.default.attributesOfItem(atPath: state.path)[.posixPermissions] as? Int
     try expect(stateMode == 0o600, "upstream-created state permissions were not tightened")
     try expect(try Data(contentsOf: state) == syntheticState, "host preparation replaced stored pairing state")
+    let customConfig = Data("# Synthetic user preference\nencoder=software\n".utf8)
+    let customApps = Data("{\"apps\":[{\"name\":\"Desktop\",\"cmd\":\"\"},{\"name\":\"Synthetic\",\"cmd\":\"\"}]}".utf8)
+    let configURL = directory.appendingPathComponent("sunshine.conf")
+    let appsURL = directory.appendingPathComponent("apps.json")
+    try customConfig.write(to: configURL); try customApps.write(to: appsURL)
+    try MacHostStorage.prepare(directory: directory)
+    try expect(try Data(contentsOf: configURL) == customConfig, "host restart overwrote app-owned user preferences")
+    try expect(try Data(contentsOf: appsURL) == customApps, "host restart overwrote app-owned applications")
     let outside = fixture.appendingPathComponent("untouched")
     try Data("SYNTHETIC UNTOUCHED".utf8).write(to: outside)
     try FileManager.default.removeItem(at: directory.appendingPathComponent("apps.json"))
@@ -86,7 +94,9 @@ import Foundation
     try await settle { model.phase == .running }
     try expect(starts == 1 && model.invitation != nil, "duplicate host start or missing running invitation")
     let invitation = model.invitation!
-    try expect(try ConnectionInvitation(text: invitation.url.absoluteString) == invitation, "host invitation incompatible with v1 decoder")
+    try expect(invitation.platform == .macos, "Mac host invitation lost its explicit OS role")
+    try expect(try ConnectionInvitation(text: invitation.url.absoluteString) == invitation,
+               "Mac host invitation lost its roundtrip")
     guard let png = MacHostQR.png(invitation) else { throw ModelCheckFailure(message: "synthetic host QR not generated") }
     try expect(try ConnectionQRReader.decode(data: png) == invitation, "host QR not decoded by actual QR reader")
     model.stop(); try expect(child.stops == 1 && model.phase == .stopping && model.invitation == nil, "stop did not revoke published invitation")
@@ -97,6 +107,12 @@ import Foundation
     let failed = MacHostModel(operations: .init(installed: { true }, addresses: { addresses }, start: { _, _, _ in exited }, download: { _ in }))
     failed.refresh(); failed.acknowledged = true; failed.start(); try await settle { failed.phase == .running }
     exited.finish(); try expect(failed.phase == .stopped && failed.errorMessage != nil && failed.invitation == nil, "unexpected exit retained success status")
+    let unavailable = MacHostModel(operations: .init(installed: { true }, addresses: { addresses },
+        start: { _, _, _ in throw MacHostPolicy.Failure.helperUnavailable }, download: { _ in }))
+    unavailable.refresh(); unavailable.acknowledged = true; unavailable.start()
+    try await settle { unavailable.phase == .stopped && unavailable.errorMessage != nil }
+    try expect(unavailable.errorMessage == MacHostPolicy.Failure.helperUnavailable.localizedDescription && unavailable.invitation == nil,
+               "helper startup failure was misreported as a running Sunshine exit")
     var continuation: CheckedContinuation<any MacHostOwnedProcess, Never>?
     let suspendedChild = SyntheticMacHostChild()
     let cancelled = MacHostModel(operations: .init(installed: { true }, addresses: { addresses }, start: { _, _, _ in await withCheckedContinuation { continuation = $0 } }, download: { _ in }))
@@ -156,6 +172,7 @@ import Foundation
     releaseQuit?.resume(); try await settle { quitReplied }
     count += try await runMacHostDownloadChecks(temporary: fixture)
     count += try await runMacHostFileWorkChecks(temporary: fixture)
+    count += try runMacHostSigningChecks(temporary: fixture)
     count += try await runOwnedMacHostProcessChecks(temporary: fixture)
     return count
 }
@@ -427,24 +444,30 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
 }
 
 /// Compiles and runs only this new inert fixture, never Sunshine or app main.
-/// A forked child may not outlive its owned host, while a separately launched
-/// companion must remain unaffected by that cleanup.
+/// The owned host cannot fork; an unrelated companion remains unaffected.
 @MainActor private func runOwnedMacHostProcessChecks(temporary: URL) async throws -> Int {
     let source = temporary.appendingPathComponent("owned-process.c")
     let executable = temporary.appendingPathComponent("owned-process")
     let forkMarker = temporary.appendingPathComponent("fork-escaped")
     let forkStarted = temporary.appendingPathComponent("fork-escaped.started")
+    let forkDenied = temporary.appendingPathComponent("fork-escaped.denied")
     let companionMarker = temporary.appendingPathComponent("companion-completed")
     let code = """
     #include <unistd.h>
     #include <stdio.h>
     #include <string.h>
     #include <signal.h>
+    #include <errno.h>
     int main(int argc, char **argv) {
       if (argc != 3) return 2;
       if (strcmp(argv[1], "fork") == 0) {
         pid_t p = fork();
-        if (p < 0) return 4;
+        if (p < 0) {
+          if (errno != EPERM) return 4;
+          char proof[4096]; snprintf(proof, sizeof(proof), "%s.denied", argv[2]);
+          FILE *f = fopen(proof, "wx"); if (!f) return 5; fputs("SYNTHETIC EPERM", f); fclose(f);
+          return 0;
+        }
         if (p > 0) {
           char proof[4096]; snprintf(proof, sizeof(proof), "%s.started", argv[2]);
           FILE *f = fopen(proof, "wx"); if (!f) return 5; fputs("SYNTHETIC", f); fclose(f);
@@ -475,10 +498,11 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
     guard !owned.running else { owned.forceStop(); throw ModelCheckFailure(message: "owned parent exit did not settle") }
     try await Task.sleep(for: .milliseconds(600))
     companion.waitUntilExit()
-    guard FileManager.default.fileExists(atPath: forkStarted.path),
+    guard (try? Data(contentsOf: forkDenied)) == Data("SYNTHETIC EPERM".utf8),
+          !FileManager.default.fileExists(atPath: forkStarted.path),
           !FileManager.default.fileExists(atPath: forkMarker.path), companion.terminationStatus == 0,
           FileManager.default.fileExists(atPath: companionMarker.path) else {
-        throw ModelCheckFailure(message: "owned group cleanup escaped or affected unrelated companion")
+        throw ModelCheckFailure(message: "owned host fork was not denied or cleanup affected unrelated companion")
     }
     let linger = try MacHostChild(executable: executable, arguments: ["linger", forkMarker.path])
     try await Task.sleep(for: .milliseconds(30))

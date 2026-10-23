@@ -81,12 +81,14 @@
 - Minimum 880x620, split sidebar/detail; streaming window fits selected remote resolution with letterboxing.
 - Native fullscreen Primary only, no all-Spaces borderless window.
 - The fullscreen window shows a small top-center, semantic-color text card while connecting, waiting for video or reconnecting. Reconnecting identifies the frozen picture as the last frame; a recovered transport still waits for a fresh frame. The card exposes readable accessibility text, uses no animation and never takes keyboard or pointer focus. First frame/finished recovery clears it; termination and teardown remove it.
+- A nonfatal audio failure keeps the persistent connected-status warning and shows one fullscreen notice per connection attempt, for up to eight elapsed seconds from its first display. Video recovery guidance takes priority during that interval. Stalls do not pause the deadline or replay a consumed notice; expiration never hides connecting, waiting or reconnecting guidance.
 - Pointer default free/absolute, native scroll.
 
 ## Interaction states
 - Loading: progress and descriptive phase, prevent duplicate operation.
 - Empty: one actionable instruction.
 - Error: readable error; no raw keys/tokens/protocol dumps.
+- Malformed connection links show how to obtain a new QR/link before any network troubleshooting; parsing failure never changes saved target or trust.
 - Success: confirmed operation and destination.
 - Disabled: show setup prerequisite.
 - Offline: explicit retry, no silent authentication downgrade.

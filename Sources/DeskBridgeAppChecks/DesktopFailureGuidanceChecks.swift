@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import Foundation
 import GlimmerEngine
+import DeskBridgeCore
 
 /// Exercise the actual operation catch path with typed synthetic failures.
 @MainActor
@@ -14,6 +15,10 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
     let model = DesktopModel(storageDirectory: temporary.appendingPathComponent("desktop-guidance"), identitySuite: suite)
     let raw = "synthetic-untrusted-detail-192.0.2.1-private-path"
     let cases: [(any Error, String)] = [
+        (ConnectionInvitation.Failure.invalid, "새 연결 QR"),
+        (CorePrivateStorageFailure.unsafeStorage, "저장 폴더"),
+        (IdentityStorageError.unsafeStorage, "저장 폴더"),
+        (IdentityStorageError.incompleteIdentity, "인증 파일 전체를 복원"),
         (StreamSecurityPolicy.Failure.plaintextSignalling, "필수 화면 암호화"),
         (StreamSecurityPolicy.Failure.missingEncryption(7), "필수 화면 암호화"),
         (PairingFailure.invalidAddress, "IPv4 주소"),
@@ -36,7 +41,7 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
         (StreamError.sessionFailed(-9876), "화면 연결을 시작하지 못했습니다"),
         (StreamError.binaryNotFound, "화면 연결을 시작하지 못했습니다"),
         (StreamError.decoderFailed(raw), "해상도를 낮춰"),
-        (StreamError.audioFailed(raw), "오디오 출력 장치"),
+        (StreamError.audioFailed(raw), "오디오 장치·네트워크"),
         (StreamError.crypto(raw), "보안 연결"),
     ]
     for (error, guidance) in cases {
@@ -59,6 +64,9 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
     let unknown = DesktopModel.failureMessage(NSError(domain: raw, code: -1, userInfo: [NSLocalizedDescriptionKey: raw]))
     try expect(unknown.contains("작업을 완료하지 못했습니다") && !unknown.contains(raw),
                "unknown framework errors must use fixed Korean guidance")
+    let recovery = DesktopModel.failureMessage(IdentityStorageError.incompleteIdentity)
+    try expect(recovery.contains("초기화할 수 없습니다") && !recovery.contains("수동으로 새 연결"),
+               "missing identity offered an unsupported reset path")
     let files = FilesModel(desktop: model)
     files.perform { throw NSError(domain: raw, code: -1, userInfo: [NSLocalizedDescriptionKey: raw]) }
     for _ in 0..<1000 {
@@ -69,5 +77,28 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
                "file operations exposed raw framework storage details")
     try expect(FilesModel.failureMessage(AppFailure(localMessage)) == localMessage,
                "file operations lost actionable local guidance")
+    try expect(FilesModel.failureMessage(CorePrivateStorageFailure.unsafeStorage).contains("저장 폴더"),
+               "file credential storage refusal lost actionable local guidance")
+    let denied = temporary.appendingPathComponent("startup-storage-guidance")
+    try FileManager.default.createDirectory(at: denied, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    var saved = SavedSettings(); saved.address = "192.168.1.21"; saved.sshHostPublicKey = "SYNTHETIC PRESERVED PIN"
+    let deniedStore = SettingsStore(directory: denied); try deniedStore.save(saved)
+    let savedFile = denied.appendingPathComponent("settings.json")
+    let before = try Data(contentsOf: savedFile)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: denied.path)
+    let deniedModel = DesktopModel(storageDirectory: denied, identitySuite: suite)
+    try expect(deniedModel.errorMessage?.contains("접근 권한") == true && deniedModel.errorMessage?.contains("설정 파일을 복구") == false,
+               "startup permission refusal lost typed storage guidance")
+    let startupMessage = deniedModel.errorMessage
+    deniedModel.connect()
+    try expect(deniedModel.errorMessage == startupMessage && !deniedModel.busy,
+               "PC verification replaced startup storage refusal with unrelated busy guidance")
+    do { try deniedModel.assertStorageReady(); throw ModelCheckFailure(message: "unsafe startup allowed operations") }
+    catch let error as AppFailure { try expect(error.message == startupMessage, "later operations changed the startup recovery guidance") }
+    let deniedFiles = FilesModel(desktop: deniedModel)
+    deniedFiles.perform { try deniedModel.assertStorageReady() }
+    for _ in 0..<1000 { if !deniedFiles.busy { break }; try await Task.sleep(for: .milliseconds(1)) }
+    try expect(deniedFiles.errorMessage == startupMessage, "file operation lost the same storage refusal")
+    try expect(try Data(contentsOf: savedFile) == before, "storage guidance modified saved credentials")
     return count
 }

@@ -88,6 +88,21 @@ namespace DeskBridge.Reverse
             Check(ReverseErrors.ForOperation(new InvalidDataException(secretPath)) == ReverseErrors.QrGuidance &&
                 ReverseErrors.QrGuidance.Contains("Knot-QR") && !ReverseErrors.QrGuidance.Contains(secretPath), "QR fixed Korean local copy guidance hides raw errors");
             Check(ReverseErrors.ForOperation(new FormatException("지원되는 PC 연결 링크가 아닙니다. 공유할 PC의 Knot에서 새 QR/링크를 만드세요.")) != ReverseErrors.Fallback, "exact authored validation message remains helpful");
+            Check(ReverseErrors.ForOperation(new ReverseUserException(ReverseFailure.Discovery), HostPlatform.Linux).Contains("QR 또는 링크") &&
+                !ReverseErrors.ForOperation(new ReverseUserException(ReverseFailure.Discovery), HostPlatform.Linux).Contains("Mac"), "typed discovery failure retains role-neutral recovery guidance");
+            Check(ReverseErrors.ForOperation(new IOException("근처 Mac 검색을 완료하지 못했습니다. 연결 QR 또는 링크를 사용하세요."), HostPlatform.Linux) == ReverseErrors.Fallback,
+                "untyped discovery-like OS errors cannot select authored guidance");
+            Check(ReverseErrors.ForOperation(new OperationCanceledException(secretPath), HostPlatform.Linux).Contains("Linux") &&
+                !ReverseErrors.ForOperation(new OperationCanceledException(secretPath), HostPlatform.Linux).Contains("Mac") &&
+                !ReverseErrors.ForOperation(new OperationCanceledException(secretPath), HostPlatform.Linux).Contains(secretPath), "Linux cancellation uses fixed role guidance without raw error text");
+            foreach (ClientMessage message in (ClientMessage[])Enum.GetValues(typeof(ClientMessage)))
+            {
+                string linuxText = ReverseClientText.Get(message, HostPlatform.Linux);
+                Check(!String.IsNullOrEmpty(ReverseClientText.Get(message, HostPlatform.Mac)) && !String.IsNullOrEmpty(linuxText), "every client message has explicit Mac and Linux copy");
+                foreach (string macOnly in new[] { "Mac", "Command", "FileVault", "손쉬운 사용", "화면 녹화", "Ctrl+Alt+Shift+K" })
+                    Check(!linuxText.Contains(macOnly), "Linux copy excludes Mac-only instructions and system-key capture hotkey");
+            }
+            VerifyQrWorkerScheduling();
 
             const string ini = "[General]\r\nrichpresence=true\r\nmdns=true\r\ndetectnetblocking=true\r\nquitAppAfter=true\r\n[hosts]\r\n1\\srvcert=SYNTHETIC_CERT\r\n1\\address=192.168.1.2\r\n[Other]\r\nrichpresence=keep\r\n";
             string updated = EngineProfile.SetPrivacySettings(ini);
@@ -159,6 +174,62 @@ namespace DeskBridge.Reverse
                 Check(cancelled == requestCancel && stream.Closed, "verification honors cancellation and closes the archive");
                 stream.Entered.Dispose(); stream.Release.Dispose();
             }
+        }
+        private static void VerifyQrWorkerScheduling()
+        {
+            const string qrLink = "deskbridge://connect?v=2&name=Synthetic&address=192.168.1.20&platform=linux";
+            var request = new QrImportRequest(HostPlatform.Linux, "192.168.1.30", "original", 7);
+            Check(request.Matches(HostPlatform.Linux, "192.168.1.30", "original", 7), "QR result accepts the exact originating selection");
+            Check(!request.Matches(HostPlatform.Mac, "192.168.1.30", "original", 7) &&
+                !request.Matches(HostPlatform.Linux, "192.168.1.31", "original", 7) &&
+                !request.Matches(HostPlatform.Linux, "192.168.1.30", "changed", 7) &&
+                !request.Matches(HostPlatform.Linux, "192.168.1.30", "original", 8), "role, target, edited link, and changed-then-restored generation invalidate a QR result");
+            foreach (bool requestCancel in new[] { false, true })
+            using (var cancel = new CancellationTokenSource())
+            using (var entered = new ManualResetEventSlim())
+            using (var release = new ManualResetEventSlim())
+            {
+                int caller = Thread.CurrentThread.ManagedThreadId, reader = 0, reads = 0;
+                Task<QrImportResult> work = request.ReadAsync("synthetic-selected-image", path =>
+                {
+                    reader = Thread.CurrentThread.ManagedThreadId; reads++;
+                    if (path != "synthetic-selected-image") throw new Exception("Unexpected synthetic input");
+                    entered.Set();
+                    if (!release.Wait(5000)) throw new TimeoutException("Synthetic QR wait");
+                    return qrLink;
+                }, cancel.Token);
+                try
+                {
+                    Check(entered.Wait(5000) && !work.IsCompleted, "QR import yields while its selected-image decoder is pending");
+                    Check(reader != caller && reads == 1, "QR selected-image decode runs once off the caller thread");
+                    if (requestCancel)
+                    {
+                        cancel.Cancel();
+                        Check(!work.IsCompleted, "QR cancellation waits for the noninterruptible decoder instead of claiming it stopped");
+                    }
+                }
+                finally { release.Set(); }
+                bool cancelled = false;
+                try
+                {
+                    QrImportResult result = work.GetAwaiter().GetResult();
+                    Check(result.Link == qrLink && result.Invitation.Platform == HostPlatform.Linux && result.Invitation.Addresses[0] == "192.168.1.20", "QR result is parsed and role validated before presentation");
+                }
+                catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled == requestCancel, "QR cancellation discards the eventual decoded result");
+            }
+            using (var cancel = new CancellationTokenSource())
+            {
+                int reads = 0; cancel.Cancel();
+                bool cancelled = false;
+                try { request.ReadAsync("synthetic", path => { reads++; return qrLink; }, cancel.Token).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { cancelled = true; }
+                Check(cancelled && reads == 0, "already-cancelled QR request never opens a selected image");
+            }
+            Reject(() => request.ReadAsync("synthetic", path => qrLink.Replace("platform=linux", "platform=macos"), CancellationToken.None).GetAwaiter().GetResult(),
+                "QR worker rejects a wrong-role invitation before returning candidates");
+            Reject(() => request.ReadAsync("synthetic", path => qrLink.Replace("192.168.1.20", "8.8.8.8"), CancellationToken.None).GetAwaiter().GetResult(),
+                "QR worker rejects unsupported addresses before returning candidates");
         }
         private static void Reject(Action body, string label) { bool rejected = false; try { body(); } catch (FormatException) { rejected = true; } catch (ArgumentException) { rejected = true; } catch (IOException) { rejected = true; } Check(rejected, label); }
         // Independent CRT decoder for one quoted argument; never invokes a process or shell.

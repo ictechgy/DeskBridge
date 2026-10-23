@@ -45,7 +45,7 @@ class Window(Gtk.Window):
         self.install_button.connect('clicked', lambda _: self.run(lambda: open_installer(self.pin, self.package), lambda _: self.status.set_text('Ubuntu 설치 창에서 완료하세요. 설치 뒤 공유 시작을 누르면 설치 버전·바이너리·입력 권한을 확인합니다.')))
         self.export_button = Gtk.Button(label='검증된 설치 패키지 사본 저장…'); body.pack_start(self.export_button, False, False, 0)
         self.export_button.connect('clicked', lambda _: self.export_package())
-        label('설치 창이 열리지 않으면 패키지를 다운로드 폴더 등에 저장한 뒤 직접 설치하세요. 아래 명령은 복사용이며 앱이 실행하지 않습니다.')
+        label('설치 창이 열리지 않으면 아래 명령으로 보호된 원본을 직접 설치하세요. 패키지 사본은 별도로 저장할 수 있습니다. 이 명령은 복사용이며 앱이 실행하지 않습니다.')
         self.install_command = Gtk.Entry(); self.install_command.set_editable(False)
         self.install_command.get_accessible().set_name('직접 설치 명령, 복사용')
         body.pack_start(self.install_command, False, False, 0)
@@ -108,8 +108,10 @@ class Window(Gtk.Window):
         def execute():
             result, failure = None, None
             try: result = work()
-            except Failure as error: failure = str(error)
-            except Exception: failure = str(Failure('operation'))
+            except Exception as error:
+                failure = str(error) if isinstance(error, Failure) else str(Failure('operation'))
+                if getattr(error, 'cleanup_failed', False):
+                    failure += ' 임시 패키지 사본을 정리하지 못했습니다. 선택한 저장 폴더에서 숨김 파일을 표시하고 .deskbridge-package-로 시작하는 임시 사본을 확인하세요.'
             GLib.idle_add(finish, result, failure)
         def finish(result, failure):
             self.busy = False; self.operation_kind = None
@@ -137,8 +139,13 @@ class Window(Gtk.Window):
         try:
             if dialog.run() == Gtk.ResponseType.OK:
                 destination = dialog.get_filename()
-                self.run(lambda: save_package(self.pin, self.package, destination), self.got_package)
+                self.run(lambda: save_package(self.pin, self.package, destination), self.exported_package)
         finally: dialog.destroy()
+
+    def exported_package(self, destination):
+        # Export destinations may be shared or replaceable. Privileged install
+        # guidance continues to name the private, verified managed source.
+        self.status.set_text('설치 패키지 사본을 저장했습니다. 아래 설치 명령은 보호된 원본을 사용합니다. 설치 후 이 Linux 공유 시작을 누르세요.')
 
     def start(self):
         name = self.name.get_text()

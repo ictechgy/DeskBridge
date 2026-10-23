@@ -67,8 +67,9 @@ extension RtpAudioReceiver {
         guard sock >= 0 else { return }
         pingCount &+= 1
         let datagram = UdpPinger.datagram(payload: pingPayload, sequence: pingCount)
+        var destination = destAddr
         let sent = datagram.withUnsafeBytes { raw in
-            withUnsafePointer(to: &destAddr) { sp in
+            withUnsafePointer(to: &destination) { sp in
                 sp.withMemoryRebound(to: sockaddr.self, capacity: 1) { sap in
                     sendto(sock, raw.baseAddress, raw.count, 0, sap, destAddrLen)
                 }

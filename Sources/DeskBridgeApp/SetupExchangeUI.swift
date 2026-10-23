@@ -93,7 +93,13 @@ extension FilesModel {
             let data = try BoundedRegularFile.read(url, maximumBytes: 16_384)
             let preview = try SetupExchange.preview(data, clientPublicKey: publicKey)
             let alert = NSAlert(); alert.messageText = "Windows 화면의 SSH 지문과 비교하세요"
-            alert.informativeText = "Windows PC: \(preview.reply.address)\n\n\(preview.fingerprint)\n\nWindows 설정 도우미에 표시된 값과 직접 비교한 뒤 등록하세요. 이 파일 자체는 PC의 신원을 보증하지 않습니다. 기존 파일 접속 설정을 바꿉니다."
+            alert.informativeText = "Windows PC: \(preview.reply.address)\n\n아래 SSH 지문을 Windows 설정 도우미에 표시된 값과 직접 비교한 뒤 등록하세요. 이 파일 자체는 PC의 신원을 보증하지 않습니다. 기존 파일 접속 설정을 바꿉니다."
+            let fingerprint = NSTextField(wrappingLabelWithString: preview.fingerprint)
+            fingerprint.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+            fingerprint.isSelectable = true
+            fingerprint.setAccessibilityLabel("Windows SSH 호스트 키 지문")
+            fingerprint.frame = NSRect(x: 0, y: 0, width: 440, height: 44)
+            alert.accessoryView = fingerprint
             if preview.reply.address != desktopForSetup.address {
                 alert.informativeText += "\n\n화면과 파일의 공통 연결 주소도 \(desktopForSetup.address.isEmpty ? "미설정" : desktopForSetup.address)에서 \(preview.reply.address)로 바뀝니다. 화면 PC 확인을 다시 해야 하며 저장된 화면 인증서는 유지됩니다."
             }

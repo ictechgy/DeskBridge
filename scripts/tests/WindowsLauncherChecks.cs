@@ -93,6 +93,15 @@ internal static class Checks
             Expect(output.Length <= input.Expected, "Pinned installer output must never exceed its byte cap");
             if (success) Expect(output.ToArray().SequenceEqual(input.Bytes), "Pinned installer copy changed bytes");
         }
+        var installerResult = launcher.GetMethod("InterpretSunshineInstallerResult", BindingFlags.Static | BindingFlags.NonPublic)!;
+        foreach (int code in new[] { 0, 3010, 1641, 1618, 1602 })
+            Expect((int)installerResult.Invoke(null, new object[] { code })! == code, "MSI outcome was lost before the UI boundary");
+        foreach (int code in new[] { 1, 2, 12, 13, 1603, -1, Int32.MaxValue })
+        {
+            try { installerResult.Invoke(null, new object[] { code }); }
+            catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException) { count++; continue; }
+            throw new Exception("Unknown MSI failure was accepted as a user outcome");
+        }
         var setupResult = launcher.GetMethod("InterpretSetupResult", BindingFlags.Static | BindingFlags.NonPublic)!;
         Expect((int)setupResult.Invoke(null, new object[] { 0, false, true })! == 0 && (int)setupResult.Invoke(null, new object[] { 0, true, true })! == 0, "Successful setup must succeed in both modes");
         Expect((int)setupResult.Invoke(null, new object[] { 2, false, false })! == 2, "Only explicitly acknowledged interactive script failure is already reported");

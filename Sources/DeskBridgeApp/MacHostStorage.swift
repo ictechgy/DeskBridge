@@ -35,6 +35,7 @@ enum MacHostStorage {
         let fd = openat(root, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw MacHostPolicy.Failure.privateStorage }
         defer { close(fd); _ = unlinkat(root, temporary, 0) }
+        try checkFreshFile(fd)
         let file = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         try file.write(contentsOf: bytes); try file.synchronize()
         guard renameatx_np(root, temporary, root, "web-credentials.json", UInt32(RENAME_EXCL)) == 0 else { throw MacHostPolicy.Failure.privateStorage }
@@ -53,8 +54,8 @@ enum MacHostStorage {
         try checkDirectory(credentials)
         for name in ["sunshine.conf", "apps.json", "state.json", "web-credentials.json"] { try checkFile(root, name) }
         for name in ["cakey.pem", "cacert.pem"] { try checkFile(credentials, name) }
-        try replace(root, name: "sunshine.conf", bytes: Data("# Knot owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
-        try replace(root, name: "apps.json", bytes: MacHostPolicy.desktopApplications)
+        try createDefault(root, name: "sunshine.conf", bytes: Data("# Knot owns this configuration. Security policy is enforced by command-line overrides.\n".utf8))
+        try createDefault(root, name: "apps.json", bytes: MacHostPolicy.desktopApplications)
     }
     private static func checkDirectory(_ descriptor: Int32) throws {
         var value = stat()
@@ -77,8 +78,16 @@ enum MacHostStorage {
         defer { close(descriptor) }
         var opened = stat()
         guard fstat(descriptor, &opened) == 0, opened.st_dev == value.st_dev, opened.st_ino == value.st_ino,
-              opened.st_uid == geteuid(), opened.st_nlink == 1, opened.st_mode & S_IFMT == S_IFREG,
-              fchmod(descriptor, 0o600) == 0 else { throw MacHostPolicy.Failure.privateStorage }
+              opened.st_uid == geteuid(), opened.st_nlink == 1, opened.st_mode & S_IFMT == S_IFREG
+              else { throw MacHostPolicy.Failure.privateStorage }
+        try checkACL(descriptor)
+        guard fchmod(descriptor, 0o600) == 0 else { throw MacHostPolicy.Failure.privateStorage }
+    }
+    private static func checkFreshFile(_ descriptor: Int32) throws {
+        var value = stat()
+        guard fstat(descriptor, &value) == 0, value.st_uid == geteuid(), value.st_nlink == 1,
+              value.st_mode & S_IFMT == S_IFREG, value.st_mode & 0o7777 == 0o600,
+              value.st_size == 0 else { throw MacHostPolicy.Failure.privateStorage }
         try checkACL(descriptor)
     }
     private static func checkACL(_ descriptor: Int32) throws {
@@ -87,15 +96,25 @@ enum MacHostStorage {
             guard errno == ENOENT else { throw MacHostPolicy.Failure.privateStorage }; return
         }
         defer { acl_free(UnsafeMutableRawPointer(acl)) }
+        guard acl_valid(acl) == 0 else { throw MacHostPolicy.Failure.privateStorage }
         var entry: acl_entry_t?
         // POSIX mode alone does not constrain inherited macOS ACL grants.
-        guard acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) != 0 else { throw MacHostPolicy.Failure.privateStorage }
+        errno = 0
+        guard acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) == -1, errno == EINVAL
+              else { throw MacHostPolicy.Failure.privateStorage }
     }
-    private static func replace(_ directory: Int32, name: String, bytes: Data) throws {
+    private static func createDefault(_ directory: Int32, name: String, bytes: Data) throws {
+        var existing = stat()
+        if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+            try checkFile(directory, name)
+            return
+        }
+        guard errno == ENOENT else { throw MacHostPolicy.Failure.privateStorage }
         let temporary = ".deskbridge-" + UUID().uuidString
         let descriptor = openat(directory, temporary, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { throw MacHostPolicy.Failure.privateStorage }
         defer { close(descriptor); _ = unlinkat(directory, temporary, 0) }
+        try checkFreshFile(descriptor)
         let wrote = bytes.withUnsafeBytes { buffer in
             var offset = 0
             while offset < buffer.count {
@@ -105,6 +124,6 @@ enum MacHostStorage {
             }
             return fsync(descriptor) == 0
         }
-        guard wrote, renameat(directory, temporary, directory, name) == 0 else { throw MacHostPolicy.Failure.privateStorage }
+        guard wrote, renameatx_np(directory, temporary, directory, name, UInt32(RENAME_EXCL)) == 0 else { throw MacHostPolicy.Failure.privateStorage }
     }
 }

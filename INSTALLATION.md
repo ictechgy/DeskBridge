@@ -82,6 +82,12 @@ Windows 빠른 설정은 OneDrive·동기화·연결 경로 밖의 로컬 폴더
 
 Windows에서 엔진 파일 확인이 계속 실패하면 Knot와 Moonlight 창을 모두 닫고, `%LOCALAPPDATA%\DeskBridge-Reverse-v1` 아래의 `engine-6.2.0` 폴더만 다른 이름으로 옮긴 뒤 **화면 엔진 받기**를 다시 누르세요. `profiles`의 페어링 상태는 보존하세요. 백신이 파일을 격리했다면 보안 정책을 먼저 확인하고 보호 기능을 끄지 마세요. 이 프리뷰는 손상된 엔진을 자동 삭제하지 않습니다. OneDrive/클라우드·링크 폴더의 EXE나 QR을 거부하면 일반 로컬 폴더로 옮겨 다시 실행하세요.
 
+## Mac 연결 인증 파일 복구
+
+연결 인증 파일이 없거나 손상되었다는 안내가 나오면 기존 파일과 앱 설정을 보존하세요. Mac 클라이언트의 인증서·개인 키·클라이언트 ID 세 파일을 **같은 원본 백업**에서 함께 복원해야 합니다. Windows 연결은 `~/Library/Application Support/DeskBridge/Glimmer/Identity`, Linux 연결은 `~/Library/Application Support/DeskBridgeLinux/Glimmer/Identity`를 사용합니다. 백업의 소유권과 개인 접근 권한도 유지하세요.
+
+이 프리뷰에는 연결 인증 초기화·자동 복구 기능이 없습니다. 앱 재설치나 인증 폴더 삭제만으로 초기화되지 않으므로 추가로 파일이나 설정을 지우지 마세요. 원본 백업이 없다면 호스트 Sunshine에서 해당 Mac의 페어링 권한을 취소하고 프로젝트에 복구 지원을 요청하세요. 보고에는 앱·OS 버전과 표시된 오류 안내만 포함하고 개인 키·인증 파일·설정 전체를 첨부하지 마세요. 새 연결을 자동으로 만들거나 기존 권한을 대체하지 않습니다.
+
 ## Linux에서 공유하기 (프리뷰)
 
 Ubuntu 24.04 LTS amd64의 로그인한 X11 데스크톱을 지원합니다. Linux용 `.deb`를 시스템 설치 프로그램으로 열고 앱 목록의 **Knot Linux Host**를 실행하세요. 앱에서 공식 Sunshine 받기 → 시스템 설치 → 최초 웹 관리자 계정 입력 → 이 Linux 공유 시작 → 웹 로그인 → QR 순서로 진행합니다. Mac은 **Linux 화면**, Windows는 **Linux 열기**를 선택하세요. 자세한 설치·방화벽·입력 권한·삭제 안내는 함께 제공한 `LINUX-INSTALLATION.md` 또는 소스의 `host/linux/README.md`를 확인하세요.

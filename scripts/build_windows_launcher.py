@@ -14,7 +14,7 @@ from reverse_qr import compile_decoder
 
 ROOT = Path(__file__).resolve().parent.parent
 PAYLOAD_NAMES = (
-    "Setup-DeskBridge.ps1", "Invoke-DeskBridgeSetup.ps1", "SetupContract.psm1", "SetupDownload.psm1",
+    "Setup-DeskBridge.ps1", "Invoke-DeskBridgeSetup.ps1", "SetupContract.psm1", "SetupDownload.psm1", "SetupStatus.psm1",
     "Enable-DeskBridgeSFTP.ps1", "Resume-DeskBridgeSFTP.ps1", "Disable-DeskBridgeSFTP.ps1",
     "SunshineDependency.json", "README.md",
     "ConnectionInvitation.psm1", "Show-ConnectionQR.ps1",
@@ -108,6 +108,17 @@ def verify_virtual_display_inputs(root):
     native = (folder / 'HeadlessNative.cs').read_text()
     if ('internal const string DriverVersion = "' + pin['driverVersion'] + '";') not in native:
         raise ValueError('Native virtual display verification version differs from installation pins')
+    backend = (folder / 'HeadlessSetup.psm1').read_text(encoding='utf-8-sig')
+    ui = (folder / 'Show-HeadlessSetup.ps1').read_text(encoding='utf-8-sig')
+    # Literal-drift lint only: this text search does not establish executable
+    # PowerShell semantics. The backend's actual manifest reader and archive
+    # verifier enforce pins; inert PowerShell contract tests exercise rejection.
+    for source, variable, fields in ((backend, 'dependency', ('bytes', 'sha256', 'driverVersion', 'catalogSignerCertificateSha256')),
+                                     (ui, 'dep', ('url', 'bytes'))):
+        for field in fields:
+            values = re.findall(r'\$' + variable + r'\.' + field + r"\s+-c?ne\s+(?:'([^']*)'|([0-9]+))(?=\s|[)])", source)
+            if [text or number for text, number in values] != [str(pin[field])]:
+                raise ValueError('PowerShell virtual display verification pin differs: ' + variable + '.' + field)
     notice = (folder / 'VirtualDisplay-NOTICE.txt').read_text()
     if 'Copyright (c) 2024 Virtual Display' not in notice or 'Permission is hereby granted' not in notice:
         raise ValueError('Missing virtual display license notice')

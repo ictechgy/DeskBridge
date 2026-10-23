@@ -34,9 +34,13 @@ struct StreamConfiguration: Sendable {
     private var decoder: VideoDecoder?
     private var audioPlatform: DesktopAudio?
     private var events: Task<Void, Never>?
+    private var recovery = DesktopRecoveryPresentation()
+    private var audioNoticeTask: Task<Void, Never>?
+    private var timedAudioNotice: UUID?
     private var generation = UUID()
     private var opening = false { didSet { onEngagementChanged?() } }
     private var openRequest: UUID?
+    private var visibility = DesktopPresentationVisibility()
 
     func open(network: NetworkClient, server: ServerInfo, appID: String, configuration: StreamConfiguration) async throws {
         guard !opening, stopping == 0, Self.engagedController == nil || Self.engagedController === self || Self.engagedController?.isEngaged == false else { throw StreamConnection.Failure.alreadyStarted }
@@ -67,7 +71,7 @@ struct StreamConfiguration: Sendable {
         window = win
         view = picture
         picture.keyboardMode = keyboardMode
-        var recovery = DesktopRecoveryPresentation()
+        recovery = DesktopRecoveryPresentation()
         picture.showRecovery(recovery.message)
         let video = VideoDecoder(configuration: configuration, displayInfo: { [weak picture] in
             guard let screen = picture?.window?.screen else { return nil }
@@ -76,6 +80,7 @@ struct StreamConfiguration: Sendable {
                 name: screen.localizedName, maximumFramesPerSecond: screen.maximumFramesPerSecond)
         })
         decoder = video
+        visibility = DesktopPresentationVisibility()
         video.attach(to: picture.videoLayer)
         let audioAdapter = DesktopAudio()
         audioPlatform = audioAdapter
@@ -95,9 +100,11 @@ struct StreamConfiguration: Sendable {
         // Read dimensions from the validated public configuration selected by the caller.
         picture.hostSize = CGSize(width: dimensions.0, height: dimensions.1)
 
+        refreshPresentationVisibility()
         win.center()
         win.makeKeyAndOrderFront(nil)
         win.makeFirstResponder(picture)
+        refreshPresentationVisibility()
         video.startPacing(display: PacerDisplay(makeLink: { [weak picture] target, selector in
             picture?.displayLink(target: target, selector: selector)
         }, screen: { [weak picture] in
@@ -107,23 +114,19 @@ struct StreamConfiguration: Sendable {
         }, tickOffMain: { true }, prepareTickThread: {}), configuredFps: Int32(dimensions.2))
         let updates = pair.session.events
         events = Task { [weak self] in
+            var publishedStatus = self?.recovery.status
             for await update in updates {
                 guard let self, self.generation == epoch else { break }
-                recovery.receive(update.event)
-                picture.showRecovery(recovery.message)
-                switch update.event {
-                case .stageStarting: self.onStatus?("화면에 연결하는 중…")
-                case .stageFailed: self.onStatus?(recovery.phase == .reconnecting ? "화면을 다시 연결하는 중…" : "화면 연결을 시작하지 못했습니다.")
-                case .reconnecting: self.onStatus?("화면을 다시 연결하는 중…")
-                case .reconnected, .firstFrame: self.onStatus?("화면 연결됨")
-                case .audioFailed: self.onStatus?("화면 연결됨 · 오디오를 사용할 수 없습니다.")
-                case .connectionTerminated: self.onStatus?("화면 연결이 종료되었습니다.")
-                default: break
+                self.recovery.receive(update.event)
+                picture.showRecovery(self.recovery.message)
+                self.refreshAudioNoticeTimer(epoch: epoch)
+                if self.recovery.status != publishedStatus {
+                    publishedStatus = self.recovery.status
+                    self.onStatus?(self.recovery.status)
                 }
                 switch update.event {
                 case .connectionEstablished:
-                    picture.input?.setFocused(win.isKeyWindow)
-                    self.onStatus?("화면 연결됨")
+                    picture.input?.setFocused(win.isKeyWindow && self.visibility.suppressed == false)
                     self.onConnectionChanged?(true)
                 case .stopped:
                     await self.stopCurrentSession(reportDisconnected: false)
@@ -161,6 +164,7 @@ struct StreamConfiguration: Sendable {
         let oldWindow = window
         let oldView = view
         let oldAudioPlatform = audioPlatform
+        audioNoticeTask?.cancel(); audioNoticeTask = nil; timedAudioNotice = nil
         // Revoke and detach before the await. An older teardown never owns replacement resources.
         session = nil; events = nil; window = nil; view = nil; decoder = nil; audioPlatform = nil
         oldEvents?.cancel()
@@ -174,14 +178,63 @@ struct StreamConfiguration: Sendable {
         oldWindow?.close()
         if reportDisconnected, generation == stoppedEpoch { onStatus?("화면 연결을 끊었습니다.") }
     }
+    private func refreshAudioNoticeTimer(epoch: UUID) {
+        guard let notice = recovery.audioNoticeID else {
+            audioNoticeTask?.cancel(); audioNoticeTask = nil; timedAudioNotice = nil
+            return
+        }
+        // Start the single bounded notice when fresh video makes it visible.
+        // A stall does not restart this timer or replay a consumed notice.
+        guard recovery.phase == .live, timedAudioNotice != notice else { return }
+        audioNoticeTask?.cancel()
+        timedAudioNotice = notice
+        audioNoticeTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(8)) } catch { return }
+            guard let self, !Task.isCancelled, self.generation == epoch,
+                  self.timedAudioNotice == notice, self.recovery.audioNoticeID == notice else { return }
+            self.recovery.acknowledgeAudioNotice(notice)
+            self.timedAudioNotice = nil; self.audioNoticeTask = nil
+            self.view?.showRecovery(self.recovery.message)
+        }
+    }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         Task { await disconnect() }
         return false
     }
-    func windowDidBecomeKey(_ notification: Notification) { view?.input?.setFocused(true); decoder?.setPresentSuppressed(false) }
-    func windowDidResignKey(_ notification: Notification) { view?.releaseInput() }
-    func windowDidMiniaturize(_ notification: Notification) { decoder?.setPresentSuppressed(true) }
-    func windowDidDeminiaturize(_ notification: Notification) { decoder?.setPresentSuppressed(false) }
+    private func ownsWindow(_ notification: Notification) -> Bool {
+        guard let notified = notification.object as? NSWindow, let window else { return false }
+        return notified === window
+    }
+    private func refreshPresentationVisibility() {
+        guard let window, let decoder,
+              let suppressed = visibility.update(isVisible: window.isVisible, isMiniaturized: window.isMiniaturized,
+                  isOcclusionVisible: window.occlusionState.contains(.visible)) else { return }
+        decoder.setPresentSuppressed(suppressed)
+        if suppressed { view?.releaseInput() }
+        else if window.isKeyWindow { view?.input?.setFocused(true) }
+        // The actor reads the decoder's latest state, so queued duplicate or stale notifications
+        // cannot restore an old assertion state. Its lifecycle guard rejects refresh after stop.
+        if let session { Task { await session.refreshPresentationActivity() } }
+    }
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard ownsWindow(notification) else { return }
+        refreshPresentationVisibility()
+        if visibility.suppressed == false { view?.input?.setFocused(true) }
+    }
+    func windowDidResignKey(_ notification: Notification) {
+        guard ownsWindow(notification) else { return }
+        view?.releaseInput()
+        refreshPresentationVisibility()
+    }
+    func windowDidMiniaturize(_ notification: Notification) {
+        guard ownsWindow(notification) else { return }; refreshPresentationVisibility()
+    }
+    func windowDidDeminiaturize(_ notification: Notification) {
+        guard ownsWindow(notification) else { return }; refreshPresentationVisibility()
+    }
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard ownsWindow(notification) else { return }; refreshPresentationVisibility()
+    }
     func windowDidChangeScreen(_ notification: Notification) { decoder?.pacingScreenDidChange() }
     func windowDidEnterFullScreen(_ notification: Notification) { if let view { window?.makeFirstResponder(view) } }
 }

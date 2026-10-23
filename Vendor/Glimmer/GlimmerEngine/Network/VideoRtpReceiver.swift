@@ -134,6 +134,10 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
 
     func stop() {
         interrupted.store(true, ordering: .relaxed)
+        // A caller may reuse the sink immediately after stop. Join any submit
+        // already in flight before returning, so an old receiver cannot feed a
+        // newly started decoder. Failure callbacks are dispatched off this queue.
+        recvQueue.sync {}
     }
 
     /// The only close: both loops hold `self` while they use the fd and exit within 100ms of stop(),
@@ -143,6 +147,16 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
     }
 
     // MARK: - Socket
+
+    private static func configureReceiveTimeout(_ socket: Int32) throws {
+        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            let failure = errno
+            _ = close(socket) // Still local: fd ownership has not been published.
+            throw EnetError.socketFailure("video receive timeout unavailable (errno \(failure))")
+        }
+    }
 
     private func openSocket() throws {
         guard let (dest, destLen, family) = UdpPinger.makeSockaddr(for: host, port: videoPort) else {
@@ -200,8 +214,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
         }
         // 100ms recv timeout so the receive loop polls `interrupted` and exits
         // (UDP_RECV_POLL_TIMEOUT_MS in Limelight-internal.h).
-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        try Self.configureReceiveTimeout(sock)
 
         // Bind to a wildcard ephemeral local port - UNCONNECTED, so recvfrom
         // accepts RTP from any source port (Sunshine does NOT source video from
@@ -274,6 +287,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             let decryptor = videoKey.flatMap { VideoDecryptor(key: $0) }
             guard videoKey == nil || decryptor != nil else {
                 Diag.error("NativeVideo couldn't set up video decryption; no video", Self.cat)
+                self?.publishReceiveFailure(callback: onReceiveFailed)
                 return
             }
             // Batched receive: up to 32 datagrams per recvmsg_x into buffers allocated once; receive()
@@ -284,8 +298,10 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             var batched = true
             var receiveFailed = false
             var foreignPeerNoted = false
+            var pressureDelay: useconds_t = 1_000
             while let self, !self.interrupted.load(ordering: .relaxed) {
                 let count = batched ? batch.receive(from: sock) : batch.receiveOne(from: sock)
+                if count >= 0 { pressureDelay = 1_000 }
                 for index in 0..<max(count, 0) {
                     guard !self.interrupted.load(ordering: .relaxed) else { break }
                     guard batch.isExpectedPeer(at: index, expected: self.destAddr,
@@ -301,20 +317,33 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
                 if count < 0 {
                     let err = errno
                     guard !self.interrupted.load(ordering: .relaxed) else { break }
-                    if self.shouldContinueReceiving(after: err, batched: &batched) { continue }
+                    if self.shouldContinueReceiving(after: err, batched: &batched,
+                                                    pressureDelay: &pressureDelay) { continue }
+                    guard !self.interrupted.load(ordering: .relaxed) else { break }
                     receiveFailed = true
                     break
                 }
             }
-            if receiveFailed { onReceiveFailed?() }
+            if receiveFailed { self?.publishReceiveFailure(callback: onReceiveFailed) }
+        }
+    }
+
+    /// A fatal callback can stop this receiver synchronously. Dispatch it away
+    /// from recvQueue so stop's drain cannot deadlock with the receive loop.
+    private func publishReceiveFailure(callback: (@Sendable () -> Void)?) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self, !self.interrupted.load(ordering: .relaxed) else { return }
+            callback?()
         }
     }
 
     /// Returning false ends the receive loop. A poll timeout also serves as the idle tick that expires
     /// the reorder hold, so deferred packets are flushed here.
-    private func shouldContinueReceiving(after err: Int32, batched: inout Bool) -> Bool {
+    private func shouldContinueReceiving(after err: Int32, batched: inout Bool,
+                                        pressureDelay: inout useconds_t) -> Bool {
         switch err {
         case EAGAIN, EWOULDBLOCK, EINTR:
+            pressureDelay = 1_000
             rtpQueue.flushDeferredIfWindowElapsed(nowUs: DispatchTime.now().uptimeNanoseconds / 1000)
         case ENOSYS where batched, EOPNOTSUPP where batched:
             Diag.notice("recvmsg_x unavailable errno \(err) - falling back to recvmsg", Self.cat)
@@ -324,13 +353,15 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
                 loggedReceivePressure = true
                 Diag.warn("NativeVideo receive buffer pressure errno \(err) (will keep trying)", Self.cat)
             }
-            // These fail at once instead of waiting out SO_RCVTIMEO, so pause before retrying.
-            usleep(1_000)
+            // These fail at once instead of waiting out SO_RCVTIMEO. Bound
+            // wakeups under sustained pressure while keeping stop responsive.
+            usleep(pressureDelay)
+            pressureDelay = min(pressureDelay * 2, 16_000)
         default:
             Diag.error("NativeVideo receive failed errno \(err) - ending the connection", Self.cat)
             return false
         }
-        return true
+        return !interrupted.load(ordering: .relaxed)
     }
 
     /// Copies one datagram out of the socket buffer, opening it on the way when video is encrypted.
@@ -399,8 +430,9 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
     private func sendPing() {
         pingCount &+= 1
         let datagram = UdpPinger.datagram(payload: pingPayload, sequence: pingCount)
+        var destination = destAddr
         let sent = datagram.withUnsafeBytes { raw in
-            withUnsafePointer(to: &destAddr) { sp in
+            withUnsafePointer(to: &destination) { sp in
                 sp.withMemoryRebound(to: sockaddr.self, capacity: 1) { sap in
                     sendto(fd, raw.baseAddress, raw.count, 0, sap, destAddrLen)
                 }
@@ -432,7 +464,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
     // MARK: - VideoDepacketizerDelegate
 
     func depacketizerDidAssembleFrame(_ unit: DecodeUnit) {
-        guard let sink else { return }
+        guard !interrupted.load(ordering: .relaxed), let sink else { return }
         let isIDR = unit.frameType == StreamProtocol.FRAME_TYPE_IDR
         // Latency telemetry (opt-in; nil = zero cost). t_receive + t_assemble are
         // both already captured upstream - `receiveTimeUs` is the frame's
@@ -459,6 +491,7 @@ final class VideoRtpReceiver: VideoDepacketizerDelegate, @unchecked Sendable {
             if isIDR { noteKeyFrame(unit, tracker: tracker) }
         }
         if lossEpisode.isOpen { closeLossEpisode(at: unit, isIDR: isIDR) }
+        guard !interrupted.load(ordering: .relaxed) else { return }
         let result = sink.submitDecodeUnit(unit)
         if result == StreamProtocol.DR_NEED_IDR {
             // Three producers share this return (VideoDecoder+Decode.swift

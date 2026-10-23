@@ -9,12 +9,20 @@ import Network
 import Darwin
 
 private struct RTSPReplayCheckFailure: Error { let message: String }
+private actor RTSPExchangeCounter {
+    private(set) var calls = 0
+    func exchange(_ bytes: Data) throws -> Data {
+        calls += 1
+        if calls == 1 { throw RtspError.connectionNotReady("synthetic refused before ready") }
+        return bytes
+    }
+}
 
 @main
 private struct RTSPReplaySyntheticChecks {
     static let key = [UInt8](0..<16)
 
-    static func main() throws {
+    static func main() async throws {
         var checks = 0
         func require(_ condition: Bool, _ message: String) throws {
             guard condition else { throw RTSPReplayCheckFailure(message: message) }; checks += 1
@@ -92,6 +100,30 @@ private struct RTSPReplaySyntheticChecks {
         try require(freshClient.lastHostEncryptionSeq == nil, "a fresh RTSP instance retained another attempt's counter")
         _ = try freshClient.decodeResponse(accepted, for: first)
         try require(freshClient.lastHostEncryptionSeq == 41, "a fresh attempt must own independent replay state")
+        // Exercise the actual retry loop with inert exchanges: only pre-ready failures
+        // may resend. A post-send failure can mean the host processed the transaction.
+        let exchange = RTSPExchangeCounter()
+        let fixture = Data([1, 2, 3])
+        let retried = try await makeClient().sendAndReceive(fixture) { try await exchange.exchange($0) }
+        let exchangeCalls = await exchange.calls
+        try require(retried == fixture && exchangeCalls == 2, "pre-ready failure did not retry once")
+        for reason in ["send: synthetic failure", "recv: synthetic failure"] {
+            let calls = AtomicCounter()
+            var originalFailure = false
+            do {
+                _ = try await makeClient().sendAndReceive(fixture) { _ in
+                    calls.increment()
+                    throw RtspError.transportFailure(reason)
+                }
+            } catch RtspError.transportFailure(let received) { originalFailure = received == reason }
+            try require(originalFailure && calls.value == 1, "post-ready failure was retried or rewritten")
+        }
+        let cancelled = makeClient(); cancelled.interrupt()
+        let calls = AtomicCounter()
+        var interrupted = false
+        do { _ = try await cancelled.sendAndReceive(fixture) { value in calls.increment(); return value } }
+        catch RtspError.interrupted { interrupted = true }
+        try require(interrupted && calls.value == 0, "interrupted RTSP invoked exchange")
         print("RTSP replay and CSeq synthetic checks: \(checks)")
     }
 

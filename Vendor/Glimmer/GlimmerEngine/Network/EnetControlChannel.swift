@@ -173,6 +173,9 @@ final class EnetControlChannel: @unchecked Sendable {
     var sentReliable: [SentReliable] = []
     var connected = false
     var disconnected = false
+    /// stateLock owns notification priority separately from socket closure. A local
+    /// dead-peer callback may close the channel before authenticated PC dispatch.
+    var notifiedTerminationCode: Int32?
     /// Channels the peer granted in VERIFY_CONNECT; sends above it fold onto
     /// the generic channel the way moonlight-common-c does. Guarded by stateLock.
     var negotiatedChannelCount: UInt32 = Enet.ctrlChannelCount
@@ -232,6 +235,10 @@ final class EnetControlChannel: @unchecked Sendable {
     /// Authenticated host counters are global across ENet channels. Confined to the
     /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
     var inboundReplayWindow = ControlReplayWindow()
+
+    /// Exact authenticated envelopes retain duplicate-ACK liveness without ACKing
+    /// forged/relabelled payloads. Receive-queue owned, fixed-size fingerprint history.
+    var inboundReliableHistory = EnetAuthenticatedReliableHistory()
 
     /// Duplicate and gap-skip breadcrumbs fire once per session to avoid floods.
     /// Confined to `queue`, so no lock.
@@ -369,9 +376,9 @@ final class EnetControlChannel: @unchecked Sendable {
     var inputFailureReported = false
     let interrupted = ManagedAtomicFlag()
 
-    /// Fired once when the peer dies (declarePeerDead): host TERMINATION or
-    /// DISCONNECT, ACK silence, or a failed socket. Wired by NativeBackend to
-    /// connectionTerminated + teardown.
+    /// Fired once for peer death, with at most one local -1 → authenticated PC
+    /// reason upgrade. NativeBackend routes both through source/attempt admission
+    /// and idempotent teardown; intentional transport retirement rejects late intent.
     var onTerminated: ((Int32) -> Void)?
     /// Fired when HDR mode or enabled metadata changes, so the decoder stays current.
     var onHdrMode: ((Bool) -> Void)?

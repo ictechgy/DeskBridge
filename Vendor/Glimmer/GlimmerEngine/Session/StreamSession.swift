@@ -190,9 +190,20 @@ public actor StreamSession {
     package var reachedLiveState = false
     /// True while a reconnect episode is being driven. Makes the frame/present
     /// watchdogs go quiet (the episode owns the bounded retry/give-up, not the
-    /// watchdog) and makes `handleHostTerminate` ignore re-entrant terminates
-    /// fired by the dead/old backend mid-reconnect.
+    /// watchdog). Current replacement failures are retained for the episode;
+    /// source identity keeps old-backend teardown from failing its replacement.
     package var isReconnecting = false
+    /// The observed transport, including the original during first backoff and
+    /// route refresh. Retained through retirement/drain until a fresh selection.
+    package var reconnectAttemptID: UUID?
+    /// Sticky even when notification reaches this actor before the producer has
+    /// latched backend interruption. Cleared only when selecting a new attempt.
+    package var reconnectAttemptFailure: Int32?
+    /// The episode classifies each transport's reason before another launch;
+    /// a PC reason upgrading local dead-peer reopens the bounded decision once.
+    package var reconnectAttemptFailureHandled = false
+    /// Explicit termination diagnostics survive generic connect/cancellation errors.
+    package var lastReconnectTerminationCode: Int32?
     /// Attempt counter for the current reconnect episode.
     package var reconnectAttempts = 0
     /// The last attempt's classified failure; a give-up hands it to the launcher so the copy names the fix.
@@ -230,6 +241,8 @@ public actor StreamSession {
     /// One bounded post-wake probe, actor-owned and cancelled on completion, stop or a new wake.
     /// Native observer tokens remain in the prepared service adapter.
     package var wakeProbeTask: Task<Void, Never>?
+    /// Only this generation may consume the stored task or act on its liveness verdict.
+    package var wakeProbeID: UUID?
     /// Probe budget multiple of RTT, clamped: budget = clamp(N·RTT, 750ms, 2.5s).
     package static let wakeProbeRttMultiple = 4
     package static let wakeProbeFloorMs: UInt64 = 750

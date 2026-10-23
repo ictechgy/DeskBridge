@@ -29,6 +29,7 @@ extension StreamSession {
     }
 
     package func teardownWakeObservers() {
+        wakeProbeID = nil
         services.stopWake()
         wakeProbeTask?.cancel()
         wakeProbeTask = nil
@@ -56,6 +57,9 @@ extension StreamSession {
     /// through the EXISTING dead-peer path. The guards in `handleHostTerminate`
     /// make a concurrent real terminate + this one collapse to a single episode.
     private func startWakeProbe() {
+        let probeID = UUID()
+        let armedAttempt = attemptID
+        wakeProbeID = probeID
         wakeProbeTask?.cancel()
         let rtt = backend.estimatedRtt()?.rttMs ?? Double(Self.wakeProbeFloorMs)
         let budgetMs = min(Self.wakeProbeCeilingMs,
@@ -64,7 +68,7 @@ extension StreamSession {
         wakeProbeTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: budgetMs * 1_000_000)
             guard !Task.isCancelled, let self else { return }
-            await self.finishWakeProbe(budgetMs: budgetMs)
+            await self.finishWakeProbe(budgetMs: budgetMs, probeID: probeID, armedAttempt: armedAttempt)
         }
     }
 
@@ -72,8 +76,15 @@ extension StreamSession {
     /// since the wake re-anchor), the post-wake pipe is stale - terminate through
     /// the existing reconnect path. Re-check the lifecycle flags first (an episode
     /// may already be running, in which case `handleHostTerminate` no-ops anyway).
-    private func finishWakeProbe(budgetMs: UInt64) async {
+    private func finishWakeProbe(budgetMs: UInt64, probeID: UUID, armedAttempt: UUID) async {
+        // Replacement/stop may happen after the producer's cancellation guard
+        // and before this actor hop. A stale owner must not clear the new task.
+        guard !Task.isCancelled, wakeProbeID == probeID else { return }
+        wakeProbeID = nil
         wakeProbeTask = nil
+        // An independent reconnect may have replaced transport while this owner
+        // waited for the actor; its old liveness sample cannot judge the new one.
+        guard armedAttempt == attemptID else { return }
         guard isStreaming, reachedLiveState, !stopInProgress, !isReconnecting else { return }
         // sinceLastAck is measured from the wake re-anchor (handleSystemWake reset
         // it to NOW), so silence ≥ budget means the peer never answered the probe.

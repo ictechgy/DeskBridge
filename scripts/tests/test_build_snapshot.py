@@ -1,13 +1,42 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Offline regression cases: source additions/removals and binary replacement must invalidate packaging."""
 from pathlib import Path
-import copy, json, os, shlex, subprocess, sys, tempfile, unittest
+import copy, json, os, shlex, struct, subprocess, sys, tempfile, unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, source_snapshot, tree_snapshot, validate_completed_build, validate_corresponding_source
+from build_snapshot import BuildSnapshotError, REQUIRED_CHECK_STAGES, host_supervisor_snapshot, source_snapshot, supervisor_package_record, tree_snapshot, unchanged_supervisor_digest, validate_completed_build, validate_corresponding_source
 from windows_check_record import HEADLESS_SOURCE_PATHS, MAC_INTEROP_SOURCE_PATHS, MINIMUM_WINDOWS_CHECKS, REQUIRED_WINDOWS_SUITES, validate_windows_check_record
 from test_windows_launcher import run_headless_checks
+
+
+class SupervisorDigestTests(unittest.TestCase):
+    def test_package_records_tested_and_resigned_hashes_separately(self):
+        tested = {"path": "Contents/Helpers/KnotHostSupervisor", "architecture": "arm64", "type": "MH_EXECUTE", "mode": 0o755, "sha256": "a" * 64}
+        preview = supervisor_package_record(tested, dict(tested), False)
+        self.assertEqual((preview["testedSHA256"], preview["packagedSHA256"], preview["releaseResigned"], preview["transformation"]),
+                         ("a" * 64, "a" * 64, False, "none"))
+        signed = {**tested, "sha256": "b" * 64}
+        release = supervisor_package_record(tested, signed, True)
+        self.assertEqual((release["testedSHA256"], release["packagedSHA256"], release["releaseResigned"]),
+                         ("a" * 64, "b" * 64, True))
+        self.assertIn("codesign", release["transformation"])
+        self.assertIn("before release re-signing", release["lifetimeProofScope"])
+        with self.assertRaises(BuildSnapshotError):
+            supervisor_package_record(tested, signed, False)
+        with self.assertRaises(BuildSnapshotError):
+            supervisor_package_record(tested, {**signed, "mode": 0o777}, True)
+
+    def test_lifetime_digest_refuses_changed_bytes(self):
+        with tempfile.TemporaryDirectory(prefix="knot-supervisor-digest-") as temporary:
+            path = Path(temporary) / "synthetic-helper"
+            path.write_bytes(b"synthetic initial bytes")
+            import hashlib
+            initial = hashlib.sha256(path.read_bytes()).hexdigest()
+            self.assertEqual(unchanged_supervisor_digest(path, initial), initial)
+            path.write_bytes(b"synthetic changed bytes")
+            with self.assertRaisesRegex(BuildSnapshotError, "changed during"):
+                unchanged_supervisor_digest(path, initial)
 
 
 class WindowsPayloadCheckRecordTests(unittest.TestCase):
@@ -262,6 +291,10 @@ class BuildSnapshotTests(unittest.TestCase):
         self.app = self.root / "dist/Knot.app/Contents/MacOS/DeskBridge"
         self.app.parent.mkdir(parents=True); self.app.write_bytes(b"synthetic executable")
         self.app.chmod(0o755)
+        self.supervisor = self.app.parent.parent / "Helpers/KnotHostSupervisor"
+        self.supervisor.parent.mkdir()
+        self.supervisor.write_bytes(struct.pack("<8I", 0xFEEDFACF, 0x0100000C, 0, 2, 0, 0, 0, 0) + b"SYNTHETIC ONLY")
+        self.supervisor.chmod(0o755)
         self.build = self.root / "evidence/synthetic-build"
         self.build.mkdir(parents=True)
         self.snapshot_now()
@@ -271,8 +304,16 @@ class BuildSnapshotTests(unittest.TestCase):
         ]))
         (self.build / "synthetic-checks.stdout").write_text('{"status":"passed"}')
         (self.build / "synthetic-model-checks.stdout").write_text('{"status":"passed"}')
+        (self.build / "mac-host-lifetime-checks.stdout").write_text(json.dumps({
+            "status": "passed", "checks": 41, "productionHostLaunched": False,
+            "testedSupervisorSHA256": host_supervisor_snapshot(self.root / "dist/Knot.app")["sha256"],
+            **{key: True for key in ("actualMacHostChild", "nativeSupervisor", "freshSyntheticOnly", "appAbruptDeath",
+                "gracefulStop", "boundedStop", "restartDescendantCleanup", "writerNotInherited", "supervisorCrashCleanup",
+                "pinnedRestartForkDenied", "forkVforkSpawnDenied", "normalThreadsAndFiles",
+                "unrestrictedChildModeRefused", "wrapperAndProfileUnavailableRefused")}}))
         self.record = {"schema": 1, "configuration": "release", "checksPassed": True,
-                       "appManifest": tree_snapshot(self.root / "dist/Knot.app")}
+                       "appManifest": tree_snapshot(self.root / "dist/Knot.app"),
+                       "hostSupervisor": host_supervisor_snapshot(self.root / "dist/Knot.app")}
         self.write_record()
 
     def write_record(self):
@@ -358,6 +399,48 @@ class BuildSnapshotTests(unittest.TestCase):
     def test_missing_completion_record_is_rejected(self):
         (self.build / "completed-build.json").unlink()
         with self.assertRaises(BuildSnapshotError): self.validate()
+
+    def test_helper_record_is_required(self):
+        del self.record["hostSupervisor"]; self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "Host supervisor"): self.validate()
+
+    def test_lifetime_proof_is_required(self):
+        path = self.build / "mac-host-lifetime-checks.stdout"
+        valid = json.loads(path.read_text())
+        for key, value in (("checks", 40), ("checks", True), ("status", "failed"), ("appAbruptDeath", False),
+                           ("writerNotInherited", False), ("supervisorCrashCleanup", False), ("productionHostLaunched", True),
+                           ("pinnedRestartForkDenied", False), ("forkVforkSpawnDenied", False), ("normalThreadsAndFiles", False),
+                           ("unrestrictedChildModeRefused", False), ("wrapperAndProfileUnavailableRefused", False)):
+            path.write_text(json.dumps({**valid, key: value}))
+            with self.subTest(key=key, value=value), self.assertRaisesRegex(BuildSnapshotError, "lifetime proof"):
+                self.validate()
+
+    def test_lifetime_proof_digest_must_match_completed_helper(self):
+        path = self.build / "mac-host-lifetime-checks.stdout"
+        valid = json.loads(path.read_text())
+        for value in (None, "0" * 64, "not-a-digest"):
+            path.write_text(json.dumps({**valid, "testedSupervisorSHA256": value}))
+            with self.subTest(digest=value), self.assertRaisesRegex(BuildSnapshotError, "proof belongs to a different helper"):
+                self.validate()
+
+    def test_new_bundle_inventory_and_helper_digest_do_not_reuse_old_lifetime_proof(self):
+        self.supervisor.write_bytes(self.supervisor.read_bytes() + b"CHANGED SYNTHETIC")
+        self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app")
+        self.record["hostSupervisor"] = host_supervisor_snapshot(self.root / "dist/Knot.app")
+        self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "proof belongs to a different helper"):
+            self.validate()
+
+    def test_replaced_helper_with_updated_bundle_inventory_is_rejected(self):
+        self.supervisor.write_bytes(self.supervisor.read_bytes() + b"CHANGED SYNTHETIC")
+        self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app"); self.write_record()
+        with self.assertRaisesRegex(BuildSnapshotError, "Host supervisor"): self.validate()
+
+    def test_non_native_or_wrong_architecture_helper_is_rejected(self):
+        for data in (b"#!/bin/sh\nexit 0\n", struct.pack("<8I", 0xFEEDFACF, 0x01000007, 3, 2, 0, 0, 0, 0)):
+            self.supervisor.write_bytes(data)
+            self.record["appManifest"] = tree_snapshot(self.root / "dist/Knot.app"); self.write_record()
+            with self.assertRaisesRegex(BuildSnapshotError, "native arm64"): self.validate()
 
     def test_failed_checks_are_rejected(self):
         (self.build / "synthetic-checks.stdout").write_text('{"status":"failed"}')

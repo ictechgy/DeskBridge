@@ -7,12 +7,13 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'SetupContract.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'ConnectionInvitation.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SetupDownload.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'SetupStatus.psm1') -Force
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 try { Assert-DesktopSetupToken } catch {
-    [Windows.Forms.MessageBox]::Show($_.Exception.Message,'Knot','OK','Error') | Out-Null
-    return
+    [Windows.Forms.MessageBox]::Show((Get-SetupFailureText $_ -Context 'ElevatedToken'),'Knot','OK','Error') | Out-Null
+    exit 3
 }
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or [Environment]::OSVersion.Version.Build -lt 22000) {
     [Windows.Forms.MessageBox]::Show('이 프리뷰는 Windows 11 x64에서 사용할 수 있습니다. PC의 Windows 버전과 시스템 종류를 확인하세요.','Knot','OK','Error') | Out-Null
@@ -50,6 +51,7 @@ $title = Add-Text 'Windows를 Mac의 한 화면으로' 38
 $title.Font = New-Object Drawing.Font('Segoe UI',17,[Drawing.FontStyle]::Bold)
 $null = Add-Text '먼저 화면부터 연결하세요. 파일 전송은 나중에 추가할 수 있습니다.' 32
 $status=New-Object Windows.Forms.TextBox
+$status.AccessibleName='Windows 연결 설정 상태'; $status.AccessibleDescription='진행 상황과 다음 단계 안내입니다. 내용을 선택해 복사할 수 있습니다.'
 $status.ReadOnly=$true; $status.Multiline=$true; $status.ScrollBars='Vertical'; $status.BorderStyle='None'; $status.BackColor=[Drawing.SystemColors]::Control
 $status.Text='시작하려면 아래 Sunshine 설치를 누르세요.'
 $status.Dock='Fill'
@@ -65,8 +67,7 @@ function Show-Failure($ErrorRecord) {
         }
         $cause=$cause.InnerException
     }
-    $message=[string]$ErrorRecord.Exception.Message
-    if ($message -notmatch '[가-힣]') { $message='Windows 설정을 완료하지 못했습니다. 네트워크와 관리자 권한을 확인하세요. 기존 OpenSSH 설정이나 조직의 보안 정책이 있으면 수동 통합·승인된 배포 안내를 사용하세요.' }
+    $message=Get-SetupFailureText $ErrorRecord
     $status.Text='완료하지 못했습니다. ' + $message
     [Windows.Forms.MessageBox]::Show($message,'Knot','OK','Error') | Out-Null
 }
@@ -95,7 +96,7 @@ $install = Add-Button 'Sunshine 설치' {
         while (-not $download.Completion.IsCompleted) {
             [Windows.Forms.Application]::DoEvents()
             if ($script:cancelDownload) { $download.Cancel(); $downloadCancel.Enabled=$false }
-            $status.Text='Sunshine 공식 설치 파일을 내려받는 중… ' + [Math]::Min(100,[Math]::Floor(100.0*$download.Bytes/$dep.bytes)) + '%'
+            Set-SetupStatusText $status ('Sunshine 공식 설치 파일을 내려받는 중… ' + [Math]::Min(100,[Math]::Floor(100.0*$download.Bytes/$dep.bytes)) + '%')
             Start-Sleep -Milliseconds 80
         }
         $download.Completion.GetAwaiter().GetResult()
@@ -120,13 +121,14 @@ $install = Add-Button 'Sunshine 설치' {
         $null=$process.Handle
         while (-not $process.HasExited) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
         $process.WaitForExit()
-        if ($LauncherPath -and $process.ExitCode -eq 2) { $status.Text='설치를 완료하지 못했습니다. 표시된 오류 안내를 확인한 뒤 다시 시도하세요.'; return }
-        if ($process.ExitCode -eq 1602) { $status.Text='Sunshine 설치를 취소했습니다. 필요할 때 다시 시작하세요.'; return }
-        if ($null -eq $process.ExitCode -or $process.ExitCode -notin @(0,3010)) { throw 'Sunshine 설치를 완료하지 못했습니다. Windows 설치 안내와 네트워크를 확인한 뒤 다시 시도하세요.' }
-        if ($process.ExitCode -eq 3010) { $status.Text='설치를 완료하려면 Windows를 다시 시작해야 합니다. 재시작한 뒤 Sunshine 초기 설정을 진행하세요.'; return }
-        $status.Text='설치 완료. 다음은 Sunshine 초기 설정입니다.'
+        if ($null -eq $process.ExitCode) { throw 'Sunshine 설치 결과를 확인하지 못했습니다. Windows 설치 안내를 확인하세요.' }
+        $result=Get-SunshineInstallResult -ExitCode $process.ExitCode -Broker:([bool]$LauncherPath)
+        if ($result.State -ceq 'Failed') { throw $result.Text }
+        $status.Text=$result.Text
+        if ($result.State -cne 'Installed') { return }
         $install.Text='Sunshine 다시 설치'
-        Start-Process 'https://localhost:47990'
+        try { Start-Process 'https://localhost:47990' }
+        catch { $status.Text += [Environment]::NewLine+'Sunshine 설치는 완료했지만 설정 브라우저를 열지 못했습니다. 브라우저에서 https://localhost:47990 을 직접 여세요.' }
     } catch [OperationCanceledException] { $status.Text='Sunshine 다운로드를 취소했습니다. 필요할 때 다시 시작하세요.' }
     catch { Show-Failure $_ }
     finally {
@@ -140,7 +142,7 @@ $install = Add-Button 'Sunshine 설치' {
             }
             if ($folder -and (Test-Path -LiteralPath $folder)) {
                 try { Remove-Item -LiteralPath $folder -Recurse -Force }
-                catch { $status.Text='임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
+                catch { $status.Text += [Environment]::NewLine+'임시 다운로드 파일을 정리하지 못했습니다. 설정은 다시 시도하거나 창을 닫을 수 있습니다.' }
             }
         } finally { Set-Busy $false }
     }
@@ -148,7 +150,10 @@ $install = Add-Button 'Sunshine 설치' {
 $downloadCancel=Add-Button '다운로드 취소' { $script:cancelDownload=$true }; $downloadCancel.Visible=$false
 $null = Add-Text '2   Sunshine 초기 설정 · 처음 한 번' 30
 $null = Add-Text "설정 창에서 계정을 만들고, Configuration → Network에서 LAN/WAN 암호화를 모두 Mandatory로 저장하세요. Desktop 앱도 확인하세요.`r`n이 계정은 Windows의 Sunshine 설정용입니다. Mac에서 로그인하지 않습니다." 66
-$open = Add-Button 'Sunshine 설정 열기' { try { Start-Process 'https://localhost:47990' } catch { Show-Failure $_ } }
+$open = Add-Button 'Sunshine 설정 열기' {
+    try { Start-Process 'https://localhost:47990' }
+    catch { $status.Text='Sunshine 설정 브라우저를 열지 못했습니다. 브라우저에서 https://localhost:47990 을 직접 여세요.' }
+}
 $headless = Add-Button '모니터 없이 사용… (선택)' {
     Set-Busy $true
     try { & (Join-Path $PSScriptRoot 'Show-HeadlessSetup.ps1') -Owner $form -LauncherPath $LauncherPath }
@@ -172,7 +177,7 @@ $qrButton = Add-Button '연결 QR / 링크 보기…' {
 }
 if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'DeskBridge-QR.dll') -PathType Leaf)) { $qrButton.Text='연결 링크 보기…' }
 $null = Add-Text 'PIN은 Mac에 표시됩니다. Sunshine의 PIN 메뉴에 입력하면 화면 페어링이 진행됩니다. Wi-Fi 또는 Tailscale 양쪽에서 도달 가능한 주소를 선택하세요.' 48
-$addresses=New-Object Windows.Forms.ComboBox; $addresses.AccessibleName='이 PC의 연결 주소'; $addresses.DropDownStyle='DropDownList'; $addresses.Width=710
+$addresses=New-Object Windows.Forms.ComboBox; $addresses.AccessibleName='이 PC의 연결 주소'; $addresses.AccessibleDescription='Mac에서 도달할 수 있는 Wi-Fi 또는 Tailscale 주소를 선택하세요.'; $addresses.DropDownStyle='DropDownList'; $addresses.Width=710
 function Update-WindowsAddresses {
     $previous=[string]$addresses.SelectedItem
     $addresses.Items.Clear()
@@ -210,6 +215,7 @@ $null = Add-Text '파일 전송 · 필요할 때 한 번' 30
 $null = Add-Text '화면 연결에는 아래 설정이 필요 없습니다. 파일 기능은 Mac 전용 키와 별도의 Windows 파일 계정을 사용합니다.' 42
 $null = Add-Text 'Mac의 파일 탭에서 키 만들기 → Mac 주소 찾기 → Windows 설정 파일 저장. 저장한 JSON을 이 PC로 옮겨 불러오세요.' 48
 $requestBox = New-Object Windows.Forms.TextBox; $requestBox.ReadOnly=$true; $requestBox.Width=710; $filePanel.Controls.Add($requestBox)
+$requestBox.AccessibleName='불러온 Mac 설정 파일'; $requestBox.AccessibleDescription='Mac 설정 파일 불러오기에서 선택한 JSON 파일의 위치입니다.'
 $load = Add-Button 'Mac 설정 파일 불러오기…' {
     try {
         $dialog=New-Object Windows.Forms.OpenFileDialog; $dialog.Filter='Knot JSON (*.json)|*.json'
@@ -235,11 +241,15 @@ function Invoke-FileSetup([string] $Operation) {
         $desktopUser=$null
         if ($Operation -eq 'EnableFiles') {
             # Capture THIS non-elevated user's SID before UAC, including alternate-admin credentials.
-            $desktopUser=Resolve-DesktopUser ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+            try { $desktopUser=Resolve-DesktopUser ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) }
+            catch { throw (Get-SetupFailureText $_ -Context 'DesktopUser') }
         }
         $message=if ($Operation -eq 'DisableFiles') {'파일 접속을 해제하고 현재 파일 연결을 종료합니다. 공유 파일은 보존됩니다.'} elseif ($Operation -eq 'EnableFiles') {
             'OpenSSH Server, 전용 일반 계정, C:\DeskBridgeShare\files, 선택한 Mac 주소 전용 방화벽을 설정합니다. 공유 파일을 사용할 Windows 사용자: ' + $desktopUser.Name + ' (' + $desktopUser.SID.Value + '). 기존 SSH 설정은 바꾸지 않습니다. 계속할까요?'
         } else {'Windows 호스트 공개 키를 내보내기 위해 관리자 확인이 필요합니다.'}
+        if ($Operation -eq 'EnableFiles') {
+            $message += "`n`n허용할 Mac 주소: " + ([string[]]$expected.allowedClientAddresses -join ', ') + "`n이 주소와 등록한 SSH 키로만 파일 접속을 허용합니다. 주소를 직접 확인하세요."
+        }
         if ([Windows.Forms.MessageBox]::Show($message,'Knot','OKCancel','Information') -ne 'OK') { return }
         if ($LauncherPath) {
             $elevatedExecutable=$LauncherPath
@@ -270,7 +280,7 @@ function Invoke-FileSetup([string] $Operation) {
         if ($LauncherPath -and $process.ExitCode -eq 2) { $status.Text='설정을 완료하지 못했습니다. 표시된 오류 안내를 확인한 뒤 다시 시도하세요.'; return }
         if ($null -eq $process.ExitCode -or $process.ExitCode -ne 0) { throw '설정을 완료하지 못했습니다. 관리자 창의 오류를 확인하세요. 기존 SSH가 있다면 수동 통합 안내를 사용하세요.' }
         if (-not $LauncherPath) { $status.Text='수동 설정 명령이 종료되었습니다. Ctrl+C로 중단해도 성공 코드가 반환될 수 있으므로 관리자 창과 실제 설정에서 완료 여부를 확인하세요. 자동 완료 확인과 연결 파일 저장은 배포용 EXE를 사용하세요.'; return }
-        if ($Operation -eq 'DisableFiles') { $status.Text='파일 접속을 해제했습니다. 공유 파일은 유지됩니다.'; return }
+        if ($Operation -eq 'DisableFiles') { $status.Text='Knot 파일 접속을 해제했습니다. 공유 파일은 유지됩니다. OpenSSH 설치와 기존 서비스 시작·방화벽 정책은 그대로 남거나 원래 상태로 복원될 수 있습니다. 필요하지 않다면 Windows 관리자와 기존 설정을 확인하세요.'; return }
         $replyPath=Join-Path $env:ProgramData 'DeskBridgeSetup\connection.json'
         $reply=Get-Content -LiteralPath $replyPath -Raw | ConvertFrom-Json
         if ($reply.requestID -cne $expected.requestID -or $reply.clientPublicKey -cne $expected.clientPublicKey -or $reply.address -cne $selectedAddress) { throw 'Windows 연결 결과가 현재 Mac 설정과 다릅니다. 설정 파일과 선택한 PC 주소를 다시 확인하세요.' }
@@ -290,14 +300,25 @@ $enable = Add-Button '파일 전송 설정 · 연결 파일 만들기…' { Invo
 $export = Add-Button '이미 설정한 연결 파일 다시 저장…' { Invoke-FileSetup 'Export' }
 $disable = Add-Button '이 Windows의 파일 접속 해제…' { Invoke-FileSetup 'DisableFiles' }
 $null = Add-Text '저장한 Windows 연결 파일을 Mac에서 불러오고, 표시된 SSH 지문이 같은지 직접 비교하세요. 공유 폴더: C:\DeskBridgeShare\files' 50
+$script:setupContentWidth=-1; $script:setupContentDpi=0
 function Resize-SetupContent {
     $available=[Math]::Max(280,$flow.ClientSize.Width-$flow.Padding.Horizontal-[Windows.Forms.SystemInformation]::VerticalScrollBarWidth-12)
-    $filePanel.Width=$available
-    foreach ($control in (Get-SetupControls $flow)) {
-        if ($control -is [Windows.Forms.Label]) { $control.MaximumSize=New-Object Drawing.Size($available,0) }
-        elseif ($control -is [Windows.Forms.TextBox] -or $control -is [Windows.Forms.ComboBox]) { $control.Width=$available }
-        elseif ($control -is [Windows.Forms.Button]) { $control.Width=[Math]::Min([int][Math]::Round(330*$form.DeviceDpi/96.0),$available) }
-    }
+    if ($available -eq $script:setupContentWidth -and $form.DeviceDpi -eq $script:setupContentDpi) { return }
+    $script:setupContentWidth=$available; $script:setupContentDpi=$form.DeviceDpi
+    $flow.SuspendLayout(); $filePanel.SuspendLayout()
+    try {
+        if ($filePanel.Width -ne $available) { $filePanel.Width=$available }
+        foreach ($control in (Get-SetupControls $flow)) {
+            if ($control -is [Windows.Forms.Label]) {
+                if ($control.MaximumSize.Width -ne $available) { $control.MaximumSize=New-Object Drawing.Size($available,0) }
+            } elseif ($control -is [Windows.Forms.TextBox] -or $control -is [Windows.Forms.ComboBox]) {
+                if ($control.Width -ne $available) { $control.Width=$available }
+            } elseif ($control -is [Windows.Forms.Button]) {
+                $buttonWidth=[Math]::Min([int][Math]::Round(330*$form.DeviceDpi/96.0),$available)
+                if ($control.Width -ne $buttonWidth) { $control.Width=$buttonWidth }
+            }
+        }
+    } finally { $filePanel.ResumeLayout($true); $flow.ResumeLayout($true) }
 }
 $flow.Add_SizeChanged({ Resize-SetupContent })
 $form.Add_Shown({

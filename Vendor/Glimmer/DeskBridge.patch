@@ -1,3 +1,5 @@
+diff --git a/GlimmerEngine/Input/DesktopInputWire.swift b/GlimmerEngine/Input/DesktopInputWire.swift
+new file mode 100644
 --- /dev/null
 +++ b/GlimmerEngine/Input/DesktopInputWire.swift
 @@ -0,0 +1,53 @@
@@ -54,6 +56,7 @@
 +    }
 +}
 +
+diff --git a/GlimmerEngine/Input/InputText.swift b/GlimmerEngine/Input/InputText.swift
 --- a/GlimmerEngine/Input/InputText.swift
 +++ b/GlimmerEngine/Input/InputText.swift
 @@ -31,2 +31,3 @@
@@ -62,6 +65,8 @@
 +                let result = backend.sendUtf8Text(text)
 +                core.record("LiSendUtf8TextEvent", result)
 +                return result == 0
+diff --git a/GlimmerEngine/Input/StreamInput+Desktop.swift b/GlimmerEngine/Input/StreamInput+Desktop.swift
+new file mode 100644
 --- /dev/null
 +++ b/GlimmerEngine/Input/StreamInput+Desktop.swift
 @@ -0,0 +1,113 @@
@@ -178,12 +183,14 @@
 +        batcher?.abandonTextSubmission()
 +    }
 +}
+diff --git a/GlimmerEngine/Input/StreamInput.swift b/GlimmerEngine/Input/StreamInput.swift
 --- a/GlimmerEngine/Input/StreamInput.swift
 +++ b/GlimmerEngine/Input/StreamInput.swift
 @@ -18,0 +19,3 @@
 +    @MainActor var desktopTextGeneration = UUID()
 +    @MainActor var desktopTextTask: Task<Void, Never>?
 +    @MainActor var desktopEvents: [@MainActor () -> Void] = []
+diff --git a/GlimmerEngine/Network/ControlTransport.swift b/GlimmerEngine/Network/ControlTransport.swift
 --- a/GlimmerEngine/Network/ControlTransport.swift
 +++ b/GlimmerEngine/Network/ControlTransport.swift
 @@ -37,0 +38,8 @@
@@ -216,14 +223,15 @@
 +                        guard let self, let connection else { return }
 +                        handle(state, on: connection)
 +                    }
-@@ -180,3 +190,3 @@
+@@ -180,4 +190,6 @@
 -                    let backstop = max(0, lifetime.deadline.timeIntervalSinceNow) + backstopGrace
 -                    queue.asyncAfter(deadline: .now() + backstop) { [self] in
 -                        finish(.failure(StreamError.hostUnreachable("Control request timed out.")), closing: connection)
+-                    }
 +                    let delay = max(0, lifetime.deadline.timeIntervalSinceNow) + backstopGrace
 +                    let work = DispatchWorkItem { [weak self, weak connection] in
 +                        self?.finish(.failure(StreamError.hostUnreachable("Control request timed out.")), closing: connection)
-@@ -183,0 +194,2 @@
++                    }
 +                    backstop = work
 +                    queue.asyncAfter(deadline: .now() + delay, execute: work)
 @@ -209,6 +221,2 @@
@@ -247,7 +255,12 @@
 @@ -251 +266 @@
 -        return pinnedDER.map { SecCertificateCopyData(certificate) as Data == $0 } ?? true
 +        return true
-@@ -275,0 +291,7 @@
+@@ -267,0 +283,2 @@
++    /// Bound incomplete headers separately from the (potentially larger) XML body.
++    package static let maxHeaderBytes = 64 * 1024
+@@ -273,0 +291 @@
++        private var headerSearchOffset = 0
+@@ -275,0 +294,7 @@
 +
 +        /// A transport error is never a clean close, even without Content-Length.
 +        mutating func receive(_ chunk: Data?, done: Bool, error: Error?) throws -> Data? {
@@ -255,10 +268,34 @@
 +            if let chunk, try append(chunk) { return bytes }
 +            return done ? try finish() : nil
 +        }
-@@ -302 +324 @@
+@@ -278,0 +304,3 @@
++            guard chunk.count <= maxResponseBytes - bytes.count else {
++                throw StreamError.hostUnreachable("control response too large")
++            }
+@@ -280,3 +308,16 @@
+-            if headerEnd == nil, let separator = bytes.range(of: Data("\r\n\r\n".utf8)) {
+-                headerEnd = separator.upperBound
+-                contentLength = try contentLengthHeader(in: bytes[bytes.startIndex..<separator.lowerBound])
++            if headerEnd == nil {
++                // Revisit only the three-byte overlap: a peer delivering one byte per
++                // callback must not force a rescan of the entire accumulated header.
++                if let separator = bytes.range(of: Data("\r\n\r\n".utf8),
++                                                in: headerSearchOffset..<bytes.endIndex) {
++                    guard separator.upperBound <= maxHeaderBytes else {
++                        throw StreamError.hostUnreachable("control response headers too large")
++                    }
++                    headerEnd = separator.upperBound
++                    contentLength = try contentLengthHeader(in: bytes[bytes.startIndex..<separator.lowerBound])
++                } else {
++                    guard bytes.count < maxHeaderBytes else {
++                        throw StreamError.hostUnreachable("control response headers too large")
++                    }
++                    headerSearchOffset = max(0, bytes.count - 3)
++                }
+@@ -302 +343 @@
 -    /// the PC's close; the last matching line wins, and nil (also for an empty or negative value) = no header.
 +    /// the PC's close. Invalid or conflicting lengths are rejected rather than treated as absent.
-@@ -309,4 +331,8 @@
+@@ -309,4 +350,8 @@
 -        for line in head.split(separator: "\r\n") where line.lowercased().hasPrefix("content-length:") {
 -            let parts = line.split(separator: ":", maxSplits: 1)
 -            let value = parts.count == 2 ? Int(parts[1].trimmingCharacters(in: .whitespaces)) : nil
@@ -271,35 +308,183 @@
 +            guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }), let value = Int(text),
 +                  length == nil || length == value else { throw StreamError.hostUnreachable("invalid or conflicting Content-Length") }
 +            length = value
-@@ -319 +345 @@
+@@ -319 +364 @@
 -    private static func parse(_ raw: Data) throws -> Response {
 +    package static func parse(_ raw: Data) throws -> Response {
-@@ -336 +362,4 @@
+@@ -336 +381,4 @@
 -        let body = Data(raw[sep.upperBound...])
 +        let length = try contentLengthHeader(in: Data(raw[raw.startIndex..<sep.lowerBound]))
 +        let available = raw.count - sep.upperBound
 +        if let length, available < length { throw StreamError.truncatedRead("connection closed before Content-Length satisfied") }
 +        let body = Data(raw[sep.upperBound..<(sep.upperBound + (length ?? available))])
+diff --git a/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift b/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
+--- a/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
++++ b/GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift
+@@ -40,6 +40,7 @@
+-    /// Latch the peer dead exactly once, whichever path sees it first (socket
+-    /// failure, ACK silence, host DISCONNECT or TERMINATION): logs `reason` and
+-    /// fires onTerminated(code). Later reports of the same death are no-ops.
+-    func declarePeerDead(code: Int32, reason: DiagMessage) {
+-        let first = withState { () -> Bool in
+-            let wasAlive = !disconnected
++    /// First peer-death notification wins, except a local link failure (-1) may
++    /// be upgraded once by the first authenticated PC TERMINATION. The local
++    /// callback itself can close the channel, so interrupted is not an intent gate.
++    /// Admission at the bridge still rejects an intentionally retired transport.
++    func declarePeerDead(code: Int32, reason: DiagMessage, authenticatedTermination: Bool = false) {
++        let notify = withState { () -> Bool in
++            let first = !disconnected
+@@ -47,3 +48,7 @@
+-            return wasAlive
+-        }
+-        guard first else { return }
++            guard first || (authenticatedTermination && code != -1 && notifiedTerminationCode == -1) else {
++                return false
++            }
++            notifiedTerminationCode = code
++            return true
++        }
++        guard notify else { return }
+diff --git a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift b/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
 --- a/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
 +++ b/GlimmerEngine/Network/EnetControlChannel+Inbound.swift
-@@ -128,2 +128,3 @@
+@@ -17,0 +18,43 @@
++import CryptoKit
++
++/// Binds a successfully admitted envelope to its original transport labels for duplicate ACKs.
++/// The fixed ring bounds storage to 65,536 SHA-256 digests (2 MiB plus label/index bookkeeping),
++/// retaining neither ciphertext nor plaintext. Label lookup and eviction take constant time.
++struct EnetAuthenticatedReliableHistory {
++    static let capacity = ControlReplayWindow.capacity
++    private struct Entry {
++        let fingerprint: SHA256.Digest
++        let slot: Int
++    }
++    private var entries: [UInt32: Entry] = [:]
++    private var labels: [UInt32] = []
++    private var nextSlot = 0
++    var count: Int { entries.count }
++    var retainedSlotCount: Int { labels.count }
++
++    func matches(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) -> Bool {
++        guard let entry = entries[Self.label(channelID, relSeq)] else { return false }
++        return entry.fingerprint == SHA256.hash(data: bytes)
++    }
++
++    mutating func record(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
++        let label = Self.label(channelID, relSeq)
++        let slot: Int
++        if labels.count < Self.capacity {
++            slot = labels.count
++            labels.append(label)
++        } else {
++            slot = nextSlot
++            let evicted = labels[slot]
++            // A reused UInt16 label may already have a newer record in another slot.
++            if entries[evicted]?.slot == slot { entries.removeValue(forKey: evicted) }
++            labels[slot] = label
++            nextSlot = (slot + 1) % Self.capacity
++        }
++        entries[label] = Entry(fingerprint: SHA256.hash(data: bytes), slot: slot)
++    }
++
++    private static func label(_ channelID: UInt8, _ relSeq: UInt16) -> UInt32 {
++        (UInt32(channelID) << 16) | UInt32(relSeq)
++    }
++}
+@@ -93,2 +136,7 @@
+-            handleVerifyConnect(&reader)
+-            // VERIFY_CONNECT has FLAG_ACKNOWLEDGE → must ACK it.
++            // VERIFY_CONNECT is peer control, never an authenticated data-channel
++            // command. Consume its exact fixed body even on a wrong channel so a
++            // following coalesced command still has a known offset.
++            guard let body = reader.take(40) else { return false }
++            guard channelID == Enet.peerChannelID else { return true }
++            var verification = ByteReader(body)
++            handleVerifyConnect(&verification)
+@@ -105,3 +153,6 @@
+-            // PING has no body; ACK if requested.
+-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+-                           flags: flags, sentTime: sentTime)
++            // Unencrypted peer commands must not retire an outstanding encrypted
++            // reliable with the same (data channel, sequence) transport labels.
++            if channelID == Enet.peerChannelID {
++                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
++                               flags: flags, sentTime: sentTime)
++            }
+@@ -111,3 +162,5 @@
+-            // ACK unconditionally, duplicates included, as real ENet does in
+-            // enet_peer_queue_incoming_command's discardCommand path; withholding
+-            // an ACK keeps the PC retransmitting until its peer timeout.
++            // Authenticate new payloads before ACKing: a rejected body must not cancel
++            // the host's genuine reliable retransmit while leaving our cursor behind.
++            guard let result = acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq) else {
++                return true
++            }
+@@ -116 +169,3 @@
+-            acceptInboundReliable(inner, channelID: channelID, relSeq: relSeq)
++            // TERMINATION and other callbacks may close the socket, so ACK after
++            // admission but before dispatching any authenticated due payloads.
++            dispatchInboundDue(result, channelID: channelID, reason: "hold full")
+@@ -122,2 +177,8 @@
+-            ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
+-                           flags: flags, sentTime: sentTime)
++            // Only these supported peer-control commands have an unencrypted ACK
++            // path. Ignored unreliable/unsequenced/fragment data is never ACKed,
++            // even if its unauthenticated command byte carries ACKNOWLEDGE.
++            if channelID == Enet.peerChannelID,
++               command == Enet.cmdBandwidthLimit || command == Enet.cmdThrottleConfigure {
++                ackIfRequested(commandByte, channelID: channelID, relSeq: relSeq,
++                               flags: flags, sentTime: sentTime)
++            }
+@@ -128,3 +189,5 @@
 -    /// Drop duplicates, already ACKed; authenticate everything else before it can
 -    /// hold or move the channel cursor.
-+    /// Drop duplicates, already ACKed; authenticate and check the global host replay
-+    /// window before any other packet can hold or move a channel cursor. ENet's outer
-+    /// channel and reliable sequence remain unauthenticated transport metadata.
-@@ -219 +220 @@
+-    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16) {
++    /// Return ACK-eligible due payloads only after admission, or an empty result for
++    /// an exact known duplicate. Outer ENet labels remain unauthenticated metadata;
++    /// matching history must never admit a replay at a current/future reliable label.
++    private func acceptInboundReliable(_ bytes: [UInt8], channelID: UInt8, relSeq: UInt16)
++        -> (due: [[UInt8]], skipped: Int)? {
+@@ -132,0 +196,4 @@
++            guard inboundReliableHistory.matches(bytes, channelID: channelID, relSeq: relSeq) else {
++                rejectInboundControl("reliable duplicate has no matching authenticated envelope")
++                return nil
++            }
+@@ -138,4 +205,5 @@
+-            return
+-        }
+-        guard let inner = openInboundControl(bytes) else { return }
+-        let result = inboundOrder[channelID, default: EnetInboundOrder()]
++            return ([], 0)
++        }
++        guard let inner = openInboundControl(bytes) else { return nil }
++        inboundReliableHistory.record(bytes, channelID: channelID, relSeq: relSeq)
++        return inboundOrder[channelID, default: EnetInboundOrder()]
+@@ -143 +210,0 @@
+-        dispatchInboundDue(result, channelID: channelID, reason: "hold full")
+@@ -185,2 +252,3 @@
+-    /// Send an ACK for a received command iff it requested one AND the datagram
+-    /// carried a sent-time (ENet's ACK echoes the sender's serviceTime).
++    /// Send an ACK for an admitted reliable or allowlisted peer-control command
++    /// iff it requested one. Callers enforce admission; sent-time only selects
++    /// the timestamp to echo and is not an additional ACK requirement.
+@@ -219 +287 @@
 -    /// Authenticate a control payload (envelope 0x0001), returning its inner
 +    /// Authenticate and reject replayed control payloads (envelope 0x0001), returning the inner
-@@ -221 +222 @@
+@@ -221 +289 @@
 -    /// Changes no ordering state, so rejected packets cannot move the cursor.
 +    /// Commits only the authenticated replay counter; rejected packets cannot move the ENet cursor.
-@@ -233 +234 @@
+@@ -233 +301 @@
 -            return try crypto.open(bytes)
 +            return try crypto.open(bytes, replayWindow: &inboundReplayWindow)
-@@ -304 +305 @@
+@@ -253 +321 @@
+-                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))")
++                + "(code 0x\(String(UInt32(bitPattern: code), radix: 16)))", authenticatedTermination: true)
+@@ -304 +372 @@
 -    /// Count an inbound control payload that failed authentication; only the
 +    /// Count an inbound control payload rejected by authentication or replay checks; only the
+diff --git a/GlimmerEngine/Network/EnetControlChannel+Send.swift b/GlimmerEngine/Network/EnetControlChannel+Send.swift
 --- a/GlimmerEngine/Network/EnetControlChannel+Send.swift
 +++ b/GlimmerEngine/Network/EnetControlChannel+Send.swift
 @@ -230 +230,3 @@
@@ -317,19 +502,462 @@
 @@ -299 +302 @@
 -        }
 +        }) else { throw StreamCryptoError.counterExhausted }
+diff --git a/GlimmerEngine/Network/EnetControlChannel.swift b/GlimmerEngine/Network/EnetControlChannel.swift
 --- a/GlimmerEngine/Network/EnetControlChannel.swift
 +++ b/GlimmerEngine/Network/EnetControlChannel.swift
-@@ -230,0 +231,4 @@
+@@ -175,0 +176,3 @@
++    /// stateLock owns notification priority separately from socket closure. A local
++    /// dead-peer callback may close the channel before authenticated PC dispatch.
++    var notifiedTerminationCode: Int32?
+@@ -230,0 +234,8 @@
 +
 +    /// Authenticated host counters are global across ENet channels. Confined to the
 +    /// receive queue; outer channel/reliable labels must not let a replay move a cursor.
 +    var inboundReplayWindow = ControlReplayWindow()
-@@ -433 +437 @@
++
++    /// Exact authenticated envelopes retain duplicate-ACK liveness without ACKing
++    /// forged/relabelled payloads. Receive-queue owned, fixed-size fingerprint history.
++    var inboundReliableHistory = EnetAuthenticatedReliableHistory()
+@@ -368,3 +379,3 @@
+-    /// Fired once when the peer dies (declarePeerDead): host TERMINATION or
+-    /// DISCONNECT, ACK silence, or a failed socket. Wired by NativeBackend to
+-    /// connectionTerminated + teardown.
++    /// Fired once for peer death, with at most one local -1 → authenticated PC
++    /// reason upgrade. NativeBackend routes both through source/attempt admission
++    /// and idempotent teardown; intentional transport retirement rejects late intent.
+@@ -433 +444 @@
 -    /// Inbound control payloads that failed authentication (lock-guarded): the
 +    /// Inbound control payloads rejected by authentication or replay checks (lock-guarded): the
-@@ -506 +510 @@
+@@ -506 +517 @@
 -            Diag.notice("ENet rejected \(rejected) unauthenticated inbound control payload(s) this session",
 +            Diag.notice("ENet rejected \(rejected) unauthenticated or replayed inbound control payload(s) this session",
+diff --git a/GlimmerEngine/Network/Identity+Loading.swift b/GlimmerEngine/Network/Identity+Loading.swift
+--- a/GlimmerEngine/Network/Identity+Loading.swift
++++ b/GlimmerEngine/Network/Identity+Loading.swift
+@@ -15 +15 @@
+-        _ = try storageRoot()
++        try FileIdentityStore.validateStorage(base: storageRoot())
+@@ -20,8 +20,8 @@
+-        if defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion {
+-            if let identity = try loadFromFileStore() {
+-                cached = identity
+-                log.info("Loaded identity from file store")
+-                return identity
+-            }
+-            // A missing file store regenerates as before; an actual read failure must throw.
+-            log.error("identityFileStorageVersion flag set but file store is empty - regenerating")
++        let established = defaults.integer(forKey: Self.fileStorageFlag) >= Self.fileStorageVersion
++        if let identity = try loadFromFileStore(requireComplete: established) {
++            // Complete an interrupted migration without replacing the valid file identity.
++            wipeUserDefaultsPlaintext(defaults: defaults)
++            defaults.set(Self.fileStorageVersion, forKey: Self.fileStorageFlag)
++            cached = identity
++            log.info("Loaded identity from file store")
++            return identity
+@@ -28,0 +29,3 @@
++        // An established identity disappearing is a recovery error, not a new install.
++        guard !established else { throw IdentityStorageError.incompleteIdentity }
++        try FileIdentityStore.validateFreshStorage(base: storageRoot())
+@@ -108,6 +111,15 @@
+-    /// Missing material falls through to the next source. IO failures throw instead of regenerating.
+-    func loadFromFileStore() throws -> Identity? {
+-        guard let certData = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot()),
+-              let certPEM = String(data: certData, encoding: .utf8),
+-              !certPEM.isEmpty else {
+-            return nil
++    /// Only an unflagged first install/migration may fall through or synthesize a missing ID.
++    /// Once published, all three identity components must remain present.
++    func loadFromFileStore(requireComplete: Bool) throws -> Identity? {
++        let certificate = try FileIdentityStore.read(account: Self.accountCert, base: storageRoot())
++        let privateKey = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot())
++        let uniqueID = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot())
++        if certificate == nil && privateKey == nil && uniqueID == nil { return nil }
++        // Existing malformed bytes remain a storage validation failure even if
++        // another component is absent. Missing ordinary material instead needs
++        // recovery guidance; changing permissions cannot restore those bytes.
++        func text(_ data: Data?) throws -> String? {
++            guard let data else { return nil }
++            guard let value = String(data: data, encoding: .utf8), !value.isEmpty
++            else { throw IdentityStorageError.unsafeStorage }
++            return value
+@@ -115,6 +127,7 @@
+-        guard let keyData = try FileIdentityStore.read(account: Self.accountKey, base: storageRoot()),
+-              let keyPEM = String(data: keyData, encoding: .utf8),
+-              !keyPEM.isEmpty else {
+-            return nil
+-        }
+-        _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
++        let certificatePEM = try text(certificate)
++        let privateKeyPEM = try text(privateKey)
++        let storedUID = try text(uniqueID)?.trimmingCharacters(in: .whitespacesAndNewlines)
++        if let storedUID, storedUID.isEmpty { throw IdentityStorageError.unsafeStorage }
++        guard let certPEM = certificatePEM, let keyPEM = privateKeyPEM
++        else { throw IdentityStorageError.incompleteIdentity }
++        try validateLocalIdentity(certPEM: certPEM, keyPEM: keyPEM)
+@@ -122,4 +135 @@
+-        if let uidData = try FileIdentityStore.read(account: Self.accountUID, base: storageRoot()),
+-           let stored = String(data: uidData, encoding: .utf8)?
+-                    .trimmingCharacters(in: .whitespacesAndNewlines),
+-           !stored.isEmpty {
++        if let stored = storedUID {
+@@ -128 +138,2 @@
+-            // Preserve valid PEMs after a partial restore; synthesize only the missing unique ID.
++            guard !requireComplete else { throw IdentityStorageError.incompleteIdentity }
++            // Complete an unpublished legacy migration without replacing its valid PEM pair.
+@@ -137,3 +148,2 @@
+-    /// Persist an Identity to the file store. Each component goes through
+-    /// `FileIdentityStore.write` which enforces mode 0600 and verifies it
+-    /// stuck via stat(2).
++    /// First publication is a single directory rename, so no partial canonical
++    /// identity survives a crash between certificate, key, and uniqueID writes.
+@@ -141,7 +151,17 @@
+-        _ = try PEM.identity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
+-        try FileIdentityStore.write(Data(identity.certPEM.utf8),
+-                                    account: Self.accountCert, base: storageRoot())
+-        try FileIdentityStore.write(Data(identity.keyPEM.utf8),
+-                                    account: Self.accountKey, base: storageRoot())
+-        try FileIdentityStore.write(Data(identity.uniqueID.utf8),
+-                                    account: Self.accountUID, base: storageRoot())
++        try FileIdentityStore.validateStorage(base: storageRoot())
++        try validateLocalIdentity(certPEM: identity.certPEM, keyPEM: identity.keyPEM)
++        guard let defaults else { throw IdentityStorageError.defaultsUnavailable }
++        guard defaults.integer(forKey: Self.fileStorageFlag) < Self.fileStorageVersion
++        else { throw IdentityStorageError.incompleteIdentity }
++        try FileIdentityStore.publishFresh(certificate: Data(identity.certPEM.utf8),
++                                           privateKey: Data(identity.keyPEM.utf8),
++                                           uniqueID: Data(identity.uniqueID.utf8), base: storageRoot())
++    }
++
++    /// Invalid local PEM material needs local storage guidance, not host crypto settings.
++    private func validateLocalIdentity(certPEM: String, keyPEM: String) throws {
++        do {
++            _ = try PEM.identity(certPEM: certPEM, keyPEM: keyPEM)
++        } catch StreamError.crypto {
++            throw IdentityStorageError.unsafeStorage
++        }
+diff --git a/GlimmerEngine/Network/Identity.swift b/GlimmerEngine/Network/Identity.swift
+--- a/GlimmerEngine/Network/Identity.swift
++++ b/GlimmerEngine/Network/Identity.swift
+@@ -7,0 +8 @@
++import Darwin
+@@ -17,0 +19,136 @@
++}
++
++private enum IdentityPrivateStorage {
++    static let unsafe = IdentityStorageError.unsafeStorage
++    static func directory(_ url: URL, create: Bool) throws -> Int32? {
++        guard url.isFileURL, !url.lastPathComponent.isEmpty else { throw unsafe }
++        let parent = open(url.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
++        guard parent >= 0 else {
++            if !create && errno == ENOENT { return nil }
++            throw unsafe
++        }
++        defer { close(parent) }
++        return try child(parent, name: url.lastPathComponent, create: create)
++    }
++    static func child(_ parent: Int32, name: String, create: Bool, exclusive: Bool = false) throws -> Int32? {
++        guard valid(name) else { throw unsafe }
++        if create && mkdirat(parent, name, 0o700) != 0 && (errno != EEXIST || exclusive) { throw unsafe }
++        let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
++        guard fd >= 0 else {
++            if !create && errno == ENOENT { return nil }
++            throw unsafe
++        }
++        do { try check(fd, directory: true); return fd }
++        catch { close(fd); throw error }
++    }
++    static func check(_ fd: Int32, directory: Bool, maximumBytes: Int = 0, mode: mode_t? = nil) throws {
++        var value = stat()
++        let expected = mode ?? (directory ? 0o700 : 0o600)
++        guard fstat(fd, &value) == 0, value.st_uid == getuid(),
++              value.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG),
++              value.st_mode & 0o7777 == expected,
++              directory || (value.st_nlink == 1 && value.st_size >= 0 && value.st_size <= maximumBytes)
++        else { throw unsafe }
++        guard let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
++            guard errno == ENOENT else { throw unsafe }; return
++        }
++        defer { acl_free(UnsafeMutableRawPointer(acl)) }
++        guard acl_valid(acl) == 0 else { throw unsafe }
++        var entry: acl_entry_t?
++        errno = 0
++        // Darwin uses EINVAL when a valid ACL has no first entry.
++        guard acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) == -1, errno == EINVAL else { throw unsafe }
++    }
++    static func read(_ parent: Int32, name: String, maximumBytes: Int, mode: mode_t = 0o600) throws -> Data? {
++        guard valid(name), maximumBytes >= 0 else { throw unsafe }
++        let fd = openat(parent, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
++        guard fd >= 0 else {
++            if errno == ENOENT { return nil }
++            throw unsafe
++        }
++        defer { close(fd) }
++        try check(fd, directory: false, maximumBytes: maximumBytes, mode: mode)
++        var data = Data()
++        var buffer = [UInt8](repeating: 0, count: min(maximumBytes + 1, 16 * 1024))
++        while true {
++            let count = Darwin.read(fd, &buffer, min(buffer.count, maximumBytes + 1 - data.count))
++            if count < 0 && errno == EINTR { continue }
++            guard count >= 0 else { throw unsafe }
++            if count == 0 { break }
++            data.append(contentsOf: buffer.prefix(count))
++            guard data.count <= maximumBytes else { throw unsafe }
++        }
++        try check(fd, directory: false, maximumBytes: maximumBytes, mode: mode)
++        return data
++    }
++    static func replace(_ parent: Int32, name: String, data: Data, maximumBytes: Int) throws {
++        guard valid(name), data.count <= maximumBytes else { throw unsafe }
++        _ = try read(parent, name: name, maximumBytes: maximumBytes)
++        let temporary = ".private-" + UUID().uuidString
++        let fd = openat(parent, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
++        guard fd >= 0 else { throw unsafe }
++        defer { close(fd); _ = unlinkat(parent, temporary, 0) }
++        // Inherited ACLs must be refused before the first secret byte is written.
++        try check(fd, directory: false, maximumBytes: maximumBytes)
++        try data.withUnsafeBytes { bytes in
++            var offset = 0
++            while offset < bytes.count {
++                let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
++                if count < 0 && errno == EINTR { continue }
++                guard count > 0 else { throw unsafe }; offset += count
++            }
++        }
++        guard fsync(fd) == 0 else { throw unsafe }
++        try check(fd, directory: false, maximumBytes: maximumBytes)
++        guard renameat(parent, temporary, parent, name) == 0, fsync(parent) == 0 else { throw unsafe }
++    }
++    static func entries(_ directory: Int32) throws -> Set<String> {
++        let copy = dup(directory)
++        guard copy >= 0 else { throw unsafe }
++        guard let stream = fdopendir(copy) else { close(copy); throw unsafe }
++        defer { closedir(stream) }
++        rewinddir(stream)
++        var names = Set<String>()
++        while true {
++            errno = 0
++            guard let entry = readdir(stream) else {
++                guard errno == 0 else { throw unsafe }; return names
++            }
++            let name = withUnsafePointer(to: &entry.pointee.d_name) {
++                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) { String(cString: $0) }
++            }
++            if name != "." && name != ".." { names.insert(name) }
++        }
++    }
++    static func named(_ parent: Int32, name: String, is fd: Int32) -> Bool {
++        var held = stat(), current = stat()
++        return fstat(fd, &held) == 0 && fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) == 0 &&
++            held.st_dev == current.st_dev && held.st_ino == current.st_ino
++    }
++    /// Retain the new inode until publication/cleanup; never replace an existing stage entry.
++    static func exclusiveFile(_ parent: Int32, name: String, data: Data, maximumBytes: Int) throws -> Int32 {
++        guard valid(name), !data.isEmpty, data.count <= maximumBytes else { throw unsafe }
++        let fd = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
++        guard fd >= 0 else { throw unsafe }
++        do {
++            try check(fd, directory: false, maximumBytes: maximumBytes)
++            try data.withUnsafeBytes { bytes in
++                var offset = 0
++                while offset < bytes.count {
++                    let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
++                    if count < 0 && errno == EINTR { continue }
++                    guard count > 0 else { throw unsafe }; offset += count
++                }
++            }
++            guard fsync(fd) == 0 else { throw unsafe }
++            try check(fd, directory: false, maximumBytes: maximumBytes)
++            return fd
++        } catch {
++            if named(parent, name: name, is: fd) { _ = unlinkat(parent, name, 0) }
++            close(fd)
++            throw error
++        }
++    }
++    private static func valid(_ name: String) -> Bool {
++        !name.isEmpty && name != "." && name != ".." && !name.contains("/") && !name.utf8.contains(0)
++    }
+@@ -58,3 +195 @@
+-    /// Returns the bytes if the file exists, nil if it's absent. Anything
+-    /// else (permission denied, IO error mid-read) throws so we don't
+-    /// silently fall through to a destructive "regenerate".
++    /// Missing storage is distinct from unsafe storage, which must never regenerate.
+@@ -62,8 +197,94 @@
+-        guard let url = try fileURL(account: account, base: base) else { return nil }
+-        let fm = FileManager.default
+-        guard fm.fileExists(atPath: url.path) else { return nil }
+-        return try Data(contentsOf: url)
+-    }
+-
+-    /// Atomic mode-0600 writes under a mode-0700 directory. Verify permissions because some
+-    /// filesystems ignore chmod; delete and throw rather than retain an exposed partial identity.
++        guard let name = filename(forAccount: account) else { throw IdentityStorageError.unsafeStorage }
++        guard let root = try openDirectory(base: base, create: false) else { return nil }
++        defer { close(root) }
++        return try IdentityPrivateStorage.read(root, name: name, maximumBytes: limit(account))
++    }
++
++    /// Validate every existing component, even when another component is missing.
++    /// This also runs before migration/generation when no version flag is present.
++    package static func validateStorage(base: URL) throws {
++        for account in [IdentityManager.accountCert, IdentityManager.accountKey, IdentityManager.accountUID] {
++            _ = try read(account: account, base: base)
++        }
++    }
++
++    /// A first publication may use only absent storage or an already-private empty directory.
++    /// Unknown entries are not a fresh install and must be refused before key generation.
++    package static func validateFreshStorage(base: URL) throws {
++        guard let directory = try openDirectory(base: base, create: false) else { return }
++        defer { close(directory) }
++        guard try IdentityPrivateStorage.entries(directory).isEmpty else { throw IdentityStorageError.unsafeStorage }
++    }
++
++    /// Publish a complete initial identity with one directory rename. Crashes before that
++    /// rename leave only private, unadopted staging directories; crashes after it leave all
++    /// three canonical files. Existing nonempty identities are never replaced or repaired.
++    package static func publishFresh(certificate: Data, privateKey: Data, uniqueID: Data, base: URL) throws {
++        let components = [(certFileName, certificate, limit(IdentityManager.accountCert)),
++                          (keyFileName, privateKey, limit(IdentityManager.accountKey)),
++                          (uidFileName, uniqueID, limit(IdentityManager.accountUID))]
++        guard components.allSatisfy({ !$0.1.isEmpty && $0.1.count <= $0.2 }),
++              let root = try IdentityPrivateStorage.directory(base, create: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        defer { close(root) }
++        guard let glimmer = try IdentityPrivateStorage.child(root, name: "Glimmer", create: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        defer { close(glimmer) }
++        let destination = try IdentityPrivateStorage.child(glimmer, name: "Identity", create: false)
++        defer { if let destination { close(destination) } }
++        if let destination {
++            guard try IdentityPrivateStorage.entries(destination).isEmpty else { throw IdentityStorageError.unsafeStorage }
++        }
++        let stageName = ".identity-" + UUID().uuidString
++        guard let stage = try IdentityPrivateStorage.child(glimmer, name: stageName, create: true, exclusive: true)
++        else { throw IdentityStorageError.unsafeStorage }
++        var files: [(String, Int32)] = []
++        var published = false
++        defer {
++            // Only unlink our retained fresh inodes. An unknown/replaced entry survives,
++            // and AT_REMOVEDIR refuses a nonempty stage. Never clean the canonical name.
++            if !published && IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
++                for (name, fd) in files where IdentityPrivateStorage.named(stage, name: name, is: fd) {
++                    _ = unlinkat(stage, name, 0)
++                }
++                if IdentityPrivateStorage.named(glimmer, name: stageName, is: stage) {
++                    _ = unlinkat(glimmer, stageName, AT_REMOVEDIR)
++                }
++            }
++            for (_, fd) in files { close(fd) }
++            close(stage)
++        }
++        for (name, data, maximumBytes) in components {
++            try IdentityPrivateStorage.check(stage, directory: true)
++            files.append((name, try IdentityPrivateStorage.exclusiveFile(stage, name: name, data: data, maximumBytes: maximumBytes)))
++        }
++        guard try IdentityPrivateStorage.entries(stage) == Set(components.map(\.0)) else { throw IdentityStorageError.unsafeStorage }
++        for (index, component) in components.enumerated() {
++            let fd = files[index].1
++            try IdentityPrivateStorage.check(fd, directory: false, maximumBytes: component.2)
++            guard IdentityPrivateStorage.named(stage, name: component.0, is: fd) else { throw IdentityStorageError.unsafeStorage }
++        }
++        try IdentityPrivateStorage.check(stage, directory: true)
++        guard fsync(stage) == 0 else { throw IdentityStorageError.unsafeStorage }
++        try IdentityPrivateStorage.check(glimmer, directory: true)
++        guard IdentityPrivateStorage.named(root, name: "Glimmer", is: glimmer),
++              IdentityPrivateStorage.named(glimmer, name: stageName, is: stage)
++        else { throw IdentityStorageError.unsafeStorage }
++        if let destination {
++            try IdentityPrivateStorage.check(destination, directory: true)
++            guard IdentityPrivateStorage.named(glimmer, name: "Identity", is: destination),
++                  try IdentityPrivateStorage.entries(destination).isEmpty
++            else { throw IdentityStorageError.unsafeStorage }
++        } else {
++            var current = stat()
++            guard fstatat(glimmer, "Identity", &current, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT
++            else { throw IdentityStorageError.unsafeStorage }
++        }
++        // POSIX rename replaces only an absent/empty directory. A racing insertion
++        // into the destination makes publication fail without touching those bytes.
++        guard renameat(glimmer, stageName, glimmer, "Identity") == 0 else { throw IdentityStorageError.unsafeStorage }
++        published = true
++        // A sync failure must not roll back the now-complete canonical identity.
++        guard fsync(glimmer) == 0 else { throw IdentityStorageError.unsafeStorage }
++    }
++
+@@ -71,38 +292,19 @@
+-        guard let url = try fileURL(account: account, base: base) else {
+-            throw StreamError.crypto("FileIdentityStore: unknown account \(account)")
+-        }
+-
+-        let fm = FileManager.default
+-        let dir = try directoryURL(base: base)
+-
+-        // Creation does not tighten an existing directory, so chmod it again as defense in depth.
+-        try fm.createDirectory(at: dir,
+-                               withIntermediateDirectories: true,
+-                               attributes: [.posixPermissions: 0o700])
+-        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+-
+-        // Atomic file write. `.atomic` writes to a temp file in the same
+-        // directory then renames; that means a crash mid-write can't leave
+-        // a torn PEM on disk.
+-        try data.write(to: url, options: [.atomic])
+-
+-        // Apply mode 0600 and verify it stuck.
+-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+-
+-        let attrs = try fm.attributesOfItem(atPath: url.path)
+-        guard let mode = attrs[.posixPermissions] as? NSNumber else {
+-            try? fm.removeItem(at: url)
+-            throw StreamError.crypto("FileIdentityStore: missing POSIX permissions for \(url.lastPathComponent)")
+-        }
+-        // Mask off the SUID/SGID/sticky bits in the comparison - those are
+-        // never set by us but a paranoid umask could in theory surface them.
+-        let permBits = mode.uint16Value & 0o777
+-        guard permBits == 0o600 else {
+-            try? fm.removeItem(at: url)
+-            let modeOctal = String(permBits, radix: 8)
+-            throw StreamError.crypto(
+-                "FileIdentityStore: refused to keep \(url.lastPathComponent) with mode \(modeOctal) (expected 600)")
+-        }
+-    }
+-
+-    /// Idempotent unlink. Used by cleanup / future migrations.
++        guard let name = filename(forAccount: account), data.count <= limit(account),
++              let root = try openDirectory(base: base, create: true) else { throw IdentityStorageError.unsafeStorage }
++        defer { close(root) }
++        try IdentityPrivateStorage.replace(root, name: name, data: data, maximumBytes: limit(account))
++    }
++
++    private static func limit(_ account: String) -> Int {
++        account == IdentityManager.accountUID ? 4096 : 64 * 1024
++    }
++
++    private static func openDirectory(base: URL, create: Bool) throws -> Int32? {
++        guard let root = try IdentityPrivateStorage.directory(base, create: create) else { return nil }
++        defer { close(root) }
++        guard let glimmer = try IdentityPrivateStorage.child(root, name: "Glimmer", create: create) else { return nil }
++        defer { close(glimmer) }
++        return try IdentityPrivateStorage.child(glimmer, name: "Identity", create: create)
++    }
++
++    /// Only known, validated ordinary identity files are eligible for cleanup.
+@@ -110,3 +312,7 @@
+-        guard let url = try? fileURL(account: account, base: base) else { return }
+-        try? FileManager.default.removeItem(at: url)
+-    }
++        guard let name = filename(forAccount: account),
++              let root = try? openDirectory(base: base, create: false) else { return }
++        defer { close(root) }
++        guard (try? IdentityPrivateStorage.read(root, name: name, maximumBytes: limit(account))) != nil else { return }
++        _ = unlinkat(root, name, 0)
++    }
++
+@@ -206,0 +413,2 @@
++    case unsafeStorage
++    case incompleteIdentity
+diff --git a/GlimmerEngine/Network/InputBatcher.swift b/GlimmerEngine/Network/InputBatcher.swift
 --- a/GlimmerEngine/Network/InputBatcher.swift
 +++ b/GlimmerEngine/Network/InputBatcher.swift
 @@ -37,0 +38,2 @@
@@ -512,6 +1140,7 @@
 +            channel: absMouseChannel, timing: timing) else { return false }
 @@ -569,0 +595 @@
 +        return true
+diff --git a/GlimmerEngine/Network/Network.swift b/GlimmerEngine/Network/Network.swift
 --- a/GlimmerEngine/Network/Network.swift
 +++ b/GlimmerEngine/Network/Network.swift
 @@ -267,0 +268,19 @@
@@ -534,6 +1163,7 @@
 +        return verified
 +    }
 +
+diff --git a/GlimmerEngine/Network/NetworkClient+Endpoints.swift b/GlimmerEngine/Network/NetworkClient+Endpoints.swift
 --- a/GlimmerEngine/Network/NetworkClient+Endpoints.swift
 +++ b/GlimmerEngine/Network/NetworkClient+Endpoints.swift
 @@ -49 +49 @@
@@ -571,6 +1201,7 @@
 +        }
 +        guard let bytes = hexDecode(value), bytes.count == 16 else { throw StreamConnection.Failure.invalidSessionKey }
 +        return bytes
+diff --git a/GlimmerEngine/Network/NetworkClient+Request.swift b/GlimmerEngine/Network/NetworkClient+Request.swift
 --- a/GlimmerEngine/Network/NetworkClient+Request.swift
 +++ b/GlimmerEngine/Network/NetworkClient+Request.swift
 @@ -98 +98 @@
@@ -579,6 +1210,7 @@
 @@ -100 +100 @@
 -            if path == "launch" {
 +            if path == "launch" || path == "resume" {
+diff --git a/GlimmerEngine/Network/Pairing.swift b/GlimmerEngine/Network/Pairing.swift
 --- a/GlimmerEngine/Network/Pairing.swift
 +++ b/GlimmerEngine/Network/Pairing.swift
 @@ -31,8 +31,9 @@
@@ -602,19 +1234,132 @@
 @@ -40 +41 @@
 -        try await runPairingFlow(pin: pin)
 +        try await pair(pin: pin, expectedUniqueId: server.uniqueId)
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift b/GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver+Decrypt.swift
+@@ -21 +21,4 @@
+-    /// The normal in-order path still decrypts only once, at the decode hand-off.
++    /// Validate every data packet, including the in-order fast path. Keep the
++    /// original ciphertext in the queue because FEC parity covers those bytes;
++    /// decode decrypts again when a packet is actually played. Valid padding is
++    /// only a format check, not authentication of the host's CBC protocol.
+@@ -28,2 +31 @@
+-        return !queue.requiresPayloadValidation(sequence: sequence)
+-            || decryptCbc(payload, sequenceNumber: sequence) != nil
++        return decryptCbc(payload, sequenceNumber: sequence) != nil
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Ping.swift b/GlimmerEngine/Network/RtpAudioReceiver+Ping.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver+Ping.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver+Ping.swift
+@@ -69,0 +70 @@
++        var destination = destAddr
+@@ -71 +72 @@
+-            withUnsafePointer(to: &destAddr) { sp in
++            withUnsafePointer(to: &destination) { sp in
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Receive.swift b/GlimmerEngine/Network/RtpAudioReceiver+Receive.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver+Receive.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver+Receive.swift
+@@ -20,0 +21 @@
++        let onReceiveFailed = onReceiveFailed
+@@ -28,0 +30,2 @@
++            var pressureDelay: useconds_t = 1_000
++            var receiveFailure: Int32?
+@@ -31,0 +35 @@
++                if received >= 0 { pressureDelay = 1_000 }
+@@ -53,9 +57,4 @@
+-                    if err == EAGAIN || err == EWOULDBLOCK || err == EINTR {
+-                        // Poll timeout (100ms of recv silence): same quiet-socket
+-                        // proof as above - whatever arrives NEXT is delayed LIVE
+-                        // audio (a radio-coalesced clump), not a host backlog,
+-                        // and must not be eaten by the startup gate.
+-                        self.decodeWorker.enqueue([], count: 0, arrival: DispatchTime.now().uptimeNanoseconds)
+-                        continue
+-                    }
+-                    break // socket closed (stop) or fatal
++                    guard !self.interrupted.isSet else { break }
++                    if self.shouldContinueReceiving(after: err, pressureDelay: &pressureDelay) { continue }
++                    receiveFailure = err
++                    break
+@@ -63,0 +63,27 @@
++            if let receiveFailure { self?.publishReceiveFailure(receiveFailure, callback: onReceiveFailed) }
++        }
++    }
++
++    /// Buffer pressure can fail immediately rather than respecting SO_RCVTIMEO.
++    /// Cap the backoff at 16ms to avoid a busy loop while keeping stop responsive.
++    func shouldContinueReceiving(after err: Int32, pressureDelay: inout useconds_t) -> Bool {
++        switch err {
++        case EAGAIN, EWOULDBLOCK, EINTR:
++            pressureDelay = 1_000
++            // A quiet socket resolves the startup pacing measurement to its live edge.
++            decodeWorker.enqueue([], count: 0, arrival: DispatchTime.now().uptimeNanoseconds)
++        case ENOBUFS, ENOMEM:
++            usleep(pressureDelay)
++            pressureDelay = min(pressureDelay * 2, 16_000)
++        default:
++            return false
++        }
++        return true
++    }
++
++    /// Publish once after the receive loop ends, on a different queue. A consumer
++    /// may stop/join receivers from its callback; it must never run on recvQueue.
++    func publishReceiveFailure(_ error: Int32, callback: (@Sendable (Int32) -> Void)?) {
++        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
++            guard let self, !self.interrupted.isSet else { return }
++            callback?(error)
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift b/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver+Socket.swift
+@@ -12,0 +13,12 @@
++
++    /// A receive loop retains this receiver while blocked. Require the timeout
++    /// before publishing fd so cancellation cannot leave an unbounded read.
++    private static func configureReceiveTimeout(_ socket: Int32) throws {
++        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
++        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
++                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
++            let failure = errno
++            _ = close(socket) // Still local: fd ownership has not been published.
++            throw EnetError.socketFailure("audio receive timeout unavailable (errno \(failure))")
++        }
++    }
+@@ -41,2 +53 @@
+-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
+-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
++        try Self.configureReceiveTimeout(sock)
+@@ -69 +80,5 @@
+-        guard bound else { close(sock); throw EnetError.socketFailure("bind() errno \(errno)") }
++        guard bound else {
++            let failure = errno
++            close(sock)
++            throw EnetError.socketFailure("bind() errno \(failure)")
++        }
+diff --git a/GlimmerEngine/Network/RtpAudioReceiver.swift b/GlimmerEngine/Network/RtpAudioReceiver.swift
+--- a/GlimmerEngine/Network/RtpAudioReceiver.swift
++++ b/GlimmerEngine/Network/RtpAudioReceiver.swift
+@@ -101,0 +102,3 @@
++    /// Configured before receive starts; a terminal socket failure leaves video
++    /// and audio keepalives alive while surfacing the nonfatal audio-only loss.
++    var onReceiveFailed: (@Sendable (Int32) -> Void)?
+diff --git a/GlimmerEngine/Network/RtspClient.swift b/GlimmerEngine/Network/RtspClient.swift
 --- a/GlimmerEngine/Network/RtspClient.swift
 +++ b/GlimmerEngine/Network/RtspClient.swift
-@@ -113,0 +114,3 @@
+@@ -67,0 +68,2 @@
++    /// Only failures before a TCP connection is ready may resubmit this request.
++    case connectionNotReady(String)
+@@ -79,0 +82 @@
++        case .connectionNotReady(let reason): return "RTSP TCP connection not ready: \(reason)"
+@@ -113,0 +117,3 @@
 +    /// Host-originated counter is independent of encryptionSeq and may skip after a retry.
 +    /// Commit only an authenticated response bound to the current request. Never reset within this instance.
 +    private(set) var lastHostEncryptionSeq: UInt32?
-@@ -155 +158 @@
+@@ -155 +161 @@
 -        self.encryptedRtspEnabled = rtspTargetUrl.lowercased().contains("rtspenc://")
 +        self.encryptedRtspEnabled = URLComponents(string: rtspTargetUrl)?.scheme?.lowercased() == "rtspenc"
-@@ -187,0 +191,2 @@
+@@ -187,0 +194,2 @@
 +        // Reject a malformed local transaction before opening its transport.
 +        _ = try Self.transactionCSeq(request)
-@@ -191,2 +196,24 @@
+@@ -191,2 +199,24 @@
 -        let responseBytes = encryptedRtspEnabled ? try unsealRtsp(responseData) : responseData
 -        guard let response = RtspMessage.parseResponse(responseBytes) else {
 +        return try decodeResponse(responseData, for: request)
@@ -641,12 +1386,12 @@
 +              responseBytes.range(of: Data("\r\n\r\n".utf8)) != nil,
 +              let response = RtspMessage.parseResponse(responseBytes),
 +              (100...999).contains(response.statusCode) else {
-@@ -194,0 +222,4 @@
+@@ -194,0 +225,4 @@
 +        guard try Self.transactionCSeq(response) == expectedCSeq else {
 +            throw RtspError.badResponse("RTSP response CSeq does not match request")
 +        }
 +        if let hostSequence { lastHostEncryptionSeq = hostSequence }
-@@ -195,0 +227,13 @@
+@@ -195,0 +230,13 @@
 +    }
 +
 +    /// RTSP field names are case-insensitive. Require one unsigned decimal CSeq; tolerate legal surrounding
@@ -660,26 +1405,118 @@
 +            throw RtspError.badResponse("malformed RTSP CSeq")
 +        }
 +        return sequence
-@@ -224,3 +268,3 @@
+@@ -224,3 +271,3 @@
 -    /// Parse + decrypt an encrypted RTSP response. Rejects unencrypted or
 -    /// partial/excess frames exactly like unsealRtspMessage.
 -    func unsealRtsp(_ raw: Data) throws -> Data {
 +    /// Authenticate an encrypted frame before its sequence can influence state. The caller binds CSeq and
 +    /// commits the independent host counter. Reject unencrypted or partial/excess frames.
 +    private func unsealRtsp(_ raw: Data) throws -> (plaintext: Data, sequence: UInt32) {
-@@ -252 +296 @@
+@@ -252 +299 @@
 -        return try AES.GCM.open(box, using: key)
 +        return (try AES.GCM.open(box, using: key), seq)
-@@ -391,0 +436,2 @@
+@@ -266 +313,2 @@
+-    func sendAndReceive(_ bytes: Data) async throws -> Data {
++    func sendAndReceive(_ bytes: Data,
++                        exchange: (@Sendable (Data) async throws -> Data)? = nil) async throws -> Data {
+@@ -271,0 +320,2 @@
++                // The optional internal seam exercises the actual retry loop offline.
++                if let exchange { return try await exchange(bytes) }
+@@ -278 +328 @@
+-                guard case .transportFailure = rtspError else { throw rtspError }
++                guard case .connectionNotReady = rtspError else { throw rtspError }
+@@ -322 +372,2 @@
+-        // (an error or a bare EOF); the flag tells that apart from a transport failure sendAndReceive retries.
++        // (an error or a bare EOF). Send/receive failures propagate without replaying a request
++        // the host may already have processed.
+@@ -366,2 +417,2 @@
+-        case .failed(let err): return .failure(.transportFailure("\(err)"))
+-        case .waiting(let err): return .failure(.transportFailure("waiting: \(err)"))
++        case .failed(let err): return .failure(.connectionNotReady("\(err)"))
++        case .waiting(let err): return .failure(.connectionNotReady("waiting: \(err)"))
+@@ -391,0 +443,2 @@
 +        // DeskBridge: reject plaintext signalling before the first socket transaction.
 +        try StreamSecurityPolicy.validateSignalling(url: rtspTargetUrl)
-@@ -422,3 +468,3 @@
+@@ -422,3 +475,3 @@
 -        result.encryptionFeaturesEnabled = Self.computeEncryptionEnabled(
 -            supported: result.encryptionFeaturesSupported,
 -            requested: SdpScan.attributeUInt(sdp, "x-ss-general.encryptionRequested") ?? 0)
 +        // DeskBridge requires every channel even when the host makes encryption optional.
 +        result.encryptionFeaturesEnabled = try StreamSecurityPolicy.negotiatedFeatures(
 +            supported: result.encryptionFeaturesSupported)
+diff --git a/GlimmerEngine/Network/VideoRtpReceiver.swift b/GlimmerEngine/Network/VideoRtpReceiver.swift
+--- a/GlimmerEngine/Network/VideoRtpReceiver.swift
++++ b/GlimmerEngine/Network/VideoRtpReceiver.swift
+@@ -136,0 +137,4 @@
++        // A caller may reuse the sink immediately after stop. Join any submit
++        // already in flight before returning, so an old receiver cannot feed a
++        // newly started decoder. Failure callbacks are dispatched off this queue.
++        recvQueue.sync {}
+@@ -145,0 +150,10 @@
++
++    private static func configureReceiveTimeout(_ socket: Int32) throws {
++        var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
++        guard setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
++                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
++            let failure = errno
++            _ = close(socket) // Still local: fd ownership has not been published.
++            throw EnetError.socketFailure("video receive timeout unavailable (errno \(failure))")
++        }
++    }
+@@ -203,2 +217 @@
+-        var tv = timeval(tv_sec: 0, tv_usec: 100_000)
+-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
++        try Self.configureReceiveTimeout(sock)
+@@ -276,0 +290 @@
++                self?.publishReceiveFailure(callback: onReceiveFailed)
+@@ -286,0 +301 @@
++            var pressureDelay: useconds_t = 1_000
+@@ -288,0 +304 @@
++                if count >= 0 { pressureDelay = 1_000 }
+@@ -304 +320,3 @@
+-                    if self.shouldContinueReceiving(after: err, batched: &batched) { continue }
++                    if self.shouldContinueReceiving(after: err, batched: &batched,
++                                                    pressureDelay: &pressureDelay) { continue }
++                    guard !self.interrupted.load(ordering: .relaxed) else { break }
+@@ -309 +327,10 @@
+-            if receiveFailed { onReceiveFailed?() }
++            if receiveFailed { self?.publishReceiveFailure(callback: onReceiveFailed) }
++        }
++    }
++
++    /// A fatal callback can stop this receiver synchronously. Dispatch it away
++    /// from recvQueue so stop's drain cannot deadlock with the receive loop.
++    private func publishReceiveFailure(callback: (@Sendable () -> Void)?) {
++        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
++            guard let self, !self.interrupted.load(ordering: .relaxed) else { return }
++            callback?()
+@@ -315 +342,2 @@
+-    private func shouldContinueReceiving(after err: Int32, batched: inout Bool) -> Bool {
++    private func shouldContinueReceiving(after err: Int32, batched: inout Bool,
++                                        pressureDelay: inout useconds_t) -> Bool {
+@@ -317,0 +346 @@
++            pressureDelay = 1_000
+@@ -327,2 +356,4 @@
+-            // These fail at once instead of waiting out SO_RCVTIMEO, so pause before retrying.
+-            usleep(1_000)
++            // These fail at once instead of waiting out SO_RCVTIMEO. Bound
++            // wakeups under sustained pressure while keeping stop responsive.
++            usleep(pressureDelay)
++            pressureDelay = min(pressureDelay * 2, 16_000)
+@@ -333 +364 @@
+-        return true
++        return !interrupted.load(ordering: .relaxed)
+@@ -401,0 +433 @@
++        var destination = destAddr
+@@ -403 +435 @@
+-            withUnsafePointer(to: &destAddr) { sp in
++            withUnsafePointer(to: &destination) { sp in
+@@ -435 +467 @@
+-        guard let sink else { return }
++        guard !interrupted.load(ordering: .relaxed), let sink else { return }
+@@ -461,0 +494 @@
++        guard !interrupted.load(ordering: .relaxed) else { return }
+diff --git a/GlimmerEngine/Protocol/StreamCrypto.swift b/GlimmerEngine/Protocol/StreamCrypto.swift
 --- a/GlimmerEngine/Protocol/StreamCrypto.swift
 +++ b/GlimmerEngine/Protocol/StreamCrypto.swift
 @@ -17,0 +18,2 @@
@@ -743,6 +1580,8 @@
 @@ -130,0 +177,2 @@
 +        replayWindow.recordAuthenticated(seq)
 +        return plaintext
+diff --git a/GlimmerEngine/Protocol/StreamSecurityPolicy.swift b/GlimmerEngine/Protocol/StreamSecurityPolicy.swift
+new file mode 100644
 --- /dev/null
 +++ b/GlimmerEngine/Protocol/StreamSecurityPolicy.swift
 @@ -0,0 +1,26 @@
@@ -772,6 +1611,7 @@
 +        return requiredFeatures
 +    }
 +}
+diff --git a/GlimmerEngine/Session/NativeBackend+Input.swift b/GlimmerEngine/Session/NativeBackend+Input.swift
 --- a/GlimmerEngine/Session/NativeBackend+Input.swift
 +++ b/GlimmerEngine/Session/NativeBackend+Input.swift
 @@ -67,0 +68,5 @@
@@ -805,21 +1645,150 @@
 @@ -154 +160 @@
 -        return batcher.passThroughText(text)
 +        return batcher.passThroughText(text, channel: inputChannel(.text))
+diff --git a/GlimmerEngine/Session/NativeBackend+Pipeline.swift b/GlimmerEngine/Session/NativeBackend+Pipeline.swift
+--- a/GlimmerEngine/Session/NativeBackend+Pipeline.swift
++++ b/GlimmerEngine/Session/NativeBackend+Pipeline.swift
+@@ -154 +154,5 @@
+-        receiver.onReceiveFailed = { [weak self] in
++        receiver.onReceiveFailed = { [weak self, weak receiver] in
++            guard let self, let receiver,
++                  self.withState({ !interrupted && videoReceiver === receiver }) else { return }
++            // Queue recovery before a receiver/decoder join can delay its UI edge.
++            // Teardown still completes before this callback returns.
+@@ -156 +160 @@
+-            self?.stopConnection()
++            self.stopConnection()
+@@ -277 +281 @@
+-        config: BackendStreamConfig, host: NWEndpoint.Host
++        config: BackendStreamConfig, host: NWEndpoint.Host, events: any ConnectionEvents
+@@ -300 +304,9 @@
+-            withState { audioReceiver = nil }
++            let failedCurrentReceiver = withState {
++                guard audioReceiver === receiver else { return false }
++                audioReceiver = nil
++                return !interrupted
++            }
++            if failedCurrentReceiver {
++                TelemetryCounters.shared.audioReceiveFailedTotal.increment()
++                events.audioFailed("audio transport initialization failed")
++            }
+@@ -316,0 +329,6 @@
++        }
++        receiver.onReceiveFailed = { [weak self, weak receiver] error in
++            guard let self, let receiver,
++                  self.withState({ !interrupted && audioReceiver === receiver }) else { return }
++            TelemetryCounters.shared.audioReceiveFailedTotal.increment()
++            events.audioFailed("audio receive failed (errno \(error))")
+@@ -372 +390 @@
+-                                 config: config, host: host)
++                                 config: config, host: host, events: events)
+diff --git a/GlimmerEngine/Session/NativeBackend.swift b/GlimmerEngine/Session/NativeBackend.swift
 --- a/GlimmerEngine/Session/NativeBackend.swift
 +++ b/GlimmerEngine/Session/NativeBackend.swift
-@@ -32,0 +33,2 @@
+@@ -17,0 +18,6 @@
++    /// Stop callers must all observe completed receiver drains and sink cleanup,
++    /// even after the first caller has taken/nil'd the resources under stateLock.
++    /// Never hold stateLock while joining. Recursive only for synchronous leaf
++    /// teardown notifications; production receive-failure callbacks run off the
++    /// receive queue and native connection events enqueue session work.
++    private let teardownLock = NSRecursiveLock()
+@@ -32,0 +39,2 @@
 +    // DeskBridge desktop edits share one reliable channel; game/controller defaults remain unchanged.
 +    var desktopInputOrdering = false
+@@ -220,0 +229,2 @@
++        teardownLock.lock()
++        defer { teardownLock.unlock() }
+@@ -250,0 +261,2 @@
++        teardownLock.lock()
++        defer { teardownLock.unlock() }
+diff --git a/GlimmerEngine/Session/NativeConnectionEvents.swift b/GlimmerEngine/Session/NativeConnectionEvents.swift
+--- a/GlimmerEngine/Session/NativeConnectionEvents.swift
++++ b/GlimmerEngine/Session/NativeConnectionEvents.swift
+@@ -103 +103,7 @@
+-        guard isCurrent else { return }
++        // A failed decoder epoch does not retire the still-observed transport.
++        // Admission must precede queued actor delivery and intentional teardown.
++        if let bridge, let backend {
++            guard bridge.admitTermination(code: code, from: backend, attempt: attempt) else { return }
++        } else {
++            guard isCurrent else { return }
++        }
+diff --git a/GlimmerEngine/Session/StreamBridgeContext.swift b/GlimmerEngine/Session/StreamBridgeContext.swift
+--- a/GlimmerEngine/Session/StreamBridgeContext.swift
++++ b/GlimmerEngine/Session/StreamBridgeContext.swift
+@@ -22,0 +23,9 @@
++    // Decoder epochs can be fenced while this transport is still observed.
++    // Termination admission ends only at the actor's explicit retirement boundary.
++    private var terminationSource: ObjectIdentifier?
++    private var terminationAttempt: UUID?
++    private var terminationEventsRetired = true
++    private var admittedTerminationCode: Int32?
++    // A self-initiated reconnect emits its UI edge before stopping the old
++    // receiver. Fence its late audio failure in the same lock as event delivery.
++    private var audioEventsQuiesced = false
+@@ -28,0 +38 @@
++            audioEventsQuiesced = false
+@@ -35,0 +46,4 @@
++            terminationSource = ObjectIdentifier(backend)
++            terminationAttempt = attempt
++            terminationEventsRetired = false
++            admittedTerminationCode = nil
+@@ -36,0 +51 @@
++            audioEventsQuiesced = false
+@@ -43,0 +59,24 @@
++        }
++    }
++
++    /// Retain intent before the callback queues an actor Task. A PC-sent reason
++    /// outranks local dead-peer (-1); the first explicit PC reason stays intact.
++    package func admitTermination(code: Int32, from backend: NativeBackend, attempt: UUID) -> Bool {
++        sourceLock.withLock {
++            guard !terminationEventsRetired, terminationAttempt == attempt,
++                  terminationSource == ObjectIdentifier(backend) else { return false }
++            if admittedTerminationCode == nil || (admittedTerminationCode == -1 && code != -1) {
++                admittedTerminationCode = code
++            }
++            return true
++        }
++    }
++
++    /// Retirement and the final intent snapshot share admission's lock. Keep the
++    /// snapshot through receiver drain so an already-queued actor event cannot lose it.
++    package func terminationIntent(from backend: NativeBackend, attempt: UUID, retiring: Bool = false) -> Int32? {
++        sourceLock.withLock {
++            guard terminationAttempt == attempt,
++                  terminationSource == ObjectIdentifier(backend) else { return nil }
++            if retiring { terminationEventsRetired = true }
++            return admittedTerminationCode
+@@ -87,0 +127,8 @@
++            switch event {
++            case .reconnecting:
++                audioEventsQuiesced = true
++            case .audioFailed where audioEventsQuiesced:
++                return
++            default:
++                break
++            }
+diff --git a/GlimmerEngine/Session/StreamConnection+Configuration.swift b/GlimmerEngine/Session/StreamConnection+Configuration.swift
 --- a/GlimmerEngine/Session/StreamConnection+Configuration.swift
 +++ b/GlimmerEngine/Session/StreamConnection+Configuration.swift
 @@ -38 +38 @@
 -                colorSpace: request.colorSpace.cValue, colorRange: request.colorRange.cValue, encryptionFlags: 0,
 +                colorSpace: request.colorSpace.cValue, colorRange: request.colorRange.cValue, encryptionFlags: Int32(StreamSecurityPolicy.requiredFeatures),
+diff --git a/GlimmerEngine/Session/StreamSession+Connect.swift b/GlimmerEngine/Session/StreamSession+Connect.swift
 --- a/GlimmerEngine/Session/StreamSession+Connect.swift
 +++ b/GlimmerEngine/Session/StreamSession+Connect.swift
 @@ -107 +107 @@
 -            encryptionFlags: 0,
 +            encryptionFlags: Int32(StreamSecurityPolicy.requiredFeatures),
+diff --git a/GlimmerEngine/Session/StreamSession+Lifecycle.swift b/GlimmerEngine/Session/StreamSession+Lifecycle.swift
+--- a/GlimmerEngine/Session/StreamSession+Lifecycle.swift
++++ b/GlimmerEngine/Session/StreamSession+Lifecycle.swift
+@@ -35 +35,2 @@
+-        setWaitingForVideo(false)
++        // Stop is terminal; clearing the hold must not announce old video as live.
++        waitingForVideo = false
+diff --git a/GlimmerEngine/Session/StreamSession+Public.swift b/GlimmerEngine/Session/StreamSession+Public.swift
 --- a/GlimmerEngine/Session/StreamSession+Public.swift
 +++ b/GlimmerEngine/Session/StreamSession+Public.swift
 @@ -6,0 +7,21 @@
@@ -857,6 +1826,339 @@
 @@ -58 +85 @@
 -            services: .recording(directory: diagnosticsDirectory), backend: NativeBackend(),
 +            services: services, backend: NativeBackend(),
+@@ -93,0 +121,7 @@
++    /// The shell updates MainActor presentation suppression before requesting this refresh.
++    /// Read the latest decoder state on the session actor; stopped sessions cannot reacquire power.
++    public func refreshPresentationActivity() {
++        guard !publicTerminal else { return }
++        refreshPowerAssertion()
++    }
++
+diff --git a/GlimmerEngine/Session/StreamSession+Reconnect.swift b/GlimmerEngine/Session/StreamSession+Reconnect.swift
+--- a/GlimmerEngine/Session/StreamSession+Reconnect.swift
++++ b/GlimmerEngine/Session/StreamSession+Reconnect.swift
+@@ -36 +36 @@
+-    package func handleHostTerminate(code: Int32, from source: NativeBackend? = nil) async {
++    package func handleHostTerminate(code receivedCode: Int32, from source: NativeBackend? = nil) async {
+@@ -38,10 +38,16 @@
+-              isStreaming, !stopInProgress, !isReconnecting else { return }
+-        // The uplink is dead the instant the host closed - pause input so we
+-        // don't spew sends at a gone backend. It re-arms on the next
+-        // `.connectionEstablished` (nativeConnectionEstablished → setReady(true)).
+-        publicInput?.prepareForReplacement(attempt: attemptID)
+-        let inp = input
+-        // FIFO main-queue hop (NOT Task{}) so this pause can't reorder ahead of the
+-        // reconnect's setReady(true) - see nativeConnectionEstablished.
+-        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+-
++              isStreaming, !stopInProgress else { return }
++        // Read the synchronous admission rather than trusting a queued raw code.
++        // Source-less wake requests have no host intent to contribute.
++        let code: Int32
++        if let source {
++            guard let admitted = bridge?.terminationIntent(from: source, attempt: attemptID) else { return }
++            code = admitted
++        } else {
++            code = receivedCode
++        }
++        if isReconnecting {
++            if source != nil { retainReconnectTermination(code) }
++            return
++        }
++        // The uplink is dead; the initial episode latch revokes input and fences
++        // the failed decoder exactly once before its first suspension.
+@@ -58,0 +65,3 @@
++            publicInput?.prepareForReplacement(attempt: attemptID)
++            let inp = input
++            DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+@@ -64,15 +73 @@
+-        // Our own dead-peer (-1) says nothing about the PC. A code the PC sent may
+-        // mean it ended the session on purpose, so ask before relaunching anything.
+-        if code != Self.deadPeerTerminationCode {
+-            isReconnecting = true   // the probe owns the outcome; re-entrant terminates wait
+-            let runningAppID = await probeRunningAppID()
+-            isReconnecting = false
+-            guard isStreaming, !stopInProgress else { return }
+-            if Self.pcEndedSession(runningAppID: runningAppID, appID: reconnectAppID) {
+-                Diag.notice("The PC ended the session (code 0x\(String(UInt32(bitPattern: code), radix: 16)), "
+-                    + "now running app \(runningAppID ?? 0)) - ending the stream, not reconnecting.", "Stream")
+-                await endStreamClosedByPC()
+-                return
+-            }
+-        }
+-        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code))
++        await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code), initialTermination: code)
+@@ -99 +94 @@
+-    private func probeRunningAppID() async -> Int? {
++    private func probeRunningAppID(until budgetDeadline: Date? = nil) async -> Int? {
+@@ -101 +96,3 @@
+-        let deadline = Date().addingTimeInterval(Self.hostEndProbeSeconds)
++        let probeEnd = Date().addingTimeInterval(Self.hostEndProbeSeconds)
++        let deadline = budgetDeadline.map { min($0, probeEnd) } ?? probeEnd
++        guard Date() < deadline else { return nil }
+@@ -127,0 +125,3 @@
++        // Fence only decoder callbacks; keep the original transport's separate
++        // source/attempt observation available for real PC intent during recovery.
++        if bridge?.currentAttempt == attemptID { bridge?.beginAttempt(UUID()) }
+@@ -134 +134,2 @@
+-    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…") async {
++    private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…",
++                                     initialTermination: Int32? = nil) async {
+@@ -136 +137,5 @@
+-        setWaitingForVideo(false)
++        // Observe the original transport through backoff and route refresh too.
++        reconnectAttemptID = attemptID
++        reconnectAttemptFailure = nil
++        reconnectAttemptFailureHandled = false
++        lastReconnectTerminationCode = nil
+@@ -140,9 +145,18 @@
+-        bridge?.emit(.reconnecting)
+-        // Surface the hold over the frozen frame - the launcher's phase chip is
+-        // occluded by the fullscreen window, so this banner is the only in-stream
+-        // signal that we're holding rather than dead. It announces itself.
+-        let winForBanner = presentation
+-        await MainActor.run {
+-            winForBanner?.showRecovery(bannerText)
+-        }
+-        Diag.notice("Reconnecting in place, holding the last frame: \(cause).", "Stream")
++        // Fence the failed original decoder/input before the first await, then
++        // resolve PC intent before showing a recovery card for a clean PC close.
++        if let initialTermination { retainReconnectTermination(initialTermination) }
++        if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
++        // Cancellation or a concurrent stop still needs the shared ownership
++        // cleanup below, even before any recovery UI was announced.
++        if !Task.isCancelled, isStreaming, !stopInProgress {
++            bridge?.emit(.reconnecting)
++            setWaitingForVideo(false)
++            // Surface the hold over the frozen frame - the launcher's phase chip is
++            // occluded by the fullscreen window, so this banner is the only in-stream
++            // signal that we're holding rather than dead. It announces itself.
++            let winForBanner = presentation
++            await MainActor.run {
++                winForBanner?.showRecovery(bannerText)
++            }
++            Diag.notice("Reconnecting in place, holding the last frame: \(cause).", "Stream")
++        }
+@@ -151,2 +165,8 @@
+-        while isStreaming, !stopInProgress,
+-              reconnectAttempts < Self.reconnectAttemptCap, let budgetEnd = budget.deadline() {
++        while !Task.isCancelled, isStreaming, !stopInProgress {
++            // A replacement may have been killed on purpose, just like a live
++            // connection. Resolve that first; never erase its evidence and /launch
++            // an idle PC merely because this happened inside a reconnect episode.
++            if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
++            guard !Task.isCancelled, isStreaming, !stopInProgress,
++                  reconnectAttempts < Self.reconnectAttemptCap,
++                  let budgetEnd = budget.deadline() else { break }
+@@ -164,0 +185,3 @@
++            // A terminate can arrive during the backoff too. Classify it before
++            // reconnectInPlace retires the old attempt or makes another /launch.
++            if await endReconnectAfterCurrentFailure(until: budget.deadline()) { return }
+@@ -176,0 +200 @@
++                let resumedAttempt = attemptID
+@@ -179,0 +204,4 @@
++                // This is the last suspension before committing success. A fatal
++                // callback consumed during the deadline clear OR watchdog re-arm
++                // must leave the banner up and use the remaining bounded retries.
++                guard reconnectAttemptIsHealthy(resumedAttempt) else { continue }
+@@ -180,0 +209 @@
++                reconnectAttemptID = nil
+@@ -201,0 +231 @@
++        reconnectAttemptID = nil
+@@ -213 +243,2 @@
+-        bridge?.emit(.connectionTerminated(errorCode: code, error: lastReconnectError))
++        bridge?.emit(.connectionTerminated(errorCode: lastReconnectTerminationCode ?? code,
++                                           error: lastReconnectError))
+@@ -214,0 +246,67 @@
++    }
++
++    /// One actor-owned latch per observed transport. A late authenticated PC
++    /// reason can upgrade local link loss without repeating input/epoch teardown.
++    private func retainReconnectTermination(_ code: Int32) {
++        guard reconnectAttemptID == attemptID,
++              reconnectAttemptFailure == nil || (reconnectAttemptFailure == Self.deadPeerTerminationCode
++                  && code != Self.deadPeerTerminationCode) else { return }
++        let firstFailure = reconnectAttemptFailure == nil
++        reconnectAttemptFailure = code
++        reconnectAttemptFailureHandled = false
++        lastReconnectTerminationCode = code
++        lastReconnectError = .sessionFailed(code)
++        guard firstFailure else { return }
++        publicInput?.prepareForReplacement(attempt: attemptID)
++        let inp = input
++        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
++        if bridge?.currentAttempt == attemptID { bridge?.beginAttempt(UUID()) }
++        // The initial decision precedes recovery UI. Later attempt failures must
++        // reassert it after a decoder's first frame may have hidden the card.
++        if reconnectAttempts > 0 { bridge?.emit(.reconnecting) }
++    }
++
++    private func observeReconnectTermination(retiringSource: Bool = false) {
++        guard reconnectAttemptID == attemptID, let native = backend as? NativeBackend,
++              let code = bridge?.terminationIntent(from: native, attempt: attemptID,
++                                                    retiring: retiringSource) else { return }
++        retainReconnectTermination(code)
++    }
++
++    /// Keep the live-termination policy inside the original bounded episode.
++    /// The first explicit PC reason owns this decision, upgrading local link loss.
++    private func endReconnectAfterCurrentFailure(until budgetDeadline: Date?) async -> Bool {
++        observeReconnectTermination()
++        guard let failedAttempt = reconnectAttemptID, failedAttempt == attemptID,
++              let code = reconnectAttemptFailure, !reconnectAttemptFailureHandled else { return false }
++        let recoverable = reachedLiveState && (Self.recoverableTerminationCodes.contains(code)
++            || code == Self.deadPeerTerminationCode)
++        guard recoverable else {
++            reconnectAttemptFailureHandled = true
++            isReconnecting = false
++            reconnectAttemptID = nil
++            bridge?.emit(.connectionTerminated(errorCode: code, error: code == 0 ? nil : lastReconnectError))
++            await stop(cause: code == 0 ? .hostClosedClean : .hostError)
++            return true
++        }
++        // -1 reports only our failed link, so it cannot establish host intent.
++        if code == Self.deadPeerTerminationCode {
++            reconnectAttemptFailureHandled = true
++            return false
++        }
++        // A stale wall deadline (for example across sleep) must not consume the
++        // decision; the next pass re-derives it from the same awake-time budget.
++        guard let budgetDeadline, Date() < budgetDeadline else { return false }
++        reconnectAttemptFailureHandled = true
++        let runningAppID = await probeRunningAppID(until: budgetDeadline)
++        // A user stop or old asynchronous decision must never act on a replacement.
++        guard !Task.isCancelled, isStreaming, !stopInProgress,
++              reconnectAttemptID == failedAttempt, attemptID == failedAttempt,
++              reconnectAttemptFailure == code else { return false }
++        guard Self.pcEndedSession(runningAppID: runningAppID, appID: reconnectAppID) else { return false }
++        Diag.notice("The PC ended the session (code 0x\(String(UInt32(bitPattern: code), radix: 16)), "
++            + "now running app \(runningAppID ?? 0)) - ending the stream, not reconnecting.", "Stream")
++        isReconnecting = false
++        reconnectAttemptID = nil
++        await endStreamClosedByPC()
++        return true
+@@ -238,0 +337,5 @@
++        // Observe before teardown's input await; the transport remains observed
++        // through quiesce and is retired immediately before synchronous stop.
++        observeReconnectTermination()
++        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
++
+@@ -242,0 +346 @@
++        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
+@@ -256,0 +361,4 @@
++        let freshAttempt = attemptID
++        reconnectAttemptID = freshAttempt
++        reconnectAttemptFailure = nil
++        reconnectAttemptFailureHandled = false
+@@ -283 +391 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -288 +396 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -296 +404 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -309 +417 @@
+-            try checkAttempt(deadline: deadline)
++            try checkReconnectAttempt(freshAttempt, deadline: deadline)
+@@ -312 +420,6 @@
+-            lastReconnectError = Self.reconnectAttemptError(error, pcAnswered: pcAnswered)
++            observeReconnectTermination()
++            if reconnectAttemptFailure == nil,
++               let classified = Self.reconnectAttemptError(error, pcAnswered: pcAnswered) {
++                lastReconnectError = classified
++                lastReconnectTerminationCode = nil
++            }
+@@ -329,3 +442,3 @@
+-        guard isStreaming, !stopInProgress else {
+-            Diag.notice("reconnect: stop slipped in mid-handshake - "
+-                + "interrupting the freshly-built backend to kill the zombie connection", "Stream")
++        guard reconnectAttemptIsHealthy(freshAttempt) else {
++            Diag.notice("reconnect: replacement ended before success - "
++                + "interrupting the freshly-built backend", "Stream")
+@@ -337 +450,4 @@
+-        guard isStreaming, !stopInProgress, !Task.isCancelled else { return false }
++        guard reconnectAttemptIsHealthy(freshAttempt) else {
++            await tearDownSlippedInReconnect(fresh: fresh, net: net)
++            return false
++        }
+@@ -344,0 +461,16 @@
++    }
++
++    /// Actor-owned attempt state closes notification-before-stop and all await
++    /// windows; callers must commit success synchronously after the final check.
++    private func reconnectAttemptIsHealthy(_ attempt: UUID) -> Bool {
++        observeReconnectTermination()
++        return !Task.isCancelled && isStreaming && !stopInProgress
++            && reconnectAttemptID == attempt && attemptID == attempt
++            && reconnectAttemptFailure == nil
++    }
++
++    private func checkReconnectAttempt(_ attempt: UUID, deadline: Date) throws {
++        observeReconnectTermination()
++        try checkAttempt(deadline: deadline)
++        guard reconnectAttemptID == attempt, attemptID == attempt else { throw CancellationError() }
++        if let code = reconnectAttemptFailure { throw StreamError.sessionFailed(code) }
+@@ -392,0 +525,3 @@
++        // Atomic admission cutoff immediately before intentional transport stop.
++        // Previously admitted intent survives this stop and the network drain.
++        observeReconnectTermination(retiringSource: true)
+diff --git a/GlimmerEngine/Session/StreamSession+Start.swift b/GlimmerEngine/Session/StreamSession+Start.swift
+--- a/GlimmerEngine/Session/StreamSession+Start.swift
++++ b/GlimmerEngine/Session/StreamSession+Start.swift
+@@ -42,0 +43 @@
++        refreshPowerAssertion()
+@@ -180 +181 @@
+-        services.refreshActivity(videoDecoder?.presentSuppressed ?? false)
++        services.refreshActivity((videoDecoder ?? publicMedia?.video)?.presentSuppressed ?? false)
+diff --git a/GlimmerEngine/Session/StreamSession+Wake.swift b/GlimmerEngine/Session/StreamSession+Wake.swift
+--- a/GlimmerEngine/Session/StreamSession+Wake.swift
++++ b/GlimmerEngine/Session/StreamSession+Wake.swift
+@@ -31,0 +32 @@
++        wakeProbeID = nil
+@@ -58,0 +60,3 @@
++        let probeID = UUID()
++        let armedAttempt = attemptID
++        wakeProbeID = probeID
+@@ -67 +71 @@
+-            await self.finishWakeProbe(budgetMs: budgetMs)
++            await self.finishWakeProbe(budgetMs: budgetMs, probeID: probeID, armedAttempt: armedAttempt)
+@@ -75 +79,5 @@
+-    private func finishWakeProbe(budgetMs: UInt64) async {
++    private func finishWakeProbe(budgetMs: UInt64, probeID: UUID, armedAttempt: UUID) async {
++        // Replacement/stop may happen after the producer's cancellation guard
++        // and before this actor hop. A stale owner must not clear the new task.
++        guard !Task.isCancelled, wakeProbeID == probeID else { return }
++        wakeProbeID = nil
+@@ -76,0 +85,3 @@
++        // An independent reconnect may have replaced transport while this owner
++        // waited for the actor; its old liveness sample cannot judge the new one.
++        guard armedAttempt == attemptID else { return }
+diff --git a/GlimmerEngine/Session/StreamSession.swift b/GlimmerEngine/Session/StreamSession.swift
+--- a/GlimmerEngine/Session/StreamSession.swift
++++ b/GlimmerEngine/Session/StreamSession.swift
+@@ -193,2 +193,2 @@
+-    /// watchdog) and makes `handleHostTerminate` ignore re-entrant terminates
+-    /// fired by the dead/old backend mid-reconnect.
++    /// watchdog). Current replacement failures are retained for the episode;
++    /// source identity keeps old-backend teardown from failing its replacement.
+@@ -195,0 +196,11 @@
++    /// The observed transport, including the original during first backoff and
++    /// route refresh. Retained through retirement/drain until a fresh selection.
++    package var reconnectAttemptID: UUID?
++    /// Sticky even when notification reaches this actor before the producer has
++    /// latched backend interruption. Cleared only when selecting a new attempt.
++    package var reconnectAttemptFailure: Int32?
++    /// The episode classifies each transport's reason before another launch;
++    /// a PC reason upgrading local dead-peer reopens the bounded decision once.
++    package var reconnectAttemptFailureHandled = false
++    /// Explicit termination diagnostics survive generic connect/cancellation errors.
++    package var lastReconnectTerminationCode: Int32?
+@@ -232,0 +244,2 @@
++    /// Only this generation may consume the stored task or act on its liveness verdict.
++    package var wakeProbeID: UUID?
+diff --git a/GlimmerEngine/Video/VideoDecoder+Decode.swift b/GlimmerEngine/Video/VideoDecoder+Decode.swift
 --- a/GlimmerEngine/Video/VideoDecoder+Decode.swift
 +++ b/GlimmerEngine/Video/VideoDecoder+Decode.swift
 @@ -70,0 +71,3 @@

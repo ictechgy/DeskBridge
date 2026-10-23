@@ -35,18 +35,55 @@ enum MacHostFileWork {
 
     static func validateApplication(_ url: URL) throws {
         try Task.checkCancellation()
-        var code: SecStaticCode?
+        let requirement = try applicationRequirement()
+        let metadata = try signingMetadata(at: url, requirement: requirement)
+        guard metadata.matchesPinnedApplication else {
+            try Task.checkCancellation(); throw MacHostPolicy.Failure.untrustedApplication
+        }
+        try Task.checkCancellation()
+    }
+
+    static func applicationRequirement() throws -> SecRequirement {
         var requirement: SecRequirement?
-        let expression = "anchor apple generic and identifier \"\(MacHostPolicy.bundleIdentifier)\" and certificate leaf[subject.OU] = \"\(MacHostPolicy.signingTeam)\""
+        // Apple's Developer ID issuer and Application leaf extensions (TN3127):
+        // https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements
+        let expression = "anchor apple generic and identifier \"\(MacHostPolicy.bundleIdentifier)\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(MacHostPolicy.signingTeam)\""
+        guard SecRequirementCreateWithString(expression as CFString, [], &requirement) == errSecSuccess,
+              let requirement else { throw MacHostPolicy.Failure.untrustedApplication }
+        return requirement
+    }
+
+    struct SigningMetadata: Equatable, Sendable {
+        let identifier: String
+        let bundleIdentifier: String
+        let version: String
+        let executable: String
+
+        var matchesPinnedApplication: Bool {
+            identifier == MacHostPolicy.bundleIdentifier && bundleIdentifier == MacHostPolicy.bundleIdentifier &&
+                version == MacHostPolicy.sunshineVersion && executable == "Sunshine"
+        }
+    }
+
+    /// Always creates a new code object. Foundation caches Bundle metadata by URL,
+    /// so it cannot attest a replacement installed at a previously checked path.
+    static func signingMetadata(at url: URL, requirement: SecRequirement?) throws -> SigningMetadata {
+        try Task.checkCancellation()
+        var code: SecStaticCode?
+        var information: CFDictionary?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,
-              SecRequirementCreateWithString(expression as CFString, [], &requirement) == errSecSuccess,
-              let code, let requirement,
+              let code,
               SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSCheckNestedCode), requirement) == errSecSuccess,
-              let bundle = Bundle(url: url), bundle.bundleIdentifier == MacHostPolicy.bundleIdentifier,
-              bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == MacHostPolicy.sunshineVersion,
-              bundle.object(forInfoDictionaryKey: "CFBundleExecutable") as? String == "Sunshine"
+              SecCodeCopySigningInformation(code, [], &information) == errSecSuccess,
+              let information = information as? [String: Any],
+              let identifier = information[kSecCodeInfoIdentifier as String] as? String,
+              let propertyList = information[kSecCodeInfoPList as String] as? [String: Any],
+              let bundleIdentifier = propertyList["CFBundleIdentifier"] as? String,
+              let version = propertyList["CFBundleShortVersionString"] as? String,
+              let executable = propertyList["CFBundleExecutable"] as? String
         else { try Task.checkCancellation(); throw MacHostPolicy.Failure.untrustedApplication }
         try Task.checkCancellation()
+        return SigningMetadata(identifier: identifier, bundleIdentifier: bundleIdentifier, version: version, executable: executable)
     }
 
     static func requireAbsent(_ destination: URL) throws {

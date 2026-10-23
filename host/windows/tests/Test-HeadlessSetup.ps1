@@ -120,6 +120,80 @@ try {
     Assert-KnotInstallPolicy ([pscustomobject]@{installEnabled=$true;driverSafetyReviewStatus='accepted'}); $script:Checks++
     $removeSources=& $module { (${function:Remove-KnotVirtualDisplay}).ToString()+(${function:Remove-KnotVirtualDisplayCore}).ToString() }
     Assert (-not $removeSources.Contains('Assert-KnotInstallPolicy')) 'The install safety gate does not disable managed removal.'
+
+    # Execute the real manifest readers against fresh files, independent of build
+    # regex lint. Complete functions are extracted by AST without imports or any
+    # native/device entrypoint; their PSScriptRoot belongs only to this fixture.
+    $manifestRoot=Join-Path $root 'manifest-runtime'
+    [void][IO.Directory]::CreateDirectory($manifestRoot)
+    $manifestTokens=$null; $manifestErrors=$null
+    $manifestAst=[Management.Automation.Language.Parser]::ParseFile($modulePath,[ref]$manifestTokens,[ref]$manifestErrors)
+    Assert (@($manifestErrors).Count -eq 0) 'The production manifest function source parses without errors.'
+    $manifestNames=@('Read-KnotDependency','Assert-KnotInventory','Assert-KnotInstallPolicy','Get-KnotHeadlessAvailability')
+    $manifestFunctions=@($manifestAst.EndBlock.Statements | Where-Object { $_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -cin $manifestNames })
+    Assert ($manifestFunctions.Count -eq $manifestNames.Count) 'Extract exactly the four complete pure production manifest functions.'
+    $manifestSource="Set-StrictMode -Version 2.0`n"+(($manifestFunctions | ForEach-Object { $_.Extent.Text }) -join "`n")
+    $manifestModulePath=Join-Path $manifestRoot ('KnotManifestFixture'+[Guid]::NewGuid().ToString('N')+'.psm1')
+    [IO.File]::WriteAllText($manifestModulePath,$manifestSource,(New-Object Text.UTF8Encoding($true)))
+    $dependencyFixturePath=Join-Path $manifestRoot 'VirtualDisplayDependency.json'
+    $inventoryFixturePath=Join-Path $manifestRoot 'VirtualDisplayFiles.json'
+    [IO.File]::Copy((Join-Path (Split-Path $PSScriptRoot -Parent) 'VirtualDisplayDependency.json'),$dependencyFixturePath)
+    [IO.File]::Copy((Join-Path (Split-Path $PSScriptRoot -Parent) 'VirtualDisplayFiles.json'),$inventoryFixturePath)
+    $originalDependency=[IO.File]::ReadAllText($dependencyFixturePath)
+    $originalInventory=[IO.File]::ReadAllText($inventoryFixturePath)
+    $manifestModule=$null
+    try {
+        # Prefix exported names to avoid replacing the full module used below.
+        $manifestModule=Import-Module $manifestModulePath -Force -PassThru -Prefix ManifestFixture
+        $originalPins=& $manifestModule { Read-KnotDependency }
+        Assert ($originalPins.Dependency.sha256 -ceq ($originalDependency | ConvertFrom-Json).sha256 -and @($originalPins.Inventory.files).Count -eq 4) 'The unmodified source manifests pass actual runtime pin and inventory validation.'
+        & $manifestModule { param($inventory) Assert-KnotInventory $inventory } ($originalInventory | ConvertFrom-Json); $script:Checks++
+        $availability=& $manifestModule { Get-KnotHeadlessAvailability }
+        Assert (-not $availability.Enabled -and $availability.Reason -ceq 'upstream-ipc-review') 'Valid source manifests retain default-deny driver installation.'
+        foreach ($change in @(
+            [pscustomobject]@{Field='schema';Value=2},
+            [pscustomobject]@{Field='bytes';Value=132119},
+            [pscustomobject]@{Field='sha256';Value=('0'*64)},
+            [pscustomobject]@{Field='driverVersion';Value='0.0.0.0'},
+            [pscustomobject]@{Field='catalogSignerCertificateSha256';Value=('0'*64)},
+            [pscustomobject]@{Field='settingsSha256';Value='not-a-sha256'},
+            [pscustomobject]@{Field='settingsSha256';Value=('A'*64)},
+            [pscustomobject]@{Field='settingsSha256';Value=(('a'*64)+"`n")}
+        )) {
+            $candidate=$originalDependency | ConvertFrom-Json
+            $candidate.($change.Field)=$change.Value
+            [IO.File]::WriteAllText($dependencyFixturePath,($candidate | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+            Reject { & $manifestModule { Read-KnotDependency } } ('Actual runtime reader rejects a changed dependency field: '+$change.Field)
+            $availability=& $manifestModule { Get-KnotHeadlessAvailability }
+            Assert (-not $availability.Enabled -and $availability.Reason -ceq 'manifest-invalid') 'Invalid dependency bytes produce disabled manifest-invalid availability.'
+        }
+        [IO.File]::WriteAllText($dependencyFixturePath,$originalDependency,(New-Object Text.UTF8Encoding($false)))
+        foreach ($change in @('schema','file-count','path','duplicate','bytes-zero','bytes-limit','total-limit','sha256-format','sha256-newline')) {
+            $candidate=$originalInventory | ConvertFrom-Json
+            switch ($change) {
+                'schema' { $candidate.schema=2 }
+                'file-count' { $candidate.files=@($candidate.files[0..2]) }
+                'path' { $candidate.files[0].path='VirtualDisplayDriver/foreign.cat' }
+                'duplicate' { $candidate.files[1].path=$candidate.files[0].path }
+                'bytes-zero' { $candidate.files[0].bytes=0 }
+                'bytes-limit' { $candidate.files[0].bytes=300001 }
+                'total-limit' { $candidate.files[0].bytes=200000 }
+                'sha256-format' { $candidate.files[0].sha256='g'*64 }
+                'sha256-newline' { $candidate.files[0].sha256+="`n" }
+            }
+            [IO.File]::WriteAllText($inventoryFixturePath,($candidate | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding($false)))
+            Reject { & $manifestModule { param($inventory) Assert-KnotInventory $inventory } $candidate } ('Actual inventory validator rejects one changed inventory field: '+$change)
+            Reject { & $manifestModule { Read-KnotDependency } } ('Actual dependency reader rejects changed inventory: '+$change)
+            $availability=& $manifestModule { Get-KnotHeadlessAvailability }
+            Assert (-not $availability.Enabled -and $availability.Reason -ceq 'manifest-invalid') 'Invalid inventory bytes produce disabled manifest-invalid availability.'
+        }
+        [IO.File]::WriteAllText($inventoryFixturePath,$originalInventory,(New-Object Text.UTF8Encoding($false)))
+        $restored=& $manifestModule { Read-KnotDependency }
+        Assert ($restored.Dependency.installEnabled -is [bool] -and -not $restored.Dependency.installEnabled) 'Restoring source bytes leaves installation explicitly disabled.'
+        Reject { & $manifestModule { param($dependency) Assert-KnotInstallPolicy $dependency } $restored.Dependency } 'The isolated real policy still rejects the restored blocked driver.'
+    } finally {
+        if ($manifestModule) { Remove-Module -ModuleInfo $manifestModule -Force -ErrorAction SilentlyContinue }
+    }
     $valid=Make-Zip $files 'valid'
     $payload=Read-KnotDriverArchive $valid (Pin $valid) $inventory
     Assert ($payload.Count -eq 4) 'Accept the exact synthetic inventory.'

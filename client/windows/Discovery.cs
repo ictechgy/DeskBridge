@@ -58,7 +58,7 @@ namespace DeskBridge.Reverse
                     catch (SocketException error)
                     {
                         if (error.SocketErrorCode != SocketError.TimedOut && error.SocketErrorCode != SocketError.WouldBlock)
-                            throw new IOException("근처 Mac 검색을 완료하지 못했습니다. 연결 QR 또는 링크를 사용하세요.");
+                            throw new ReverseUserException(ReverseFailure.Discovery);
                     }
                 }
                 cancel.ThrowIfCancellationRequested();

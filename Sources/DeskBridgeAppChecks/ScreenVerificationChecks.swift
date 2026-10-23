@@ -92,8 +92,10 @@ func runScreenVerificationChecks(temporary: URL) async throws -> Int {
     try expect(!files.busy && !files.connected && files.errorMessage?.contains("SSH 포트") == true,
                "offline invalid-port file connect did not settle before SSH creation")
     let corruptDirectory = temporary.appendingPathComponent("synthetic-untrusted-storage-detail")
-    try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true)
-    try Data("synthetic corrupt settings".utf8).write(to: corruptDirectory.appendingPathComponent("settings.json"))
+    try FileManager.default.createDirectory(at: corruptDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    let corruptFile = corruptDirectory.appendingPathComponent("settings.json")
+    try Data("synthetic corrupt settings".utf8).write(to: corruptFile)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: corruptFile.path)
     let corrupt = DesktopModel(storageDirectory: corruptDirectory, identitySuite: suite)
     try expect(corrupt.errorMessage?.contains("설정을 읽지 못했습니다") == true &&
                corrupt.errorMessage?.contains(corruptDirectory.path) == false && !corrupt.canVerifyCurrentPC,

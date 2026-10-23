@@ -67,7 +67,8 @@ class VirtualDisplayPolicy(unittest.TestCase):
         self.folder.mkdir(parents=True)
         source = Path(__file__).resolve().parents[2] / 'host/windows'
         for name in ('VirtualDisplayDependency.json', 'VirtualDisplayFiles.json',
-                     'Knot-vdd_settings.xml', 'VirtualDisplay-NOTICE.txt', 'VirtualDisplayDeployments.json', 'HeadlessNative.cs'):
+                     'Knot-vdd_settings.xml', 'VirtualDisplay-NOTICE.txt', 'VirtualDisplayDeployments.json', 'HeadlessNative.cs',
+                     'HeadlessSetup.psm1', 'Show-HeadlessSetup.ps1'):
             (self.folder / name).write_bytes((source / name).read_bytes())
         self.pin = json.loads((self.folder / 'VirtualDisplayDependency.json').read_text())
 
@@ -124,6 +125,20 @@ class VirtualDisplayPolicy(unittest.TestCase):
                     self.write_pin({**self.pin, key: value})
                     with self.assertRaisesRegex(ValueError, 'must remain blocked'):
                         verify_virtual_display_inputs(self.root)
+
+    def test_powershell_pin_drift_is_rejected_before_packaging(self):
+        cases = [('HeadlessSetup.psm1', "$dependency.bytes -ne 132118", "$dependency.bytes -ne 132117"),
+                 ('HeadlessSetup.psm1', "$dependency.driverVersion -cne '11.30.4.434'", "$dependency.driverVersion -cne '1.2.3.4'"),
+                 ('Show-HeadlessSetup.ps1', "$dep.bytes -ne 132118", "$dep.bytes -ne 132117"),
+                 ('Show-HeadlessSetup.ps1', self.pin['url'], 'https://example.invalid/driver.zip')]
+        for name, old, new in cases:
+            path = self.folder / name
+            original = path.read_text(encoding='utf-8-sig')
+            self.assertIn(old, original)
+            path.write_text(original.replace(old, new), encoding='utf-8-sig')
+            with self.subTest(name=name, old=old), self.assertRaisesRegex(ValueError, 'PowerShell virtual display verification pin'):
+                verify_virtual_display_inputs(self.root)
+            path.write_text(original, encoding='utf-8-sig')
 
     def test_missing_policy_field_is_rejected(self):
         for key in ('installEnabled', 'driverSafetyReviewStatus', 'installBlockedReason'):

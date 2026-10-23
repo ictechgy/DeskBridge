@@ -3,19 +3,23 @@ import AppKit
 import CoreImage
 import DeskBridgeCore
 import ImageIO
+import UniformTypeIdentifiers
 
 enum ConnectionQRReader {
     static let maximumFileBytes = 8 * 1024 * 1024
+    static let supportedImageTypes: [UTType] = [.png, .jpeg, .heic, .tiff, .bmp]
     static func decode(data: Data) throws -> ConnectionInvitation {
         guard !data.isEmpty, data.count <= maximumFileBytes,
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let sourceType = CGImageSourceGetType(source),
+              supportedImageTypes.contains(where: { $0.identifier == sourceType as String }),
               CGImageSourceGetCount(source) == 1,
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               (1...8192).contains(width), (1...8192).contains(height), width * height <= 16_777_216,
               let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary)
-        else { throw AppFailure("8MB 이하의 QR 이미지 한 장을 선택하세요. PNG·JPEG를 사용할 수 있습니다.") }
+        else { throw AppFailure("8MB 이하의 QR 이미지 한 장을 선택하세요. PNG·JPEG·HEIC·TIFF·BMP를 사용할 수 있습니다.") }
         let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: nil,
                                   options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
         let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.int32Value ?? 1
@@ -36,7 +40,7 @@ enum ConnectionQRReader {
     @MainActor static func chooseImage() async throws -> ConnectionInvitation? {
         let panel = NSOpenPanel()
         panel.title = "PC 연결 QR 이미지 열기"
-        panel.allowedContentTypes = [.png, .jpeg, .heic, .tiff]
+        panel.allowedContentTypes = supportedImageTypes
         panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return try await decodeImage(at: url)
