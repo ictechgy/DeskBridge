@@ -33,31 +33,20 @@ extension StreamSession {
     /// Entry point for a host-initiated TERMINATION (routed here from
     /// `NativeBackend.connectionTerminated`). Classifies recoverable-vs-fatal and
     /// either drives a silent reconnect episode or tears down as before.
-    package func handleHostTerminate(code: Int32, from source: NativeBackend? = nil) async {
+    package func handleHostTerminate(code receivedCode: Int32, from source: NativeBackend? = nil) async {
         guard source == nil || source === backend,
               isStreaming, !stopInProgress else { return }
+        // Read the synchronous admission rather than trusting a queued raw code.
+        // Source-less wake requests have no host intent to contribute.
+        let code: Int32
+        if let source {
+            guard let admitted = bridge?.terminationIntent(from: source, attempt: attemptID) else { return }
+            code = admitted
+        } else {
+            code = receivedCode
+        }
         if isReconnecting {
-            // Notification precedes the producer's synchronous stopConnection().
-            // Retain this current replacement's failure across every await, even
-            // if its backend has not latched interrupted yet. Source-less wake
-            // requests and old-backend teardown cannot poison a new attempt.
-            if source != nil, reconnectAttemptID == attemptID {
-                if reconnectAttemptFailure == nil {
-                    reconnectAttemptFailure = code
-                    reconnectAttemptFailureHandled = false
-                    lastReconnectTerminationCode = code
-                    lastReconnectError = .sessionFailed(code)
-                    // This owner method also stops haptics/motion and revokes
-                    // controller feedback before retiring the callback epoch.
-                    publicInput?.prepareForReplacement(attempt: attemptID)
-                    let inp = input
-                    DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
-                    // Retire decoder callbacks from the failed transport while
-                    // retaining the session's failed-attempt identity for retry.
-                    bridge?.beginAttempt(UUID())
-                    bridge?.emit(.reconnecting)
-                }
-            }
+            if source != nil { retainReconnectTermination(code) }
             return
         }
         // The uplink is dead the instant the host closed - pause input so we
@@ -85,20 +74,6 @@ extension StreamSession {
             return
         }
 
-        // Our own dead-peer (-1) says nothing about the PC. A code the PC sent may
-        // mean it ended the session on purpose, so ask before relaunching anything.
-        if code != Self.deadPeerTerminationCode {
-            isReconnecting = true   // the probe owns the outcome; re-entrant terminates wait
-            let runningAppID = await probeRunningAppID()
-            isReconnecting = false
-            guard isStreaming, !stopInProgress else { return }
-            if Self.pcEndedSession(runningAppID: runningAppID, appID: reconnectAppID) {
-                Diag.notice("The PC ended the session (code 0x\(String(UInt32(bitPattern: code), radix: 16)), "
-                    + "now running app \(runningAppID ?? 0)) - ending the stream, not reconnecting.", "Stream")
-                await endStreamClosedByPC()
-                return
-            }
-        }
         await runReconnectEpisode(code: code, cause: Self.reconnectCause(code: code))
     }
 
@@ -159,7 +134,8 @@ extension StreamSession {
     /// once the attempts or the awake-time budget run out, tear down for real.
     private func runReconnectEpisode(code: Int32, cause: String, bannerText: String = "Reconnecting…") async {
         isReconnecting = true
-        reconnectAttemptID = nil
+        // Observe the original transport through backoff and route refresh too.
+        reconnectAttemptID = attemptID
         reconnectAttemptFailure = nil
         reconnectAttemptFailureHandled = false
         lastReconnectTerminationCode = nil
@@ -261,15 +237,42 @@ extension StreamSession {
         await stop(cause: .hostError)
     }
 
+    /// One actor-owned latch per observed transport. A late authenticated PC
+    /// reason can upgrade local link loss without repeating input/epoch teardown.
+    private func retainReconnectTermination(_ code: Int32) {
+        guard reconnectAttemptID == attemptID,
+              reconnectAttemptFailure == nil || (reconnectAttemptFailure == Self.deadPeerTerminationCode
+                  && code != Self.deadPeerTerminationCode) else { return }
+        let firstFailure = reconnectAttemptFailure == nil
+        reconnectAttemptFailure = code
+        reconnectAttemptFailureHandled = false
+        lastReconnectTerminationCode = code
+        lastReconnectError = .sessionFailed(code)
+        guard firstFailure else { return }
+        publicInput?.prepareForReplacement(attempt: attemptID)
+        let inp = input
+        DispatchQueue.main.async { MainActor.assumeIsolated { inp?.setReady(false) } }
+        bridge?.beginAttempt(UUID())
+        bridge?.emit(.reconnecting)
+    }
+
+    private func observeReconnectTermination(retiringSource: Bool = false) {
+        guard reconnectAttemptID == attemptID, let native = backend as? NativeBackend,
+              let code = bridge?.terminationIntent(from: native, attempt: attemptID,
+                                                    retiring: retiringSource) else { return }
+        retainReconnectTermination(code)
+    }
+
     /// Keep the live-termination policy inside the original bounded episode.
-    /// Only the first code from its still-current replacement owns this decision.
+    /// The first explicit PC reason owns this decision, upgrading local link loss.
     private func endReconnectAfterCurrentFailure(until budgetDeadline: Date?) async -> Bool {
+        observeReconnectTermination()
         guard let failedAttempt = reconnectAttemptID, failedAttempt == attemptID,
               let code = reconnectAttemptFailure, !reconnectAttemptFailureHandled else { return false }
-        reconnectAttemptFailureHandled = true
         let recoverable = reachedLiveState && (Self.recoverableTerminationCodes.contains(code)
             || code == Self.deadPeerTerminationCode)
         guard recoverable else {
+            reconnectAttemptFailureHandled = true
             isReconnecting = false
             reconnectAttemptID = nil
             bridge?.emit(.connectionTerminated(errorCode: code, error: code == 0 ? nil : lastReconnectError))
@@ -277,14 +280,22 @@ extension StreamSession {
             return true
         }
         // -1 reports only our failed link, so it cannot establish host intent.
-        guard code != Self.deadPeerTerminationCode,
-              let budgetDeadline, Date() < budgetDeadline else { return false }
+        if code == Self.deadPeerTerminationCode {
+            reconnectAttemptFailureHandled = true
+            return false
+        }
+        // A stale wall deadline (for example across sleep) must not consume the
+        // decision; the next pass re-derives it from the same awake-time budget.
+        guard let budgetDeadline, Date() < budgetDeadline else { return false }
+        reconnectAttemptFailureHandled = true
         let runningAppID = await probeRunningAppID(until: budgetDeadline)
         // A user stop or old asynchronous decision must never act on a replacement.
         guard !Task.isCancelled, isStreaming, !stopInProgress,
               reconnectAttemptID == failedAttempt, attemptID == failedAttempt,
               reconnectAttemptFailure == code else { return false }
         guard Self.pcEndedSession(runningAppID: runningAppID, appID: reconnectAppID) else { return false }
+        Diag.notice("The PC ended the session (code 0x\(String(UInt32(bitPattern: code), radix: 16)), "
+            + "now running app \(runningAppID ?? 0)) - ending the stream, not reconnecting.", "Stream")
         isReconnecting = false
         reconnectAttemptID = nil
         await endStreamClosedByPC()
@@ -306,9 +317,6 @@ extension StreamSession {
     /// once back up; throws when the PC now runs another app.
     private func reconnectInPlace(deadline: Date) async throws(TakeoverRequired) -> Bool {
         guard !Task.isCancelled, isStreaming, !stopInProgress, Date() < deadline else { return false }
-        // Old-backend notifications during refresh/drain belong to the transport
-        // being discarded, not the replacement that has not been selected yet.
-        reconnectAttemptID = nil
         await refreshReconnectAsk()
         guard !Task.isCancelled, isStreaming, !stopInProgress, Date() < deadline,
               let server = reconnectServer,
@@ -316,10 +324,16 @@ extension StreamSession {
               let appID = reconnectAppID,
               let win = presentation, let inp = input, let dec = videoDecoder else { return false }
 
+        // Freeze admitted host intent before intentional teardown. Notifications
+        // from the retired source are rejected; already-admitted ones survive drain.
+        observeReconnectTermination(retiringSource: true)
+        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
+
         // 1. Bring the dead connection fully down (idempotent - onTerminated
         //    already called stopConnection). Keeps the window/decoder/frozen
         //    frame, the bridge + event stream, and StreamBridgeContext.current.
         await teardownConnectionForReconnect()
+        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
 
         // H5: re-check after the teardown await. stop() flips isStreaming/
         // stopInProgress synchronously before its own first await, so a guard
@@ -393,8 +407,11 @@ extension StreamSession {
             try checkReconnectAttempt(freshAttempt, deadline: deadline)
         } catch {
             Diag.notice("reconnect attempt failed: \(error, privacy: .private)", "Stream")
-            if lastReconnectTerminationCode == nil {
-                lastReconnectError = Self.reconnectAttemptError(error, pcAnswered: pcAnswered)
+            observeReconnectTermination()
+            if reconnectAttemptFailure == nil,
+               let classified = Self.reconnectAttemptError(error, pcAnswered: pcAnswered) {
+                lastReconnectError = classified
+                lastReconnectTerminationCode = nil
             }
             fresh.interruptConnection()
             await net.shutdown()
@@ -436,12 +453,14 @@ extension StreamSession {
     /// Actor-owned attempt state closes notification-before-stop and all await
     /// windows; callers must commit success synchronously after the final check.
     private func reconnectAttemptIsHealthy(_ attempt: UUID) -> Bool {
-        !Task.isCancelled && isStreaming && !stopInProgress
+        observeReconnectTermination()
+        return !Task.isCancelled && isStreaming && !stopInProgress
             && reconnectAttemptID == attempt && attemptID == attempt
             && reconnectAttemptFailure == nil
     }
 
     private func checkReconnectAttempt(_ attempt: UUID, deadline: Date) throws {
+        observeReconnectTermination()
         try checkAttempt(deadline: deadline)
         guard reconnectAttemptID == attempt, attemptID == attempt else { throw CancellationError() }
         if let code = reconnectAttemptFailure { throw StreamError.sessionFailed(code) }

@@ -100,7 +100,13 @@ package final class NativeConnectionEvents: ConnectionEvents, @unchecked Sendabl
     }
 
     package func connectionTerminated(code: Int32) {
-        guard isCurrent else { return }
+        // A failed decoder epoch does not retire the still-observed transport.
+        // Admission must precede queued actor delivery and intentional teardown.
+        if let bridge, let backend {
+            guard bridge.admitTermination(code: code, from: backend, attempt: attempt) else { return }
+        } else {
+            guard isCurrent else { return }
+        }
         if code == 0 {
             Diag.notice("connection terminated cleanly (native)", Self.logCategory)
         } else {

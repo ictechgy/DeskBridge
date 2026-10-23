@@ -254,6 +254,10 @@ final class StreamBridgeContext: @unchecked Sendable {
     private var attemptID = UUID()
     private let sourceLock = NSLock()
     private var eventSource: ObjectIdentifier?
+    private var terminationSource: ObjectIdentifier?
+    private var terminationAttempt: UUID?
+    private var terminationEventsRetired = true
+    private var admittedTerminationCode: Int32?
     private var audioEventsQuiesced = false
     let publicEvents: SessionEventSource?
     var eventContinuation: AsyncStream<StreamEvent>.Continuation?
@@ -548,7 +552,7 @@ fixture = fixture.replace("__VIDEO_FAILURE_CLOSURE__", block(pipeline, "receiver
 fixture = fixture.replace("__BRIDGE_METHODS__", "\n".join(
     block(bridge, signature).replace("package func", "func", 1)
     for signature in ("package func beginAttempt(", "package func setEventSource(",
-                      "package func acceptsEvent(", "package func emit(")))
+                      "package func acceptsEvent(", "package func admitTermination(", "package func terminationIntent(", "package func emit(")))
 fixture = fixture.replace("    func wireVideoFailure", block(pipeline, "func wireVideoControl(") + "\n    func wireVideoFailure", 1)
 queue_sources = [ENGINE / "Network" / name for name in ("RtpAudioQueue.swift", "RtpAudioQueue+Fec.swift")]
 with tempfile.TemporaryDirectory(prefix="knot-media-lifecycle-", dir="/tmp") as directory:
@@ -795,7 +799,7 @@ attempt_tail = attempt_tail[:-1]
 # Full production consumer wiring is checked in addition to executing slices.
 assert "package var reconnectAttemptID: UUID?" in session_source
 assert "package var reconnectAttemptFailure: Int32?" in session_source
-assert reconnect.index("reconnectAttemptID = nil", reconnect.index("private func reconnectInPlace")) < selection_start
+assert "observeReconnectTermination(retiringSource: true)" in block(reconnect, "private func reconnectInPlace(")
 assert selection.index("attemptID = UUID()") < selection.index("reconnectAttemptID = freshAttempt")
 assert "try checkReconnectAttempt(freshAttempt, deadline: deadline)" in block(reconnect, "private func reconnectInPlace(")
 assert "enqueueSessionEvent { await session.handleHostTerminate(code: code, from: backend) }" in events_source
@@ -870,10 +874,20 @@ final class TelemetryCounters: Sendable {
     static let shared = TelemetryCounters()
     let p2 = P2(), reconnectTotal = Counter()
 }
+final class EpochSink: Sendable { func beginAttempt(_ id: UUID) {} }
 final class Bridge: @unchecked Sendable {
     weak var session: StreamSession?
     let values = Locked<[String]>([])
-    func beginAttempt(_ id: UUID) {}
+    private var attemptID = UUID()
+    private let sourceLock = NSLock()
+    private var eventSource: ObjectIdentifier?
+    private var terminationSource: ObjectIdentifier?
+    private var terminationAttempt: UUID?
+    private var terminationEventsRetired = true
+    private var admittedTerminationCode: Int32?
+    private var audioEventsQuiesced = false
+    let publicEvents: EpochSink? = nil
+    __BRIDGE_INTENT_METHODS__
     func emit(_ event: StreamEvent) {
         values.use { value in
             switch event {
@@ -888,8 +902,11 @@ final class NativeConnectionEvents: @unchecked Sendable {
     static let logCategory = "inert"
     weak var bridge: Bridge?, backend: NativeBackend?
     private let sessionEvents = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
-    private var isCurrent: Bool { true } // Session actor still checks actual backend identity.
-    init(bridge: Bridge, backend: NativeBackend) { self.bridge = bridge; self.backend = backend }
+    private let attempt: UUID
+    private var isCurrent: Bool { bridge?.acceptsEvent(from: backend, attempt: attempt) ?? false }
+    init(bridge: Bridge, backend: NativeBackend) {
+        self.bridge = bridge; self.backend = backend; self.attempt = bridge.currentAttempt
+    }
     private func emit(_ event: StreamEvent) { bridge?.emit(event) }
     __EVENT_METHODS__
     func drain() async { let tail = sessionEvents.withLock { $0 }; await tail?.value }
@@ -1013,7 +1030,9 @@ actor StreamSession {
     nonisolated var uptimeSeconds: Double { rearmHook.use { $0 }?(); return 1 }
     init(schedule: Schedule, bridge: Bridge, presentation: Presentation) {
         self.schedule = schedule; self.clock = SyntheticClock(schedule: schedule); self.bridge = bridge; self.presentation = presentation
+        bridge.setEventSource(backend, attempt: attemptID)
     }
+    func refreshReconnectAsk() async {}
     func setWaitingForVideo(_ waiting: Bool) {}; func resetStallLatches() {}
     func makeBackend() -> NativeBackend { NativeBackend() }
     func makeNetwork(_ server: Int) -> NetworkClient {
@@ -1030,12 +1049,16 @@ actor StreamSession {
     __EPISODE__
     __TEARDOWN__
     func reconnectInPlace(deadline: Date) async throws(TakeoverRequired) -> Bool {
-        reconnectAttemptID = nil
+        await refreshReconnectAsk()
+        observeReconnectTermination(retiringSource: true)
+        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
         await teardownConnectionForReconnect()
+        if await endReconnectAfterCurrentFailure(until: deadline) { return false }
         guard !Task.isCancelled, isStreaming, !stopInProgress else { return false }
         __SELECTION__
         let dec = Resource(), backendConfig = BackendStreamConfig()
         let receiver = Receiver(), events = NativeConnectionEvents(bridge: bridge!, backend: fresh)
+        bridge?.setEventSource(fresh, attempt: freshAttempt)
         fresh.videoReceiver = receiver; fresh.videoSink = dec; fresh.wire(receiver: receiver, events: events)
         await schedule.register(fresh, dec, events)
         let net = NetworkClient(schedule: schedule, backend: fresh, events: events)
@@ -1074,7 +1097,9 @@ __BUDGET__
             if mode == .allFatal { expect(values == Array(repeating: "reconnecting", count: 4) + ["terminated"], "each failed attempt reasserts recovery without a false success") }
             if mode == .cancel || mode == .taskCancel { expect(stats.1 == [1], "cancel cleanup remains singular") }
             if succeeds {
-                await session.handleHostTerminate(code: -1, from: await session.backend)
+                let live = await session.backend, liveAttempt = await session.attemptID
+                _ = bridge.admitTermination(code: -1, from: live, attempt: liveAttempt)
+                await session.handleHostTerminate(code: -1, from: live)
                 expect(await session.state().1 == 1, "post-commit current failure follows ordinary live handling")
             }
             await session.finalCleanup()
@@ -1085,6 +1110,10 @@ __BUDGET__
     }
 }
 '''
+reconnect_fixture = reconnect_fixture.replace("__BRIDGE_INTENT_METHODS__", "\n".join(
+    block(bridge, signature).replace("package ", "") for signature in (
+        "package var currentAttempt:", "package func beginAttempt(", "package func setEventSource(",
+        "package func acceptsEvent(", "package func admitTermination(", "package func terminationIntent(")))
 reconnect_fixture = reconnect_fixture.replace("__VIDEO_FAILURE_CLOSURE__", block(pipeline, "receiver.onReceiveFailed ="))
 reconnect_fixture = reconnect_fixture.replace("__BACKEND_METHODS__", "\n".join(
     block(backend, signature).replace("package func", "func", 1)
@@ -1097,6 +1126,7 @@ reconnect_fixture = reconnect_fixture.replace("__ATTEMPT_METHODS__", "\n".join(
     block(reconnect, signature).replace("package ", "") for signature in ("private func reconnectAttemptIsHealthy(",
                                                 "private func checkReconnectAttempt(", "private func tearDownSlippedInReconnect(",
                                                 "private func endReconnectAfterCurrentFailure(", "private func probeRunningAppID(",
+                                                "private func retainReconnectTermination(", "private func observeReconnectTermination(",
                                                 "package static func pcEndedSession(")))
 reconnect_fixture = reconnect_fixture.replace("__END_CLOSED__", block(reconnect, "private func endStreamClosedByPC("))
 reconnect_fixture = reconnect_fixture.replace("__EPISODE__", block(reconnect, "private func runReconnectEpisode("))
@@ -1169,6 +1199,10 @@ final class StreamBridgeContext: @unchecked Sendable {
     private let sourceLock = NSLock()
     private var attemptID = UUID()
     private var eventSource: ObjectIdentifier?
+    private var terminationSource: ObjectIdentifier?
+    private var terminationAttempt: UUID?
+    private var terminationEventsRetired = true
+    private var admittedTerminationCode: Int32?
     private var audioEventsQuiesced = false
     let publicEvents: SessionEventSource?
     var eventContinuation: AsyncStream<StreamEvent>.Continuation?
@@ -1196,6 +1230,7 @@ public final class StreamSession: @unchecked Sendable {
         self.bridge = bridge; attemptID = attempt; reconnectAttemptID = attempt
     }
     @MainActor __TERMINATION_PREFIX__
+    @MainActor __RETAIN_TERMINATION__
     @MainActor __WIRE__
 }
 @main struct PublicRecoveryChecks {
@@ -1228,6 +1263,7 @@ public final class StreamSession: @unchecked Sendable {
         session.wireMediaCallbacks(setup: media, bridge: bridge, attempt: attempt)
         let failedFrame = video.onFirstDecodedFrame!
         bridge.emit(.reconnecting); failedFrame()
+        _ = bridge.admitTermination(code: -1, from: session.backend, attempt: attempt)
         await session.handleHostTerminate(code: -1, from: session.backend)
         let retiredEpoch = bridge.currentAttempt
         try expect(retiredEpoch != attempt, "first current failure retires callback epoch")
@@ -1238,7 +1274,8 @@ public final class StreamSession: @unchecked Sendable {
         failedFrame()
         bridge.emit(.firstFrame, source: session.backend, attempt: attempt)
         try expect(deliveredFrames == 1, "late failed decoder frame never reaches presentation callback")
-        await session.handleHostTerminate(code: -2, from: session.backend)
+        _ = bridge.admitTermination(code: -1, from: session.backend, attempt: attempt)
+        await session.handleHostTerminate(code: -1, from: session.backend)
         try expect(bridge.currentAttempt == retiredEpoch && session.reconnectAttemptFailure == -1,
                    "duplicate failure neither resets epoch nor replaces first failure")
         let next = UUID()
@@ -1272,6 +1309,7 @@ public final class StreamSession: @unchecked Sendable {
             if mode == "stopped" { session.isStreaming = false }
             if mode == "old-drain" { session.reconnectAttemptID = nil }
             let producer: NativeBackend? = mode == "wake" ? nil : (mode == "stale" ? NativeBackend() : session.backend)
+            if let producer { _ = bridge.admitTermination(code: -1, from: producer, attempt: id) }
             await session.handleHostTerminate(code: -1, from: producer)
             try expect(bridge.currentAttempt == id && session.reconnectAttemptFailure == nil,
                        "\(mode) does not retire epoch or latch failure")
@@ -1289,11 +1327,12 @@ recovery_fixture = recovery_fixture.replace("__EVENT_SOURCE__", recovery_sources
 recovery_fixture = recovery_fixture.replace("__UPDATE__", block(recovery_sources["public"], "public struct Update:"))
 recovery_fixture = recovery_fixture.replace("__CONSTANTS__", recovery_constants)
 recovery_fixture = recovery_fixture.replace("__TERMINATION_PREFIX__", recovery_prefix)
+recovery_fixture = recovery_fixture.replace("__RETAIN_TERMINATION__", block(reconnect, "private func retainReconnectTermination("))
 recovery_fixture = recovery_fixture.replace("__WIRE__", block(recovery_sources["start"], "package func wireMediaCallbacks("))
 recovery_fixture = recovery_fixture.replace("__BRIDGE_METHODS__", "\n".join(
     block(recovery_sources["bridge"], signature) for signature in (
         "package var currentAttempt:", "package func beginAttempt(", "package func setEventSource(",
-        "package func acceptsEvent(", "package func emit(")))
+        "package func acceptsEvent(", "package func admitTermination(", "package func terminationIntent(", "package func emit(")))
 recovery_fixture = recovery_fixture.replace("package ", "").replace("import GlimmerEngine\n", "")
 with tempfile.TemporaryDirectory(prefix="knot-public-recovery-", dir="/tmp") as directory:
     temporary = Path(directory)
@@ -1319,11 +1358,11 @@ lifecycle_source = (ENGINE / "Session/StreamSession+Lifecycle.swift").read_text(
 inbound_source = (ENGINE / "Network/EnetControlChannel+Inbound.swift").read_text()
 input_attempts = (ENGINE / "Input/StreamInput+Attempts.swift").read_text()
 input_source = (ENGINE / "Input/StreamInput.swift").read_text()
-first_failure = block(reconnect, "if reconnectAttemptFailure == nil {")
+first_failure = block(reconnect, "private func retainReconnectTermination(")
 assert first_failure.index("publicInput?.prepareForReplacement(attempt: attemptID)") < first_failure.index("bridge?.beginAttempt(UUID())")
 assert first_failure.index("DispatchQueue.main.async") < first_failure.index("bridge?.beginAttempt(UUID())")
 assert "lastReconnectError = .sessionFailed(code)" in first_failure
-assert "if lastReconnectTerminationCode == nil" in block(reconnect, "private func reconnectInPlace(")
+assert "if reconnectAttemptFailure == nil," in block(reconnect, "private func reconnectInPlace(")
 assert "endReconnectAfterCurrentFailure(until: budget.deadline())" in block(reconnect, "private func runReconnectEpisode(")
 policy_fixture = reconnect_fixture[:reconnect_fixture.index("@main struct Checks")]
 policy_fixture = policy_fixture.replace("final class NativeBackend: @unchecked Sendable {", """
@@ -1384,7 +1423,7 @@ input_fixture = input_fixture.replace("__PREPARE_INPUT__", block(input_attempts,
 input_fixture = input_fixture.replace("__ACTIVATE_INPUT__", block(input_source, "func activate(_ value: Bool, attempt:"))
 policy_fixture = policy_fixture[:input_start] + input_fixture + policy_fixture[input_end:]
 policy_fixture = policy_fixture.replace("values.use { value in\n            switch event", "values.use { value in\n            switch event", 1)
-policy_fixture = policy_fixture.replace("    func beginAttempt(_ id: UUID) {}", "    func beginAttempt(_ id: UUID) { inputTrace.use { $0.append(\"epoch\") } }", 1)
+policy_fixture = policy_fixture.replace("            attemptID = id\n", "            inputTrace.use { $0.append(\"epoch\") }\n            attemptID = id\n", 1)
 policy_fixture = policy_fixture.replace("    let values = Locked<[String]>([])", "    let values = Locked<[String]>([])\n    let terminations = Locked<[(Int32, Int32?)]>([])", 1)
 policy_fixture = policy_fixture.replace("            case .connectionTerminated: value.append(\"terminated\")", """            case .connectionTerminated(let code, let error):
                 var errorCode: Int32?
@@ -1539,3 +1578,240 @@ with tempfile.TemporaryDirectory(prefix="knot-reconnect-policy-", dir="/tmp") as
                                                               ENGINE / "Session/StreamSession+Lifecycle.swift", ENGINE / "Session/NativeConnectionEvents.swift",
                                                               ENGINE / "Session/NativeBackend+Pipeline.swift", ENGINE / "Network/EnetControlChannel+Inbound.swift",
                                                               ENGINE / "Input/StreamInput.swift", ENGINE / "Input/StreamInput+Attempts.swift")}}))
+
+# Admission is transport-scoped, independent of decoder epochs and delayed actor
+# delivery. Reuse the actual episode/bridge/adapter, and both real native failure
+# closures plus the actual ENet once latch. All scheduling/resources remain inert.
+control_loop = (ENGINE / "Network/EnetControlChannel+ControlLoop.swift").read_text()
+intent_fixture = policy_fixture[:policy_fixture.index("@main struct TerminationPolicyChecks")]
+intent_fixture = intent_fixture.replace("final class Terminator {", '''typealias DiagMessage = Message
+final class Terminator {
+    static let logCategory = "inert-host-control"
+    let lock = NSLock()
+    var disconnected = false
+    func withState<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
+''' + block(control_loop, "func declarePeerDead("), 1)
+intent_fixture = intent_fixture.replace("        enet.onTerminated?(code)", '''        let callback = enet.onTerminated
+        enet.onTerminated = { value in hostDeliveries.use { $0 += 1 }; callback?(value) }
+        enet.declarePeerDead(code: code, reason: "inert authenticated host termination")
+        enet.declarePeerDead(code: code, reason: "duplicate same ENet producer")''', 1)
+intent_fixture = intent_fixture.replace("final class NativeBackend: @unchecked Sendable {", "let hostDeliveries = Locked(0)\nfinal class NativeBackend: @unchecked Sendable {", 1)
+intent_fixture = intent_fixture.replace("case healthy,", "case originalBackoff, originalRefresh, queuedRetirement, retiredOriginal, localThenPC, pcThenLocal, healthy,", 1)
+intent_fixture = intent_fixture.replace("    func refreshReconnectAsk() async {}", "    func refreshReconnectAsk() async { await schedule.refresh() }", 1)
+intent_fixture = intent_fixture.replace("    func run() async {", '''    func originalTransport() -> (NativeBackend, NativeConnectionEvents, UUID) {
+        (backend, NativeConnectionEvents(bridge: bridge!, backend: backend), attemptID)
+    }
+    func staleDecisionCheck() async -> (Bool, Bool) {
+        isReconnecting = true; reconnectAttemptID = attemptID
+        _ = bridge?.admitTermination(code: Int32(bitPattern: 0x80030023), from: backend, attempt: attemptID)
+        let expired = await endReconnectAfterCurrentFailure(until: .distantPast)
+        let pending = !reconnectAttemptFailureHandled
+        let closed = await endReconnectAfterCurrentFailure(until: Date().addingTimeInterval(2))
+        return (!expired && pending, closed)
+    }
+    func holdConsumer(entered: DispatchSemaphore, release: DispatchSemaphore) { entered.signal(); wait(release) }
+    func run() async {''', 1)
+intent_fixture = intent_fixture.replace("    func setSession(_ session: StreamSession) { self.session = session }", '''    var original: (NativeBackend, NativeConnectionEvents, UUID)?
+    func setSession(_ session: StreamSession) async {
+        self.session = session; original = await session.originalTransport()
+    }
+    func fireOriginal(retireBeforeDelivery: Bool = false, retireBeforeAdmission: Bool = false) async {
+        let (backend, events, attempt) = original!
+        let bridge = events.bridge!
+        if retireBeforeAdmission { _ = bridge.terminationIntent(from: backend, attempt: attempt, retiring: true) }
+        if retireBeforeDelivery {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0), session = self.session!
+            Task.detached { await session.holdConsumer(entered: entered, release: release) }; wait(entered)
+            backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+            precondition(bridge.terminationIntent(from: backend, attempt: attempt, retiring: true) == Int32(bitPattern: 0x80030023), "admitted intent survives atomic retirement")
+            release.signal()
+        } else {
+            backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+        }
+        await events.drain()
+    }
+    func refresh() async {
+        await Task.yield() // Actual route provider suspends on MainActor.
+        if mode == .originalRefresh { await fireOriginal() }
+        if mode == .retiredOriginal { await fireOriginal(retireBeforeAdmission: true) }
+    }''', 1)
+intent_fixture = intent_fixture.replace("        sleepCalls += 1\n", '''        sleepCalls += 1
+        if sleepCalls == 1 && mode == .originalBackoff { await fireOriginal() }
+        if sleepCalls == 1 && mode == .queuedRetirement { await fireOriginal(retireBeforeDelivery: true) }
+''', 1)
+intent_fixture = intent_fixture.replace("        probeCalls += 1\n", '''        probeCalls += 1
+        if [.originalBackoff, .originalRefresh, .queuedRetirement, .localThenPC, .pcThenLocal].contains(mode) { return 0 }
+''', 1)
+intent_fixture = intent_fixture.replace("        let index = setupCount\n", '''        let index = setupCount
+        if index == 1 && (mode == .localThenPC || mode == .pcThenLocal) {
+            let entered = DispatchSemaphore(value: 0), release = DispatchSemaphore(value: 0), session = self.session!
+            Task.detached { await session.holdConsumer(entered: entered, release: release) }; wait(entered)
+            let receiver = backend.videoReceiver!
+            if mode == .localThenPC {
+                stopHook.use { hook in hook = {
+                    stopHook.use { $0 = nil }
+                    backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+                } }
+                receiver.onReceiveFailed?()
+            } else {
+                stopHook.use { hook in hook = { stopHook.use { $0 = nil }; receiver.onReceiveFailed?() } }
+                backend.hostTermination(Int32(bitPattern: 0x80030023), events: events)
+            }
+            release.signal(); await events.drain()
+            let retained = await session.state().2
+            precondition(retained == Int32(bitPattern: 0x80030023), "authenticated PC reason outranks local video failure in either order")
+            return
+        }
+''', 1)
+# Bind the inert prelude to the complete production retirement/check order.
+actual_rebuild = block(reconnect, "private func reconnectInPlace(")
+assert actual_rebuild.index("await refreshReconnectAsk()") < actual_rebuild.index("observeReconnectTermination(retiringSource: true)")
+assert actual_rebuild.index("observeReconnectTermination(retiringSource: true)") < actual_rebuild.index("await teardownConnectionForReconnect()")
+assert actual_rebuild.index("await teardownConnectionForReconnect()") < actual_rebuild.index("endReconnectAfterCurrentFailure(until: deadline)", actual_rebuild.index("await teardownConnectionForReconnect()")) < actual_rebuild.index("let fresh = makeBackend()")
+intent_fixture += r'''
+@main struct TransportIntentChecks {
+    static func main() async {
+        var checks = 0
+        func expect(_ value: Bool, _ name: String) { precondition(value, name); checks += 1 }
+        for mode: Schedule.Mode in [.originalBackoff, .originalRefresh, .queuedRetirement, .retiredOriginal, .localThenPC, .pcThenLocal] {
+            inputTrace.use { $0 = [] }; hostDeliveries.use { $0 = 0 }
+            let schedule = Schedule(mode), bridge = Bridge(), presentation = await MainActor.run { Presentation() }
+            let session = StreamSession(schedule: schedule, bridge: bridge, presentation: presentation)
+            bridge.session = session; await schedule.setSession(session)
+            await session.run()
+            let stats = await schedule.policyStats(), values = bridge.values.use { $0 }
+            let original = mode == .originalBackoff || mode == .originalRefresh || mode == .queuedRetirement
+            let retired = mode == .retiredOriginal
+            expect(stats.2 == (original ? 0 : 1), "original PC close is resolved before replacement selection")
+            expect(stats.0 == (retired ? 0 : 1), "only admitted PC intent triggers one bounded probe")
+            expect(stats.1 == (original ? [] : ["resume"]), "a Force Stop cannot issue a new launch")
+            expect(values.contains("reconnected") == retired, "explicitly retired old producer cannot poison healthy replacement")
+            expect(hostDeliveries.use { $0 } == 1, "ENet once latch permits one real host callback")
+            expect(await session.ownershipReleased() == !retired, "PC stop relinquishes host cancellation ownership")
+            await session.finalCleanup()
+            expect(await schedule.stats().1.allSatisfy { $0 == 1 }, "real backend drain cleans every inert sink once")
+        }
+        let staleSchedule = Schedule(.originalBackoff), staleBridge = Bridge()
+        let stalePresentation = await MainActor.run { Presentation() }
+        let staleSession = StreamSession(schedule: staleSchedule, bridge: staleBridge, presentation: stalePresentation)
+        staleBridge.session = staleSession; await staleSchedule.setSession(staleSession)
+        let staleResult = await staleSession.staleDecisionCheck()
+        expect(staleResult.0, "stale deadline does not consume unprobed PC intent")
+        expect(staleResult.1, "fresh deadline from original budget resolves retained PC intent")
+        expect(await staleSchedule.policyStats().0 == 1, "only valid refreshed deadline starts a probe")
+        // A late callback from a fully retired source cannot alter either its
+        // retained snapshot or a new transport's admission state.
+        let bridge = Bridge(), old = NativeBackend(), fresh = NativeBackend(), oldID = UUID(), freshID = UUID()
+        bridge.setEventSource(old, attempt: oldID)
+        expect(bridge.admitTermination(code: -1, from: old, attempt: oldID), "current local reason admitted")
+        bridge.beginAttempt(UUID())
+        expect(bridge.admitTermination(code: Int32(bitPattern: 0x80030023), from: old, attempt: oldID), "PC intent survives decoder epoch fence")
+        let code = bridge.terminationIntent(from: old, attempt: oldID, retiring: true)
+        expect(code == Int32(bitPattern: 0x80030023), "retirement freezes authenticated reason")
+        expect(!bridge.admitTermination(code: 0, from: old, attempt: oldID), "retired source rejected")
+        expect(bridge.terminationIntent(from: old, attempt: oldID) == code, "retirement preserves admitted snapshot through drain")
+        bridge.setEventSource(fresh, attempt: freshID)
+        expect(!bridge.admitTermination(code: 0, from: old, attempt: oldID), "old source cannot affect new attempt")
+        expect(bridge.terminationIntent(from: fresh, attempt: freshID) == nil, "fresh attempt starts without old host evidence")
+        expect(bridge.admitTermination(code: Int32(bitPattern: 0x80030023), from: fresh, attempt: freshID), "fresh PC reason accepted")
+        expect(bridge.admitTermination(code: Int32(bitPattern: 0x80030013), from: fresh, attempt: freshID), "duplicate PC reason admitted without replacement")
+        expect(bridge.terminationIntent(from: fresh, attempt: freshID) == Int32(bitPattern: 0x80030023), "first explicit PC reason remains diagnostic owner")
+        print("{\"status\":\"passed\",\"currentTransportIntentChecks\":\(checks),\"scope\":\"actual bridge admission/retirement, ordered native adapter, native video/control producers and ENet once latch, bounded episode/route refresh/drain/probe/request selector; inert resources only\"}")
+    }
+}
+'''
+intent_fixture = intent_fixture.replace("package ", "")
+with tempfile.TemporaryDirectory(prefix="knot-current-intent-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"; source.write_text(intent_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"currentTransportIntentFixtureSHA256": hashlib.sha256(intent_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in (ENGINE / "Session/StreamSession.swift", ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamBridgeContext.swift", ENGINE / "Session/NativeConnectionEvents.swift", ENGINE / "Session/NativeBackend+Pipeline.swift", ENGINE / "Network/EnetControlChannel+ControlLoop.swift")}}))
+
+# A later attempt's real deadline/certificate failure supersedes earlier local
+# link loss. The same-attempt explicit reason and unclassified cancellation stay
+# intact. Execute actual resets/catch classifier/producers and public reducer.
+deadline_source = (ENGINE / "Network/StreamAttempt.swift").read_text()
+endpoint_source = (ENGINE / "Network/NetworkClient+Endpoints.swift").read_text()
+diagnostic_fixture = recovery_fixture[:recovery_fixture.index("@main struct PublicRecoveryChecks")]
+reset_start = reconnect.index("        attemptID = UUID()", reconnect.index("private func reconnectInPlace("))
+reset_end = reconnect.index("        publicInput?.rebind", reset_start)
+catch_body_start = reconnect.index("            observeReconnectTermination()", reconnect.index('Diag.notice("reconnect attempt failed:'))
+catch_body_end = reconnect.index("            fresh.interruptConnection()", catch_body_start)
+giveup_start = reconnect.index("        bridge?.emit(.connectionTerminated(errorCode: lastReconnectTerminationCode ?? code,")
+giveup_end = reconnect.index("\n        await stop", giveup_start)
+diagnostic_methods = "\n" + block(reconnect, "package static func reconnectAttemptError(").replace("package ", "")
+diagnostic_methods += "\n    @MainActor " + block(reconnect, "private func observeReconnectTermination(")
+diagnostic_methods += "\n    @MainActor func selectNextAttempt() {\n" + reconnect[reset_start:reset_end] + "        bridge?.setEventSource(backend, attempt: attemptID)\n    }\n"
+diagnostic_methods += "    @MainActor func recordConnectCatch(_ error: Error, pcAnswered: Bool) {\n" + reconnect[catch_body_start:catch_body_end] + "    }\n"
+diagnostic_methods += "    @MainActor func giveUp(code: Int32) {\n" + reconnect[giveup_start:giveup_end] + "\n    }\n"
+diagnostic_fixture = diagnostic_fixture.replace("    @MainActor func handleHostTerminate(", diagnostic_methods + "    @MainActor func handleHostTerminate(", 1)
+diagnostic_fixture += "\nenum DeadlineProducer {\n" + block(deadline_source, "package static func checkDeadline(").replace("package ", "") + "\n}\n"
+diagnostic_fixture += "\nenum PairedFailureProducer {\n" + block(endpoint_source, "static func classifyPairedPathFailure(") + "\n" + block(endpoint_source, "static func isCertChange(") + "\n}\n"
+diagnostic_fixture += r'''
+@main struct DiagnosticScopeChecks {
+    @MainActor static func main() async throws {
+        var checks = 0
+        func expect(_ value: Bool, _ name: String) { precondition(value, name); checks += 1 }
+        for kind in ["timeout", "certificate", "cancellation"] {
+            let events = SessionEventSource(); _ = events.stream
+            let bridge = StreamBridgeContext(events), initial = UUID()
+            let session = StreamSession(bridge: bridge, attempt: initial)
+            bridge.setEventSource(session.backend, attempt: initial)
+            _ = bridge.admitTermination(code: -1, from: session.backend, attempt: initial)
+            await session.handleHostTerminate(code: -1, from: session.backend)
+            session.recordConnectCatch(StreamError.hostUnreachable("same-attempt consequence"), pcAnswered: true)
+            if case .sessionFailed(-1)? = session.lastReconnectError { expect(true, "same-attempt root retained") }
+            else { preconditionFailure("same-attempt root lost") }
+            session.selectNextAttempt()
+            expect(session.reconnectAttemptFailure == nil && session.lastReconnectTerminationCode == -1, "next attempt clears only attempt latch")
+            let laterError: Error
+            if kind == "timeout" {
+                do { try DeadlineProducer.checkDeadline(.distantPast); preconditionFailure("deadline producer drift") }
+                catch { laterError = error }
+            } else if kind == "certificate" {
+                laterError = PairedFailureProducer.classifyPairedPathFailure("cert mismatch", hostName: "Synthetic PC")
+            } else { laterError = CancellationError() }
+            session.recordConnectCatch(laterError, pcAnswered: false)
+            if kind == "cancellation" {
+                expect(session.lastReconnectTerminationCode == -1, "nil classification preserves prior explicit evidence")
+                if case .sessionFailed(-1)? = session.lastReconnectError { expect(true, "unclassified cancellation preserves diagnostic") }
+                else { preconditionFailure("cancellation erased diagnostic") }
+            } else {
+                expect(session.lastReconnectTerminationCode == nil, "new classified attempt clears stale code")
+                if kind == "timeout" {
+                    if case .hostUnreachable? = session.lastReconnectError { expect(true, "later real deadline names unreachable host") }
+                    else { preconditionFailure("later timeout masked") }
+                } else {
+                    if case .hostCertChanged? = session.lastReconnectError { expect(true, "later real certificate classifier names changed pin") }
+                    else { preconditionFailure("later certificate masked") }
+                }
+            }
+            session.giveUp(code: -1); events.finish()
+            var received: StreamEvent?
+            for await update in events.stream { received = update.event }
+            var actual = DesktopRecoveryPresentation(), expected = DesktopRecoveryPresentation()
+            actual.receive(received!)
+            expected.receive(.connectionTerminated(errorCode: -1, error: session.lastReconnectError))
+            expect(actual.status == expected.status && actual.message == expected.message, "public reducer receives current diagnostic")
+        }
+        print("{\"status\":\"passed\",\"reconnectDiagnosticScopeChecks\":\(checks),\"scope\":\"actual attempt resets/catch predicate/error classifier/deadline and paired-certificate producers/give-up FIFO and public reducer; inert transport only\"}")
+    }
+}
+'''
+with tempfile.TemporaryDirectory(prefix="knot-reconnect-diagnostic-", dir="/tmp") as directory:
+    temporary = Path(directory)
+    source = temporary / "Checks.swift"; source.write_text(diagnostic_fixture)
+    executable = temporary / "checks"
+    argv = ["/usr/bin/swiftc", "-swift-version", "6", "-parse-as-library", "-O", "-module-cache-path", str(temporary / "module-cache"), str(source), "-o", str(executable)]
+    print(json.dumps({"compileArgv": argv, "checksArgv": [str(executable)]}), flush=True)
+    subprocess.run(argv, check=True, timeout=90)
+    subprocess.run([str(executable)], check=True, timeout=30)
+    print(json.dumps({"reconnectDiagnosticScopeFixtureSHA256": hashlib.sha256(diagnostic_fixture.encode()).hexdigest(),
+                      "productionSourceSHA256": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                                                 for path in (ENGINE / "Session/StreamSession+Reconnect.swift", ENGINE / "Session/StreamBridgeContext.swift", ENGINE / "Network/StreamAttempt.swift", ENGINE / "Network/NetworkClient+Endpoints.swift", ROOT / "Sources/DeskBridgeApp/Streaming/DesktopRecoveryPresentation.swift")}}))

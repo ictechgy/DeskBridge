@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Offline packaging. Only explicit release mode calls Apple's notarization service."""
 from pathlib import Path
+from urllib.parse import urlsplit
 import argparse, datetime, gzip, hashlib, io, json, os, plistlib, re, shutil, subprocess, tarfile, tempfile, zipfile
 from build_snapshot import BuildSnapshotError, host_supervisor_snapshot, source_snapshot, supervisor_package_record, tree_snapshot, validate_completed_build, validate_corresponding_source
 from windows_resources import NativePE, validate_bootstrap
@@ -9,6 +10,48 @@ from windows_check_record import validate_windows_check_record
 from linux_check_record import validate_linux_check_record, validate_payload_sources
 from test_linux_host import archive_inventory
 from system_dependencies import SystemDependencyError, parse_system_dependencies
+
+
+def render_installation_links(text, revision):
+    """Render the distribution guide independently of its extracted directory."""
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("Installation guide links require an exact source commit.")
+    relative_targets = {"host/windows/README.md", "docs/BRAND_COMPATIBILITY.md",
+                        "docs/RELEASING.md", "docs/HEADLESS_WINDOWS.md"}
+
+    def render_target(target):
+        enclosed = target.startswith("<") and target.endswith(">")
+        if enclosed:
+            target = target[1:-1]
+        if not target or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in target):
+            raise ValueError("Invalid installation guide link target.")
+        if target.startswith("#"):
+            rendered = target
+        else:
+            parsed = urlsplit(target)
+            if parsed.scheme == "https" and parsed.hostname:
+                _ = parsed.port  # Invalid ports must not pass as valid HTTPS links.
+                rendered = target
+            else:
+                if parsed.scheme or parsed.netloc or parsed.query or parsed.path not in relative_targets:
+                    raise ValueError("Unknown installation guide link target: " + target)
+                fragment = "#" + parsed.fragment if "#" in target else ""
+                rendered = "https://github.com/ictechgy/Knot/blob/" + revision + "/" + parsed.path + fragment
+        return "<" + rendered + ">" if enclosed else rendered
+
+    def replace_link(match):
+        title = r'''(?:"[^"\r\n]*"|'[^'\r\n]*')'''
+        suffix = r"[ \t]*(?:" + title + r"[ \t]*)?"
+        if match.group(1).startswith("]("):
+            suffix += r"\)"
+        if not re.fullmatch(suffix, match.group(3)):
+            raise ValueError("Invalid installation guide link title or whitespace.")
+        return match.group(1) + render_target(match.group(2)) + match.group(3)
+
+    text = re.sub(r"(\]\([ \t]*)(<[^>\r\n]*>|[^)\s]*)([^)]*\))", replace_link, text)
+    return re.sub(r"(?m)^([ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*)(<[^>\r\n]*>|[^ \t\r\n]+)([^\r\n]*)",
+                  replace_link, text)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser()
@@ -121,15 +164,16 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         raise SystemExit("The packaged app must contain exactly the camera permission entitlement.")
     (stage / "Applications").symlink_to("/Applications", target_is_directory=True)
     shutil.copy2(ROOT / "LICENSE", stage / "LICENSE")
-    installation = (ROOT / "INSTALLATION.md").read_text()
-    for target in ("host/windows/README.md", "docs/BRAND_COMPATIBILITY.md", "docs/RELEASING.md", "docs/HEADLESS_WINDOWS.md"):
-        installation = installation.replace("](" + target + ")", "](https://github.com/ictechgy/Knot/blob/" + head + "/" + target + ")")
-    (stage / "INSTALLATION.md").write_text(installation)
+    try:
+        installation = render_installation_links((ROOT / "INSTALLATION.md").read_text(encoding="utf-8"), head)
+    except ValueError as error:
+        raise SystemExit(str(error))
+    (stage / "INSTALLATION.md").write_text(installation, encoding="utf-8")
     (stage / "INSTALL.txt").write_text("Knot.app을 Applications 폴더로 드래그하세요.\nApple Silicon / macOS 26+\n" +
         "업데이트: 기존 앱을 종료하고 이전 DeskBridge.app 번들만 제거하세요. 같은 번들 ID의 두 앱을 함께 두지 마세요.\n" +
         "Application Support·설정·인증서는 보존하세요. macOS 권한을 다시 요청할 수 있습니다.\n" +
         ("Developer ID 서명 및 Apple 공증 패키지입니다.\n" if args.mode == "release" else "개발 프리뷰: 로컬 ad-hoc 서명이며 Apple 공증이 없습니다.\n") +
-        "설정 안내는 이 이미지의 INSTALLATION.md를 확인하세요. 대응 소스는 같은 릴리스의 별도 파일 " + name + "-source.tar.gz 입니다.\n")
+        "설정 안내는 이 패키지의 INSTALLATION.md를 확인하세요. 대응 소스는 같은 릴리스의 별도 파일 " + name + "-source.tar.gz 입니다.\n", encoding="utf-8")
     if args.mac_format in ["zip", "both"]:
         mac_zip = output / (name + "-macos-arm64" + suffix + ".zip")
         run("mac-zip", ["/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(stage), str(mac_zip)])
@@ -149,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
         for file in sorted((ROOT / "host/windows").iterdir()):
             if file.is_file(): archive.write(file, "Knot-Windows-Setup/" + file.name)
         archive.write(ROOT / "LICENSE", "Knot-Windows-Setup/LICENSE")
-        archive.write(ROOT / "INSTALLATION.md", "Knot-Windows-Setup/INSTALLATION.md")
+        archive.writestr("Knot-Windows-Setup/INSTALLATION.md", installation)
         archive.write(ROOT / "Vendor/QRCodegen/NOTICE", "Knot-Windows-Setup/QRCodegen-LICENSE")
         archive.write(ROOT / "Vendor/ZXingNet/LICENSE", "Knot-Windows-Setup/QRDecoder-LICENSE.txt")
         archive.write(ROOT / "Vendor/ZXingNet/NOTICE", "Knot-Windows-Setup/QRDecoder-NOTICE.txt")
@@ -180,7 +224,7 @@ with tempfile.TemporaryDirectory(prefix="deskbridge-package-") as temporary:
     source_path = output / (name + "-source.tar.gz")
     with gzip.open(source_path, "wb") as handle: handle.write(source)
     generated.append(source_path)
-    shutil.copy2(ROOT / "INSTALLATION.md", output / "INSTALLATION.md")
+    (output / "INSTALLATION.md").write_text(installation, encoding="utf-8")
     shutil.copy2(ROOT / "Vendor/WindowsRuntime/NOTICE", output / "WindowsRuntime-NOTICE.txt")
     shutil.copy2(ROOT / "client/windows/Moonlight-NOTICE.txt", output / "Moonlight-NOTICE.txt")
     shutil.copy2(ROOT / "client/windows/Moonlight-LICENSE.txt", output / "Moonlight-LICENSE.txt")

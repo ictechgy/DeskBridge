@@ -69,6 +69,7 @@ struct DesktopRecoveryPresentation {
 
     /// Remote diagnostic strings never become shell copy. Keep the engine's typed failure reason.
     private static func terminationMessage(code: Int32, hasReceivedVideo: Bool, error: StreamError?) -> String {
+        if code == 0, error == nil { return "PC에서 화면 공유를 종료했습니다." }
         if let error {
             switch StreamFailure.connection(error) {
             case .unreachable, .hostTimedOut:

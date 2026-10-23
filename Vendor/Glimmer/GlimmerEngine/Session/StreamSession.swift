@@ -193,14 +193,14 @@ public actor StreamSession {
     /// watchdog). Current replacement failures are retained for the episode;
     /// source identity keeps old-backend teardown from failing its replacement.
     package var isReconnecting = false
-    /// Only a selected replacement can fail an active attempt. Nil while probing,
-    /// tearing down the old transport, or after the synchronous success commit.
+    /// The observed transport, including the original during first backoff and
+    /// route refresh. Retained through retirement/drain until a fresh selection.
     package var reconnectAttemptID: UUID?
     /// Sticky even when notification reaches this actor before the producer has
     /// latched backend interruption. Cleared only when selecting a new attempt.
     package var reconnectAttemptFailure: Int32?
-    /// The episode classifies each selected attempt's first host termination once,
-    /// before spending another retry or launching anything on the PC.
+    /// The episode classifies each transport's reason before another launch;
+    /// a PC reason upgrading local dead-peer reopens the bounded decision once.
     package var reconnectAttemptFailureHandled = false
     /// Explicit termination diagnostics survive generic connect/cancellation errors.
     package var lastReconnectTerminationCode: Int32?

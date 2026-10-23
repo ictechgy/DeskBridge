@@ -1380,6 +1380,7 @@
     "GlimmerEngine/Session/NativeBackend+Input.swift",
     "GlimmerEngine/Session/NativeBackend+Pipeline.swift",
     "GlimmerEngine/Session/NativeBackend.swift",
+    "GlimmerEngine/Session/NativeConnectionEvents.swift",
     "GlimmerEngine/Session/StreamBridgeContext.swift",
     "GlimmerEngine/Session/StreamConnection+Configuration.swift",
     "GlimmerEngine/Session/StreamSession+Connect.swift",

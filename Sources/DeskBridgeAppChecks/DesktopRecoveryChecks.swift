@@ -70,6 +70,17 @@ func runDesktopRecoveryChecks() throws -> Int {
         ended.receive(.reconnecting); ended.receive(terminal); ended.receive(.firstFrame); ended.receive(.reconnecting)
         try expect(ended.phase == .ended && ended.message == nil, "terminal presentation accepted stale recovery events")
     }
+    for reconnecting in [false, true] {
+        var ended = DesktopRecoveryPresentation()
+        ended.receive(.firstFrame)
+        if reconnecting { ended.receive(.reconnecting) }
+        ended.receive(.connectionTerminated(errorCode: 0, error: nil))
+        try expect(ended.status == "PC에서 화면 공유를 종료했습니다." && ended.phase == .ended && ended.message == nil,
+                   "clean PC closure was presented as a fault or left a recovery overlay")
+        let status = ended.status
+        ended.receive(.stopped); ended.receive(.firstFrame); ended.receive(.reconnecting)
+        try expect(ended.status == status, "late events replaced the clean PC closure status")
+    }
     for (code, text): (Int32, String) in [
         (-100, "영상을 받지 못했습니다"), (-101, "해상도를 낮춰"), (-1, "연결이 끊겼습니다"),
         (Int32(bitPattern: 0x800E9302), "보호된 콘텐츠"),
@@ -92,10 +103,12 @@ func runDesktopRecoveryChecks() throws -> Int {
         (.hostCertChanged("synthetic secret"), "인증서는 자동으로 교체하지"),
         (.crypto("synthetic secret"), "암호화 설정")
     ] {
-        var ended = DesktopRecoveryPresentation()
-        ended.receive(.connectionTerminated(errorCode: -1, error: error))
-        try expect(!ended.status.contains("synthetic") && ended.status.contains(guidance),
-                   "reconnect failure exposed arbitrary error text")
+        for code: Int32 in [-1, 0] {
+            var ended = DesktopRecoveryPresentation()
+            ended.receive(.connectionTerminated(errorCode: code, error: error))
+            try expect(!ended.status.contains("synthetic") && ended.status.contains(guidance),
+                       "typed failure was hidden by a clean code or exposed arbitrary error text")
+        }
     }
     count += try runDesktopVisibilityChecks()
     return count

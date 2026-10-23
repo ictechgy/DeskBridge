@@ -20,6 +20,12 @@ package final class StreamBridgeContext: @unchecked Sendable {
     private var attemptID = UUID()
     private let sourceLock = NSLock()
     private var eventSource: ObjectIdentifier?
+    // Decoder epochs can be fenced while this transport is still observed.
+    // Termination admission ends only at the actor's explicit retirement boundary.
+    private var terminationSource: ObjectIdentifier?
+    private var terminationAttempt: UUID?
+    private var terminationEventsRetired = true
+    private var admittedTerminationCode: Int32?
     // A self-initiated reconnect emits its UI edge before stopping the old
     // receiver. Fence its late audio failure in the same lock as event delivery.
     private var audioEventsQuiesced = false
@@ -37,6 +43,10 @@ package final class StreamBridgeContext: @unchecked Sendable {
     package func setEventSource(_ backend: NativeBackend, attempt: UUID = UUID()) {
         sourceLock.withLock {
             eventSource = ObjectIdentifier(backend)
+            terminationSource = ObjectIdentifier(backend)
+            terminationAttempt = attempt
+            terminationEventsRetired = false
+            admittedTerminationCode = nil
             attemptID = attempt
             audioEventsQuiesced = false
             publicEvents?.beginAttempt(attempt)
@@ -46,6 +56,30 @@ package final class StreamBridgeContext: @unchecked Sendable {
     package func acceptsEvent(from backend: NativeBackend?, attempt: UUID) -> Bool {
         sourceLock.withLock {
             attempt == attemptID && (eventSource == nil || backend.map(ObjectIdentifier.init) == eventSource)
+        }
+    }
+
+    /// Retain intent before the callback queues an actor Task. A PC-sent reason
+    /// outranks local dead-peer (-1); the first explicit PC reason stays intact.
+    package func admitTermination(code: Int32, from backend: NativeBackend, attempt: UUID) -> Bool {
+        sourceLock.withLock {
+            guard !terminationEventsRetired, terminationAttempt == attempt,
+                  terminationSource == ObjectIdentifier(backend) else { return false }
+            if admittedTerminationCode == nil || (admittedTerminationCode == -1 && code != -1) {
+                admittedTerminationCode = code
+            }
+            return true
+        }
+    }
+
+    /// Retirement and the final intent snapshot share admission's lock. Keep the
+    /// snapshot through receiver drain so an already-queued actor event cannot lose it.
+    package func terminationIntent(from backend: NativeBackend, attempt: UUID, retiring: Bool = false) -> Int32? {
+        sourceLock.withLock {
+            guard terminationAttempt == attempt,
+                  terminationSource == ObjectIdentifier(backend) else { return nil }
+            if retiring { terminationEventsRetired = true }
+            return admittedTerminationCode
         }
     }
 
