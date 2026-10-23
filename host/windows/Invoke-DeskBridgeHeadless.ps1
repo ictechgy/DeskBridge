@@ -12,7 +12,7 @@ $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot 'HeadlessSetup.psm1') -Force -ErrorAction Stop
 function Write-HeadlessReceipt([string] $Name) {
     if (-not $SuccessReceipt) { return }
-    if ($Name -cnotin @('operation-success','reboot-required')) { throw 'Invalid setup receipt.' }
+    if ($Name -cnotin @('operation-success','reboot-required','recovery-blocked')) { throw 'Invalid setup receipt.' }
     # This broker-owned stage has already passed protected ancestor and ACL checks.
     $receipt=[IO.File]::Open((Join-Path $PSScriptRoot $Name),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     $receipt.Dispose()
@@ -20,6 +20,13 @@ function Write-HeadlessReceipt([string] $Name) {
 try {
     if ($Operation -ceq 'InstallVirtualDisplay') { $result=Install-KnotVirtualDisplay }
     else { $result=Remove-KnotVirtualDisplay }
+    if (-not $result.Completed -and $result.Status -cin @('LegacyRecoveryRequired','BootEvidenceUnavailable')) {
+        if ($result.RebootRequired) { throw 'Blocked recovery must not request another restart.' }
+        Write-HeadlessReceipt 'recovery-blocked'
+        Write-Host '자동 복구를 진행할 수 없습니다. 관리자에게 복구 기록과 부팅 정보 점검을 요청하세요. 재시작만 반복하거나 복구 파일을 삭제하지 마세요.' -ForegroundColor Red
+        if (-not $NoPause) { [void](Read-Host '안내를 확인했습니다. Enter 키를 누르면 관리자 창이 닫힙니다') }
+        exit 13
+    }
     if ($result.Completed) { Write-HeadlessReceipt 'operation-success' }
     if ($result.RebootRequired) {
         Write-HeadlessReceipt 'reboot-required'
@@ -34,7 +41,7 @@ try {
     Write-Host 'The managed virtual display operation completed. Installation alone does not verify a streaming connection.'
     exit 0
 } catch {
-    Write-Host '가상 디스플레이 작업을 완료하지 못했습니다. 기존 장치와 복구 기록은 보존됩니다. 다시 시작한 뒤 관리형 가상 디스플레이 제거를 시도하거나 관리자에게 확인하세요.' -ForegroundColor Red
+    Write-Host '가상 디스플레이 작업을 완료하지 못했습니다. 기존 장치와 복구 기록은 보존됩니다. 관리형 가상 디스플레이 상태를 확인하고 관리자에게 복구 기록 점검을 요청하세요.' -ForegroundColor Red
     if (-not $NoPause) {
         [void](Read-Host '실패 내용을 확인했습니다. Enter 키를 누르면 관리자 창이 닫힙니다')
         exit 2

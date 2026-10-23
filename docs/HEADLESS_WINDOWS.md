@@ -21,7 +21,7 @@ Knot does not read Sunshine credentials, logs or configuration, or call its admi
 
 First clear Sunshine's Display Device ID or choose another screen, and arrange another way to access the PC. Then use **Knot 가상 화면 제거**. Removal can end the stream and move windows.
 
-An administrator-owned journal records the exact planned random device instance before creation and the Windows-published OEM INF before binding the device. A fresh post-install check must match instance, OEM INF and driver version. Knot removes only that matching device and unchanged owned files/registry state. Foreign present/phantom displays, altered settings, unknown files and ambiguous ownership cause refusal with data preserved. A pending restart retains recovery data. Schema 3 requires both a changed CIM boot timestamp and a changed protected volatile boot-session marker before releasing resources after interrupted or reboot-pending removal; missing or unchanged evidence preserves the deployment. Restart and run removal again. Older schema 2 pending records lack the additional evidence and require administrator review. Successful installation pending restart and failed installation with pending rollback have separate receipts and messages. Do not manually delete the journal to bypass refusal.
+An administrator-owned journal records the exact planned random device instance before creation and the Windows-published OEM INF before binding the device. A fresh post-install check must match instance, OEM INF and driver version. Knot removes only that matching device and unchanged owned files/registry state. Foreign present/phantom displays, altered settings, unknown files and ambiguous ownership cause refusal with data preserved. A pending restart retains recovery data. Schema 3 requires both a changed CIM boot timestamp and a changed protected volatile boot-session marker before releasing resources after interrupted or reboot-pending removal; missing or unchanged evidence preserves the deployment. Restart and run removal again. Older schema 2 pending records lack the additional evidence and require administrator review. Successful installation pending restart, failed installation with pending rollback and blocked manual recovery have separate receipts and messages. Missing or malformed boot evidence produces a blocked manual-recovery outcome rather than another restart request. Do not manually delete the journal to bypass refusal.
 
 Uninstalling Knot intentionally leaves the virtual display and recovery data. Remove the display first if no longer needed. Windows driver-store cached packages are retained; Knot never force-deletes a shared OEM driver package.
 
@@ -33,9 +33,27 @@ Windows CI checks package signatures without installing the driver. Inert tests 
 
 [Trusted deployment profiles](../host/windows/VirtualDisplayDeployments.json) preserve exact supported historical archive, signer, driver and deployed-file identities independently of the current download pin, install policy and XML template. Removal accepts only those source-owned profiles; journal-supplied hashes never become a new trust authority. Future driver updates must retain supported profiles and test removal across upgrades. No enabled release has deployed this candidate yet.
 
-The complete deployment is flushed and verified in a fresh protected sibling directory, then published by same-volume rename before registry or device mutation. Final removal retires the owned directory before deleting its remaining journal. Interrupted staging or retired directories are preserved and never swept. A stable private control directory holds an exclusive persistent file lock; no predictable global mutex is used. Preflight refusal cannot trigger rollback of a pre-existing deployment.
+The complete deployment is flushed and verified in a fresh protected sibling directory, then published by same-volume rename before registry or device mutation. Final removal retires the owned directory before deleting its remaining journal. Interrupted staging or retired directories are preserved and never swept. A stable private control directory holds an exclusive persistent file lock; no predictable global mutex is used. Recovery under that lock validates its existing live handle without reopening the lock path. Quarantine capacity is checked before publishing new evidence or deleting the original interrupted update. Preflight refusal cannot trigger rollback of a pre-existing deployment.
 
 A narrowly recognized incomplete JSON update can be quarantined with its exact hash in the protected control directory only when an intact predecessor and all remaining owned payload files validate. Parseable hostile records, orphan updates (including a noninitial update without its predecessor), unknown files, interrupted control/registry-key creation and ambiguous state still require administrator review. The stored installation restart flag records Windows's original request; read-only status does not clear it or infer successful streaming after a reboot. The read-only UI shows the recovery record before attempting native device probing; a failed probe disables operation buttons without hiding that record.
+
+### Retained paths and manual recovery
+
+Owned paths use the OS-derived Program Files directory and 64-bit HKLM view:
+
+| Resource | Fixed or bounded path |
+|---|---|
+| Active files and journal | `%ProgramFiles%\KnotVirtualDisplay` (`recovery.json`, optional `recovery.new`, four pinned files) |
+| Unpublished deployment | `%ProgramFiles%\KnotVirtualDisplay.<deployment-id>.<random>.new` |
+| Retired deployment | `%ProgramFiles%\KnotVirtualDisplay.retired.<deployment-id>.<random>` |
+| Private control and persistent lock | `%ProgramFiles%\KnotVirtualDisplayControl` (`control.json`, `operation.lock`) |
+| Interrupted control publication | `%ProgramFiles%\KnotVirtualDisplayControl.<random>.new` |
+| Quarantined interrupted journal | `KnotVirtualDisplayControl\quarantine-<random>` (`recovery.new`, hash metadata `evidence.json`) |
+| Unpublished quarantine | `%ProgramFiles%\KnotVirtualDisplayControl.quarantine-<random>.new` |
+| Driver settings key | `HKLM\SOFTWARE\MikeTheTech\VirtualDisplayDriver` |
+| Private volatile boot marker | `HKLM\SOFTWARE\Knot\VirtualDisplayBootSession` |
+
+When Knot reports legacy recovery or unavailable boot evidence, retain these records and ask a Windows administrator to investigate. Record the Knot version, exact displayed status and intended device instance/OEM name. Keep copies of the affected owned journal and quarantine hash metadata before considering manual repair; do not include unrelated application history, credentials or user media. An administrator should check matching file hashes, ownership/ACLs, device identity and boot evidence together. Repeating restarts or deleting a journal/control directory is not a supported repair. Unknown objects, including namespace conflicts under nonstandard parent permissions, remain fail-closed rather than being reclaimed automatically. Quarantine is bounded at 100 entries; reaching capacity preserves the original update for administrator review.
 
 Enablement still requires stock Windows validation of reboot identity across clock/time-zone changes, sleep, Fast Startup and explicit restart; OEM-package selection; private ACL/lock behavior; interrupted writes and recovery; and actual headless streaming. Synthetic fixtures do not establish these runtime properties.
 

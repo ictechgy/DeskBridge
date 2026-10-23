@@ -9,6 +9,7 @@ namespace Knot.Headless
     using System.Reflection;
     using System.Runtime.InteropServices;
     using System.Text;
+    using Microsoft.Win32.SafeHandles;
 
     public static class HeadlessNativeChecks
     {
@@ -313,6 +314,33 @@ namespace Knot.Headless
             }, windows, PublishedInf, version); }, "Changing selected driver details retried without a limit.");
             Expect(calls == Policy.RetryLimit, "Selected driver detail retry bound drifted.");
         }
+        private static void HeldControlLockInformation()
+        {
+            foreach (FileAttributes attributes in new[] { (FileAttributes)0, FileAttributes.Normal, FileAttributes.Archive | FileAttributes.Hidden })
+            {
+                Policy.ValidateControlLockInformation(new FileInformation { Attributes = (uint)attributes, Links = 1 }); checks++;
+            }
+            foreach (FileAttributes attributes in new[] { FileAttributes.Directory, FileAttributes.ReparsePoint, FileAttributes.Device,
+                FileAttributes.Directory | FileAttributes.ReparsePoint, FileAttributes.Archive | FileAttributes.ReparsePoint })
+            {
+                FileAttributes copy = attributes;
+                Reject<InvalidDataException>(delegate { Policy.ValidateControlLockInformation(new FileInformation { Attributes = (uint)copy, Links = 1 }); }, "A nonordinary held control lock was accepted.");
+            }
+            foreach (uint links in new[] { 0u, 2u, UInt32.MaxValue })
+            {
+                uint copy = links;
+                Reject<InvalidDataException>(delegate { Policy.ValidateControlLockInformation(new FileInformation { Attributes = (uint)FileAttributes.Normal, Links = copy }); }, "A held control lock with missing or multiple links was accepted.");
+            }
+            foreach (FileInformation information in new[] {
+                new FileInformation { Attributes = (uint)FileAttributes.Normal, Links = 1, SizeLow = 1 },
+                new FileInformation { Attributes = (uint)FileAttributes.Normal, Links = 1, SizeLow = UInt32.MaxValue },
+                new FileInformation { Attributes = (uint)FileAttributes.Normal, Links = 1, SizeHigh = 1 },
+                new FileInformation { Attributes = (uint)FileAttributes.Normal, Links = 1, SizeHigh = UInt32.MaxValue, SizeLow = UInt32.MaxValue } })
+            {
+                FileInformation copy = information;
+                Reject<InvalidDataException>(delegate { Policy.ValidateControlLockInformation(copy); }, "Nonempty held control lock metadata was accepted.");
+            }
+        }
         private static void Discovery()
         {
             SyntheticPlatform platform = new SyntheticPlatform();
@@ -422,6 +450,8 @@ namespace Knot.Headless
             Expect(copyParameters[4].ParameterType == typeof(StringBuilder) && copyParameters[6].IsOut && copyParameters[6].ParameterType == typeof(uint).MakeByRefType(), "SetupAPI staging discards its bounded published filename output.");
             ParameterInfo[] detailParameters = typeof(Api).GetMethod("SetupDiGetDriverInfoDetailW", BindingFlags.Static | BindingFlags.NonPublic).GetParameters();
             Expect(detailParameters[3].ParameterType == typeof(byte[]) && detailParameters[5].IsOut && detailParameters[5].ParameterType == typeof(uint).MakeByRefType(), "Selected driver detail output does not use a bounded byte buffer and explicit required size.");
+            MethodInfo heldLock = typeof(Native).GetMethod("ValidateControlLockHandle");
+            Expect(heldLock != null && heldLock.ReturnType == typeof(void) && heldLock.GetParameters().Length == 1 && heldLock.GetParameters()[0].ParameterType == typeof(SafeFileHandle), "Held control lock validation does not accept the caller's live safe handle without a path reopen.");
             int imports = 0;
             foreach (MethodInfo method in typeof(Api).GetMethods(BindingFlags.Static | BindingFlags.NonPublic))
             {
@@ -438,7 +468,7 @@ namespace Knot.Headless
         public static int Run()
         {
             checks = 0;
-            IdentityAndPaths(); Ownership(); PublishedPackages(); InstallationBinding(); SelectedDriverDetails(); Discovery(); Buffers(); DisplayQueries(); NativeContracts();
+            IdentityAndPaths(); Ownership(); PublishedPackages(); InstallationBinding(); SelectedDriverDetails(); HeldControlLockInformation(); Discovery(); Buffers(); DisplayQueries(); NativeContracts();
             return checks;
         }
         private static int Main()

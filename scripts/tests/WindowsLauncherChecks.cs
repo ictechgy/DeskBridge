@@ -103,14 +103,15 @@ internal static class Checks
             throw new Exception("An early/unhandled setup failure was hidden");
         }
         var headlessResult = launcher.GetMethod("InterpretHeadlessResult", BindingFlags.Static | BindingFlags.NonPublic)!;
-        foreach (int code in new[] { 0, 2, 12, 3010, 1, 1602 })
+        foreach (int code in new[] { 0, 2, 12, 13, 3010, 1, 1602 })
         foreach (bool completed in new[] { false, true })
         foreach (bool rebootRequired in new[] { false, true })
+        foreach (bool recoveryBlocked in new[] { false, true })
         {
-            bool accepted = (code == 0 && completed && !rebootRequired) || (code == 3010 && completed && rebootRequired) || (code == 12 && !completed && rebootRequired) || (code == 2 && !completed);
+            bool accepted = !recoveryBlocked && ((code == 0 && completed && !rebootRequired) || (code == 3010 && completed && rebootRequired) || (code == 12 && !completed && rebootRequired) || (code == 2 && !completed)) || (code == 13 && !completed && !rebootRequired && recoveryBlocked);
             try
             {
-                int interpreted = (int)headlessResult.Invoke(null, new object[] { code, completed, rebootRequired })!;
+                int interpreted = (int)headlessResult.Invoke(null, new object[] { code, completed, rebootRequired, recoveryBlocked })!;
                 Expect(accepted && interpreted == code, "Headless status confused completion, restart, cancellation, or acknowledged failure");
             }
             catch (TargetInvocationException error) when (error.InnerException is InvalidOperationException && !accepted) { count++; }

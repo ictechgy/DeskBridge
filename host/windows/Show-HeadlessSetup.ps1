@@ -66,7 +66,7 @@ function Update-HeadlessState {
         $state=Get-KnotHeadlessState
         $recordText=Get-KnotHeadlessStatusText $state.Status
         $status.Text=$recordText+' 장치 상태를 확인하는 중…'; [Windows.Forms.Application]::DoEvents()
-        if ($state.Status -cin @('Conflict','LegacyRecoveryRequired') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
+        if ($state.Status -cin @('Conflict','LegacyRecoveryRequired','Unsupported','BootEvidenceUnavailable') -or $state.Status -cnotin @('Absent','Installed','InstalledPendingRestart','RemovalPending','RecoveryRequired')) { $status.Text=$recordText; return }
         Initialize-KnotHeadlessNative
         if ($null -eq $script:scan) { $script:scan=[Knot.Headless.Native]::ScanAsync() }
         $timer=[Diagnostics.Stopwatch]::StartNew()
@@ -149,7 +149,8 @@ $install=Add-HeadlessButton '가상 화면 설치 (현재 보류)'  {
         $status.Text='Windows 관리자 확인과 드라이버 설치를 진행하세요.'
         $result=Invoke-HeadlessBroker 'InstallVirtualDisplay' $file
         Update-HeadlessState
-        $status.Text=Get-KnotHeadlessOperationText 'InstallVirtualDisplay' $result
+        $notice=Get-KnotHeadlessOperationText 'InstallVirtualDisplay' $result
+        $status.Text=$notice+[Environment]::NewLine+$status.Text
     } catch [OperationCanceledException] { $status.Text='다운로드를 취소했습니다. 필요할 때 다시 시작하세요.' }
     catch { Show-HeadlessFailure $_ }
     finally {
@@ -185,7 +186,8 @@ $remove=Add-HeadlessButton 'Knot 가상 화면 제거…' {
     try {
         $result=Invoke-HeadlessBroker 'RemoveVirtualDisplay' $null
         Update-HeadlessState
-        $status.Text=Get-KnotHeadlessOperationText 'RemoveVirtualDisplay' $result
+        $notice=Get-KnotHeadlessOperationText 'RemoveVirtualDisplay' $result
+        $status.Text=$notice+[Environment]::NewLine+$status.Text
     } catch { Show-HeadlessFailure $_ }
     finally { Set-HeadlessBusy $false }
 }

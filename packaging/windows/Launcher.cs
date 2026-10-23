@@ -254,7 +254,7 @@ internal static class Launcher
             using (var verified = new FileStream(archive, FileMode.Open, FileAccess.Read, FileShare.Read))
                 VerifyHash(verified, pin.Sha256);
         }
-        foreach (string name in new[] { "operation-success", "reboot-required" })
+        foreach (string name in new[] { "operation-success", "reboot-required", "recovery-blocked" })
         {
             string path = Path.Combine(directory, name);
             if (File.Exists(path) || Directory.Exists(path))
@@ -267,7 +267,7 @@ internal static class Launcher
         start.UseShellExecute = false;
         start.WorkingDirectory = directory;
         int result = RunAndWait(start);
-        return InterpretHeadlessResult(result, HasSetupSuccessReceipt(directory), HasZeroLengthReceipt(directory, "reboot-required"));
+        return InterpretHeadlessResult(result, HasSetupSuccessReceipt(directory), HasZeroLengthReceipt(directory, "reboot-required"), HasZeroLengthReceipt(directory, "recovery-blocked"));
     }
 
     internal static void AssertVirtualDisplayInstallAllowed()
@@ -278,8 +278,10 @@ internal static class Launcher
         throw new InvalidOperationException("외부 드라이버의 보안 검토가 끝날 때까지 가상 화면 설치를 보류했습니다.");
     }
 
-    internal static int InterpretHeadlessResult(int result, bool completed, bool rebootRequired)
+    internal static int InterpretHeadlessResult(int result, bool completed, bool rebootRequired, bool recoveryBlocked)
     {
+        if (result == 13 && !completed && !rebootRequired && recoveryBlocked) return 13;
+        if (recoveryBlocked) throw new InvalidOperationException("가상 화면 복구 확인 정보가 일치하지 않습니다.");
         if (result == 0 && completed && !rebootRequired) return 0;
         // Receipts distinguish completed installation from incomplete rollback/removal.
         if (result == 3010 && completed && rebootRequired) return 3010;

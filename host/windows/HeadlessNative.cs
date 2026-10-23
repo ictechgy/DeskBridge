@@ -44,6 +44,7 @@ namespace Knot.Headless
         public static DisplayTarget[] FindDisplays() { return new Controller(new WindowsPlatform()).Scan().Displays; }
         public static Task<ScanResult> ScanAsync() { return Task.Run(delegate { return new Controller(new WindowsPlatform()).Scan(); }); }
         public static int GetFileLinkCount(string path) { return WindowsPlatform.FileLinkCount(path); }
+        public static void ValidateControlLockHandle(SafeFileHandle handle) { WindowsPlatform.ValidateControlLockHandle(handle); }
     }
 
     internal sealed class MonitorRecord
@@ -94,7 +95,7 @@ namespace Knot.Headless
             Policy.ValidatePublishedInf(expectedPublishedInf);
             Policy.ValidateExclusive(platform.ReadDriverDevices(), instanceId, false);
             // Re-stage the verified source on each attempt and bind this attempt
-            // to the package name durably recorded before device creation.
+            // to the package name durably recorded before driver binding.
             if (!String.Equals(Stage(infPath), expectedPublishedInf, StringComparison.Ordinal))
                 throw new InvalidOperationException("The staged driver package does not match the recorded published INF.");
             bool reboot = platform.Install(instanceId, infPath, expectedPublishedInf);
@@ -159,6 +160,12 @@ namespace Knot.Headless
         {
             ValidateOrdinaryPath(path);
             if (!path.EndsWith(".inf", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Expected an INF file.");
+        }
+        internal static void ValidateControlLockInformation(FileInformation information)
+        {
+            if ((information.Attributes & (uint)(FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0 ||
+                information.Links != 1 || information.SizeHigh != 0 || information.SizeLow != 0)
+                throw new InvalidDataException("The held control lock must be an empty, ordinary file with exactly one link.");
         }
         internal static void ValidatePublishedInf(string value)
         {
@@ -405,6 +412,17 @@ namespace Knot.Headless
                     throw new InvalidDataException("Expected an ordinary protected file with a valid link count.");
                 return (int)information.Links;
             }
+        }
+        internal static void ValidateControlLockHandle(SafeFileHandle handle)
+        {
+            // The caller keeps its FileShare.None stream alive for this check.
+            // Reopening its path would collide with that exclusive lock and could
+            // inspect a different file; never own or dispose this supplied handle.
+            if (handle == null || handle.IsInvalid || handle.IsClosed) throw new ArgumentException("Expected a live held control lock handle.");
+            RequireWindows();
+            FileInformation information;
+            Check(Api.GetFileInformationByHandle(handle, out information), "Reading the held control lock metadata failed.");
+            Policy.ValidateControlLockInformation(information);
         }
         private static void Check(bool success, string action) { if (!success) throw new Win32Exception(Marshal.GetLastWin32Error(), action); }
         private static IntPtr CheckHandle(IntPtr handle) { if (handle == Invalid || handle == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Opening a device information set failed."); return handle; }
