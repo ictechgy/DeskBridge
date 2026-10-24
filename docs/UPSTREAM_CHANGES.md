@@ -57,5 +57,9 @@ The native app window/media/input adapters are newly maintained under Sources/De
 
 Verify every untouched upstream blob with scripts/verify_vendor.py. The exact maintained diff against the pinned originals is Vendor/Glimmer/DeskBridge.patch.
 
+First-run diagnostics, 2026-10-24:
+
+- Protocol/StreamSecurityPolicy.swift, Models/Types.swift, Models/StreamFailure.swift and Session/NativeBackend.swift: retain the exact typed encryption negotiation failure through the engine boundary, including the missing channel mask. The shell distinguishes unencrypted signalling, missing media encryption and unrelated cryptographic failures using fixed guidance and diagnostic codes. The required capability bits, encrypted signalling requirement, certificate pins and fail-closed policy are unchanged.
+
 The zero-context patch is checked without changing files by `git apply --reverse --unidiff-zero --check DeskBridge.patch` from `Vendor/Glimmer`; the vendor verifier runs this check on every build.
 

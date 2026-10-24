@@ -206,8 +206,8 @@ package final class NativeBackend: StreamingBackend, @unchecked Sendable {
 
     static func mapToStreamError(_ error: Error) -> StreamError {
         if let streamError = error as? StreamError { return streamError }
-        if error is StreamSecurityPolicy.Failure {
-            return .crypto("Required Sunshine stream encryption was not negotiated.")
+        if let failure = error as? StreamSecurityPolicy.Failure {
+            return .securityNegotiation(failure)
         }
         switch error as? RtspError {
         case .connectTimeout(let port): return .streamPortsBlocked(proto: "TCP", port: port)

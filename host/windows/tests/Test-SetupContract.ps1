@@ -503,3 +503,8 @@ Write-Output ('Final export + contract checks: ' + $count)
 
 # Global serialization is exercised only with inert factories or fresh GUID test names.
 & (Join-Path $PSScriptRoot 'Test-LifecycleLease.ps1')
+
+# Bounded loopback startup/open/PIN checks use fake transports and inert UI leaves.
+# This suite therefore runs under both existing Windows PowerShell 5.1 and PS7 CI lanes.
+& (Join-Path $PSScriptRoot 'Test-SetupReadiness.ps1')
+& (Join-Path $PSScriptRoot 'Test-Enrollment.ps1')

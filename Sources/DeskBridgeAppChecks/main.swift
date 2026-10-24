@@ -142,6 +142,8 @@ struct AppModelChecks {
         let discovery = try await runConnectionDiscoveryChecks(temporary: temporary)
         let keySelection = try runFileIdentitySelectionChecks(temporary: temporary)
         let desktopGuidance = try await runDesktopFailureGuidanceChecks(temporary: temporary)
+        let updateReconnect = try runUpdateReconnectChecks(temporary: temporary)
+        print("{\"updateReconnectChecks\":\(updateReconnect),\"scope\":\"new synthetic receipts and settings; no network\"}")
         let setupExchangeGate = try runSetupExchangeGateChecks(temporary: temporary)
         let screenVerification = try await runScreenVerificationChecks(temporary: temporary)
         let desktopReopen = try await runDesktopReopenChecks(temporary: temporary)

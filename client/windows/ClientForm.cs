@@ -39,6 +39,9 @@ namespace DeskBridge.Reverse
         {
             this.platform = platform;
             Text = HostText(ClientMessage.Title);
+            var applicationIcon = System.Drawing.Icon.ExtractAssociatedIcon(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            Icon = applicationIcon;
+            Disposed += delegate { if (applicationIcon != null) applicationIcon.Dispose(); };
             Font = new Font("Malgun Gothic", 9.5f);
             AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
             StartPosition = FormStartPosition.CenterScreen;

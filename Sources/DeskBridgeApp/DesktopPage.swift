@@ -31,9 +31,10 @@ struct DesktopPage: View {
                 } else { hostCard }
                 if let pin = model.pairingPIN {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label("Sunshine의 PIN 페이지에 입력하세요", systemImage: "key").font(.headline)
+                        Label("\(model.platformName) 브라우저의 Sunshine PIN 페이지에 입력하세요", systemImage: "key").font(.headline)
                         Text(pin).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-                        Text("\(model.platformName)에서 번호를 입력하면 이 Mac의 페어링을 확인합니다.")
+                        Text("\(model.platformName)에서 https://localhost:47990/pin 을 열고 위 번호를 입력하세요. Sunshine은 별도 창 없이 백그라운드에서 실행될 수 있습니다.")
+                            .textSelection(.enabled)
                             .font(.callout).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(20).quietPanel()
                 }

@@ -50,7 +50,7 @@ final class DesktopModel: ObservableObject {
         didSet { stream.keyboardMode = keyboardMode }
     }
     @Published private(set) var settings: SavedSettings
-    var canForgetHost: Bool { !shuttingDown && settingsReadable && settings.host != nil && !busy && !streaming && !stream.isEngaged }
+    var canForgetHost: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && settings.host != nil && !busy && !streaming && !stream.isEngaged }
     let platform: HostPlatform
     var supportsFiles: Bool { platform == .windows }
     var platformName: String { platform.displayName }
@@ -70,9 +70,9 @@ final class DesktopModel: ObservableObject {
     let stream: DesktopStreamController
     let nearby = NearbyPCBrowser()
     weak var fileActivity: FilesModel?
-    var canChoosePC: Bool { !shuttingDown && settingsReadable && !busy && !streaming && !stream.isEngaged && !peerEngaged && fileActivity?.busy != true && fileActivity?.connected != true }
+    var canChoosePC: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && !busy && !streaming && !stream.isEngaged && !peerEngaged && fileActivity?.busy != true && fileActivity?.connected != true }
     var canVerifyCurrentPC: Bool {
-        guard !shuttingDown, settingsReadable, !busy, !streaming, !stream.isEngaged, !peerEngaged, fileActivity?.busy != true else { return false }
+        guard !KnotUpdates.shared.installationPending, !shuttingDown, settingsReadable, !busy, !streaming, !stream.isEngaged, !peerEngaged, fileActivity?.busy != true else { return false }
         guard fileActivity?.connected == true else { return true }
         guard let checked = try? EndpointPolicy.validatedAddress(address) else { return false }
         return fileActivity?.isConnected(toValidatedAddress: checked) == true
@@ -145,8 +145,11 @@ final class DesktopModel: ObservableObject {
     func assertFileCapability() throws {
         guard supportsFiles else { throw AppFailure("Linux 연결은 화면만 지원합니다. 파일 기능은 Windows 연결에서 사용하세요.") }
     }
-    func perform(_ body: @escaping @MainActor () async throws -> Void) {
+    func perform(allowDuringUpdate: Bool = false, _ body: @escaping @MainActor () async throws -> Void) {
         guard !shuttingDown else { return }
+        guard allowDuringUpdate || !KnotUpdates.shared.installationPending else {
+            errorMessage = "업데이트 설치를 기다리고 있습니다. 연결을 마친 뒤 앱을 다시 여세요."; return
+        }
         guard !busy else { errorMessage = "현재 작업을 마친 뒤 다시 시도하세요."; return }
         guard !peerEngaged else { errorMessage = "다른 PC의 화면 작업을 마친 뒤 다시 시도하세요."; return }
         errorMessage = nil; busy = true
@@ -164,7 +167,7 @@ final class DesktopModel: ObservableObject {
         shuttingDown = true
         nearby.stop(); cancelOperation()
     }
-    static func failureMessage(_ error: any Error) -> String {
+    nonisolated static func failureMessage(_ error: any Error) -> String {
         if let invitation = error as? ConnectionInvitation.Failure {
             return invitation.localizedDescription
         }
@@ -180,8 +183,8 @@ final class DesktopModel: ObservableObject {
             default: break
             }
         }
-        if error is StreamSecurityPolicy.Failure {
-            return "필수 화면 암호화를 확인하지 못했습니다. Windows의 Sunshine을 업데이트하고 Network의 LAN/WAN 암호화를 Mandatory로 저장한 뒤 다시 연결하세요."
+        if let failure = error as? StreamSecurityPolicy.Failure {
+            return securityNegotiationMessage(failure)
         }
         if let pairing = error as? PairingFailure {
             switch pairing {
@@ -214,8 +217,10 @@ final class DesktopModel: ObservableObject {
             return "화면을 표시하지 못했습니다. 화면 연결을 끊고 해상도를 낮춰 다시 연결하세요."
         case .audioFailed:
             return "오디오를 사용할 수 없습니다. Mac과 PC의 오디오 장치·네트워크를 확인한 뒤 다시 연결하세요."
+        case .securityNegotiation(let failure):
+            return securityNegotiationMessage(failure)
         case .crypto:
-            return "화면 보안 연결을 확인하지 못해 중단했습니다. Sunshine의 암호화 설정을 확인하고 다시 연결하세요."
+            return DesktopSecurityGuidance.unclassified
         default:
             if let local = error as? AppFailure { return local.message }
             if let storage = error as? SettingsStore.Failure { return storage.localizedDescription }
@@ -223,6 +228,9 @@ final class DesktopModel: ObservableObject {
             if error is TargetBinding.Failure { return "대상 PC가 바뀌었습니다. 주소를 확인한 뒤 PC 확인을 다시 선택하세요." }
             return "작업을 완료하지 못했습니다. PC 주소와 Sunshine 실행 상태를 확인한 뒤 다시 시도하세요."
         }
+    }
+    nonisolated static func securityNegotiationMessage(_ failure: StreamSecurityPolicy.Failure) -> String {
+        DesktopSecurityGuidance.negotiation(failure)
     }
     func assertStorageReady() throws {
         guard !shuttingDown else { throw AppFailure("앱을 종료하는 중입니다. 새 연결과 설정 변경을 시작하지 않습니다.") }
@@ -323,7 +331,7 @@ final class DesktopModel: ObservableObject {
             try targetBinding.require(input: address, expectedAddress: server.address)
             let pin = String(format: "%04d", Int.random(in: 0...9999))
             pairingPIN = pin
-            status = "\(platformName)의 Sunshine 웹 설정에서 PIN 페이지를 열고 아래 번호를 입력하세요."
+            status = "\(platformName) 브라우저에서 https://localhost:47990/pin 을 열고 아래 번호를 입력하세요."
             var result = try await PairingClient(network: network, server: server).pair(pin: pin, expectedUniqueId: server.uniqueId)
             try Task.checkCancellation()
             try targetBinding.require(input: address, expectedAddress: server.address)
@@ -381,11 +389,31 @@ final class DesktopModel: ObservableObject {
         }
     }
     func disconnect() {
-        perform { [self] in
+        perform(allowDuringUpdate: true) { [self] in
             await stream.disconnect()
             streaming = false
             status = "화면 연결을 끊었습니다. \(platformName) 앱은 계속 실행됩니다."
         }
+    }
+    /// Only an already authenticated, idle target can be restored after an actual
+    /// newer build starts. The normal connect path still verifies its saved pin.
+    func prepareUpdateReconnect(build: String, now: Date = Date()) throws {
+        guard settingsReadable else { return }
+        let receipt = UpdateReconnectStore(directory: store.directory)
+        try receipt.clear()
+        guard paired, !busy, !stream.isEngaged, let host = settings.host,
+              host.address == address, let digest = CertFingerprint.sha256(forPEM: host.certificatePEM),
+              let intent = UpdateReconnectIntent(endpoint: address, hostUniqueID: host.uniqueID,
+                  certificateSHA256: digest.replacingOccurrences(of: ":", with: ""), now: now) else { return }
+        try receipt.save(intent, previousBuild: build)
+    }
+    func consumeUpdateReconnect(build: String, now: Date = Date()) throws -> Bool {
+        guard settingsReadable else { return false }
+        let receipt = UpdateReconnectStore(directory: store.directory)
+        let host = settings.host
+        let intent = try receipt.consume(currentBuild: build, endpoint: address, hostUniqueID: host?.uniqueID ?? "",
+            certificateSHA256: host.flatMap { CertFingerprint.sha256(forPEM: $0.certificatePEM) }?.replacingOccurrences(of: ":", with: "") ?? "", now: now)
+        return intent != nil
     }
     func forgetHost() {
         guard canForgetHost else { return }

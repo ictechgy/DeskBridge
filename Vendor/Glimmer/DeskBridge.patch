@@ -1642,7 +1642,7 @@ new file mode 100644
 +
 +public enum StreamSecurityPolicy {
 +    public static let requiredFeatures: UInt32 = 0x07 // control V2, video GCM, audio CBC
-+    public enum Failure: Error, LocalizedError {
++    public enum Failure: Error, LocalizedError, Sendable, Equatable {
 +        case plaintextSignalling, missingEncryption(UInt32)
 +        public var errorDescription: String? {
 +            switch self {
@@ -1747,8 +1747,8 @@ diff --git a/GlimmerEngine/Session/NativeBackend.swift b/GlimmerEngine/Session/N
 +    // DeskBridge desktop edits share one reliable channel; game/controller defaults remain unchanged.
 +    var desktopInputOrdering = false
 @@ -200,0 +209,3 @@
-+        if error is StreamSecurityPolicy.Failure {
-+            return .crypto("Required Sunshine stream encryption was not negotiated.")
++        if let failure = error as? StreamSecurityPolicy.Failure {
++            return .securityNegotiation(failure)
 +        }
 @@ -220,0 +232,2 @@
 +        teardownLock.lock()
@@ -2411,3 +2411,17 @@ diff --git a/GlimmerEngine/Video/VideoDecoder.swift b/GlimmerEngine/Video/VideoD
 -    /// the resync IDR won the race) or converts it into DR_NEED_IDR exactly
 +    /// `commitReservedDecode` clears it only after reserving a genuine IDR.
 +    /// `decodeGateDisposition` converts it into DR_NEED_IDR exactly
+diff --git a/GlimmerEngine/Models/StreamFailure.swift b/GlimmerEngine/Models/StreamFailure.swift
+--- a/GlimmerEngine/Models/StreamFailure.swift
++++ b/GlimmerEngine/Models/StreamFailure.swift
+@@ -64 +64 @@
+-        case .crypto: return .security
++        case .crypto, .securityNegotiation: return .security
+diff --git a/GlimmerEngine/Models/Types.swift b/GlimmerEngine/Models/Types.swift
+--- a/GlimmerEngine/Models/Types.swift
++++ b/GlimmerEngine/Models/Types.swift
+@@ -249,0 +250,2 @@
++    /// Preserve the negotiated channel failure without exposing remote diagnostics.
++    case securityNegotiation(StreamSecurityPolicy.Failure)
+@@ -285,0 +288 @@
++        case .securityNegotiation(let failure): return failure.localizedDescription

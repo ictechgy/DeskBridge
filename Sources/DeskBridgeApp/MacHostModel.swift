@@ -40,7 +40,7 @@ import Foundation
         }
     }
     var busy: Bool { phase == .starting || phase == .stopping }
-    var canDownload: Bool { !shuttingDown && phase == .stopped && !downloading }
+    var canDownload: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && phase == .stopped && !downloading }
     var invitation: ConnectionInvitation? {
         guard phase == .running, addresses.contains(where: { $0.address == selectedAddress }) else { return nil }
         return try? ConnectionInvitation(name: name, addresses: [selectedAddress], platform: .macos)
@@ -57,7 +57,7 @@ import Foundation
         installed = operations.installed()
     }
     func start() {
-        guard !shuttingDown, phase == .stopped, !downloading, acknowledged else { return }
+        guard !KnotUpdates.shared.installationPending, !shuttingDown, phase == .stopped, !downloading, acknowledged else { return }
         guard addresses.contains(where: { $0.address == selectedAddress }) else {
             errorMessage = "사용할 LAN 또는 Tailscale IPv4 주소를 선택하세요. 네트워크가 연결된 뒤 주소를 새로 고치세요."; return
         }

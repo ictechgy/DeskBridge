@@ -9,6 +9,10 @@ Import-Module (Join-Path $PSScriptRoot 'HeadlessStatus.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SetupDownload.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'SetupStatus.psm1') -Force
 $window=New-Object Windows.Forms.Form
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'AppIcon.ico') -PathType Leaf) {
+    $window.Icon=New-Object Drawing.Icon((Join-Path $PSScriptRoot 'AppIcon.ico'))
+    $window.Add_Disposed({ param($sender,$eventArgs) if ($sender.Icon) { $sender.Icon.Dispose() } })
+}
 $window.Text='Knot · 모니터 없이 사용'; $window.Size=New-Object Drawing.Size(740,740)
 $window.MinimumSize=New-Object Drawing.Size(600,480); $window.StartPosition='CenterParent'
 $window.AutoScaleDimensions=New-Object Drawing.SizeF(96,96); $window.AutoScaleMode='Dpi'

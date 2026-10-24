@@ -1358,6 +1358,8 @@
   "modifiedFiles": [
     "GlimmerEngine/Input/InputText.swift",
     "GlimmerEngine/Input/StreamInput.swift",
+    "GlimmerEngine/Models/StreamFailure.swift",
+    "GlimmerEngine/Models/Types.swift",
     "GlimmerEngine/Network/ControlTransport.swift",
     "GlimmerEngine/Network/EnetControlChannel+ControlLoop.swift",
     "GlimmerEngine/Network/EnetControlChannel+Inbound.swift",

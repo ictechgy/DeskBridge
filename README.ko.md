@@ -16,6 +16,8 @@ Mac에서 Windows 화면을 전체 화면 Space로 열고, Windows에서 Mac을 
 
 [설치 안내](INSTALLATION.md) · [보안 범위](SECURITY.md) · [빌드·패키징](docs/RELEASING.md) · [검증 항목](docs/VALIDATION.md)
 
+현재 소스는 **0.2.0-preview.17**입니다. 아래의 공개 preview.16 설치 파일에는 새 첫 설정·업데이트 기능이 포함되지 않습니다. 배포용 키·피드·플랫폼 서명을 구성하기 전에는 자동 업데이트를 사용할 수 없습니다. [업데이트 구성과 제한](docs/UPDATES.md)을 확인하세요.
+
 ## 지원하는 연결
 
 화살표 왼쪽은 조작하는 컴퓨터, 오른쪽은 화면을 공유하는 컴퓨터입니다.
@@ -61,9 +63,9 @@ Mac은 DMG를 열고 **Knot.app**을 **Applications**로 옮깁니다. Windows�
 ### Mac에서 Windows 열기
 
 1. Windows 설치 EXE로 설치하고 시작 메뉴의 **Knot 설정**을 열어 **이 Windows 공유**를 선택합니다. 안내에 따라 Sunshine을 설치합니다.
-2. Sunshine 관리자 계정을 만들고, **Configuration → Network**의 LAN/WAN 암호화를 모두 **Mandatory**로 저장합니다. Sunshine 앱 목록에 Desktop이 있는지 확인합니다.
+2. **Windows 브라우저**에서 `https://localhost:47990`을 열어 Sunshine 관리자 계정을 만듭니다. **Configuration → Network**의 LAN/WAN 암호화 모드를 모두 **모든 사용자에게 필수**(Required for all clients)로 선택하고 **Save → Apply**를 누른 뒤 Desktop 앱이 있는지 확인합니다.
 3. Mac에 Knot를 설치하고 **Windows 화면**에서 PC를 선택합니다. 목록에 없으면 Windows 도우미의 QR·연결 링크를 가져옵니다.
-4. Mac에 표시된 PIN을 Windows의 Sunshine PIN 페이지에서 승인한 뒤 **Windows 열기**를 누릅니다.
+4. Windows에서 `https://localhost:47990/pin`을 열어 Mac에 표시된 PIN을 승인한 뒤 **Windows 열기**를 누릅니다. Sunshine은 일반 앱 창 없이 백그라운드에서 실행될 수 있습니다.
 
 [자세한 설치 순서](INSTALLATION.md#mac에서-windows-열기) · [Windows 호스트·파일 설정](host/windows/README.md)
 
@@ -83,7 +85,11 @@ Ubuntu에서 Linux용 `.deb`를 설치하고 **Knot Linux Host**를 엽니다. �
 
 파일 클라이언트는 Mac에만 있습니다. Mac에서 Windows 공유 폴더에 접근하는 OpenSSH/SFTP 연결은 Sunshine 화면 연결과 별개입니다. Windows의 전용 일반 사용자·공유 폴더와 Mac의 SSH 키를 준비하고, Windows에서 확인한 SSH 호스트 키를 Mac에 등록합니다. 화면 페어링만으로 파일 접근 권한이 생기지 않습니다.
 
+소스 빌드는 일회용 설정 링크·QR로 공개 설정 정보를 자동 교환합니다. Windows의 사용자 승인·UAC 후 제한된 계정과 공유 폴더를 준비하며, Mac에서 Windows 화면의 SSH 지문과 비교한 뒤 저장합니다. 개인 키는 전송하지 않고, JSON 내보내기·가져오기는 복구 경로로 유지합니다. 교환용 수신기는 완료·취소·시간 초과 시 닫힙니다.
+
 폴더 재귀 전송, 이어받기, 자동 동기화, 원격 삭제는 지원하지 않습니다. 새로 생성하는 Mac 전용 개인 키는 암호 없는 사용자 전용 파일이므로 해당 Mac 계정과 디스크를 보호해야 합니다. [상세 설정과 제한](host/windows/README.md)을 먼저 확인하세요.
+
+자동 업데이트는 서명된 배포 파일을 요구하고, 화면·파일·설정 교환·Mac 공유 중에는 설치를 기다립니다. 페어링과 SSH 설정을 보존하며 인증서가 바뀌면 직접 확인해야 합니다. 새 버전 실행 후 짧은 유효기간의 일회용 기록으로 기존 PC를 다시 확인할 수 있지만, PIN 재페어링이나 파일 전송 이어받기는 자동으로 하지 않습니다. Windows quick-setup은 설치 버전으로 전환해야 자동 업데이트를 사용할 수 있습니다. [업데이트 구성과 제한](docs/UPDATES.md)을 확인하세요.
 
 ## 보안과 네트워크
 

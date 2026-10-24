@@ -380,14 +380,27 @@ done:
     else { wchar_t *sorted=db_sort_environment(env,used); db_free(env); env=sorted; }
     return env;
 }
+static int db_append_number(wchar_t *out,size_t cap,size_t *used,uint64_t number) {
+    wchar_t digits[24]; unsigned count=0;
+    do { digits[count++]=(wchar_t)(L'0'+number%10); number/=10; } while (number && count<24);
+    while (count) if (!db_append(out,cap,used,digits[--count])) return 0;
+    return 1;
+}
 static int db_run(const wchar_t *helper,const wchar_t *stage,const wchar_t *original,int argc,wchar_t **argv,int silent,int elevated,HANDLE token) {
     wchar_t *command=(wchar_t *)db_alloc(DB_COMMAND_CAP*sizeof(wchar_t)),*env=NULL;
     size_t used=0; int i,exit_code=1; STARTUPINFOW startup; PROCESS_INFORMATION process; DWORD code=1;
     ZeroMemory(&startup,sizeof(startup)); ZeroMemory(&process,sizeof(process)); startup.cb=sizeof(startup);
     if (!command || !db_quote(command,DB_COMMAND_CAP,&used,helper)) goto done;
     if (!argc) {
+        FILETIME created,exited,kernel,user; uint64_t creation;
+        if (!GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernel,&user)) goto done;
+        creation=((uint64_t)created.dwHighDateTime<<32)|created.dwLowDateTime;
         if (!db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,L"--bootstrap-path") ||
-            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,original)) goto done;
+            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,original) ||
+            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,L"--bootstrap-pid") ||
+            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_append_number(command,DB_COMMAND_CAP,&used,GetCurrentProcessId()) ||
+            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,L"--bootstrap-created") ||
+            !db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_append_number(command,DB_COMMAND_CAP,&used,creation)) goto done;
     } else for (i=0;i<argc;++i) if (!db_append(command,DB_COMMAND_CAP,&used,L' ') || !db_quote(command,DB_COMMAND_CAP,&used,argv[i])) goto done;
     env=db_clean_environment(elevated,token); if (!env) goto done;
     // Fixed protected/owned application and cwd; no inherited handles or ambient loader environment.

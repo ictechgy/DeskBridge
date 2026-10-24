@@ -417,10 +417,13 @@ func syntheticLaunch() -> LaunchResponse {
             let stillStreaming = await session.isStreaming, stillStopping = await session.stopInProgress
             try expect(!stillStreaming && !stillStopping, "stop did not join its inert local teardown")
         }
-        let policyFailures: [Error] = [StreamSecurityPolicy.Failure.plaintextSignalling,
+        let policyFailures: [StreamSecurityPolicy.Failure] = [StreamSecurityPolicy.Failure.plaintextSignalling,
                                        StreamSecurityPolicy.Failure.missingEncryption(3)]
         for failure in policyFailures {
             let mapped = NativeBackend.mapToStreamError(failure)
+            guard case .securityNegotiation(let preserved) = mapped, preserved == failure else {
+                throw CheckFailure(message: "backend flattened the typed security negotiation failure")
+            }
             try expect(StreamFailure.connection(mapped) == .security, "mandatory encryption failure was presented as a generic stream exit")
         }
         let typed: [(Error, StreamFailure.ConnectionReason)] = [

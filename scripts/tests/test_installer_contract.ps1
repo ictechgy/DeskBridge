@@ -21,7 +21,13 @@ function Hash([string] $Path) { return (Get-FileHash -LiteralPath $Path -Algorit
 $innoSource=[IO.File]::ReadAllText((Join-Path $sourceRoot 'packaging/windows/DeskBridge.iss'))
 # Rebranding must overwrite the existing broker, not strand a privileged old copy.
 Expect ($innoSource.Contains('AppId={{7BB82A17-E531-4D04-A1FA-E8912E9E8E99}') -and
-        $innoSource.Contains('DefaultDirName={autopf}\DeskBridge')) 'Installer upgrade identity must remain stable.'
+        $innoSource.Contains('UsePreviousAppDir=yes')) 'Installer identity and previous installation directory must remain stable on upgrades.'
+Expect ($innoSource.Contains('DefaultDirName={autopf}\Knot')) 'Fresh installations must use the public Knot folder name.'
+Expect ($innoSource.Contains('UninstallDisplayIcon={app}\AppIcon.ico')) 'Installed Apps must show the Knot icon.'
+foreach ($shortcut in @('Knot 설정','Knot 제거')) {
+ $line=@($innoSource -split '\r?\n' | Where-Object { $_.StartsWith('Name: "{group}\'+$shortcut+'";') })
+ Expect ($line.Count -eq 1 -and $line[0].Contains('IconFilename: "{app}\AppIcon.ico"')) 'Every public shortcut must use the same Knot icon.'
+}
 Expect ($innoSource.Contains('Source: "..\..\build\windows\Knot-Windows.exe"; DestDir: "{app}"; DestName: "DeskBridge-Windows.exe";')) 'Publicly renamed helper must replace the existing installed broker.'
 Expect ($innoSource.Contains('Filename: "{app}\DeskBridge-Windows.exe"; Description: ')) 'Installed launch path must use the replaced broker.'
 $uninstallStart=$innoSource.IndexOf('function InitializeUninstall(): Boolean;',[StringComparison]::Ordinal)

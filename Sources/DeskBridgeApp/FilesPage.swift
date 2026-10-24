@@ -14,7 +14,7 @@ struct FilesPage: View {
     @State private var confirmingKeyReplacement = false
     @State private var identityToReplace: FilesModel.KeyReplacementSnapshot?
 
-    private var settingsLocked: Bool { model.busy || model.connected }
+    private var settingsLocked: Bool { model.busy || model.connected || !model.activityAllowed }
     private var targetLocked: Bool { settingsLocked || desktop.busy || desktop.streaming }
 
     var body: some View {
@@ -34,6 +34,8 @@ struct FilesPage: View {
                 } else {
                     connectionIntroduction
                 }
+
+                if !model.connected { automaticSetup }
 
                 connectionSettings
 
@@ -69,6 +71,40 @@ struct FilesPage: View {
                 Text("저장된 키: \(identityToReplace.savedPath.isEmpty ? "없음" : identityToReplace.savedPath)\n입력 중인 키: \(identityToReplace.draftPath.isEmpty ? "없음" : identityToReplace.draftPath)\n새 공개 키를 Windows에 다시 등록해야 파일을 연결할 수 있습니다. 기존 키 파일은 지우지 않습니다.")
             }
         }
+    }
+
+    private var automaticSetup: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("자동 파일 설정", systemImage: "link").font(.headline)
+            Text("Mac 키와 설정을 안전하게 전달합니다. Windows에서 한 번 승인한 뒤 두 화면의 SSH 지문을 비교하세요.")
+                .foregroundStyle(.secondary)
+            HStack {
+                TextField("허용할 Mac 주소 · 쉼표로 구분", text: $model.setupAddresses)
+                    .textFieldStyle(.roundedBorder)
+                Button("Mac 주소 찾기") { model.findSetupAddresses() }
+            }.disabled(!model.canExchangeSetup)
+            HStack {
+                Text("설정에 사용할 Mac 주소")
+                TextField("Wi-Fi 또는 Tailscale IPv4", text: $model.enrollmentBindAddress)
+                    .textFieldStyle(.roundedBorder)
+            }.disabled(!model.canExchangeSetup)
+            if model.enrollmentLink.isEmpty {
+                Button("자동 파일 설정 시작") { model.startAutomaticFileSetup() }
+                    .buttonStyle(.borderedProminent).disabled(!model.canExchangeSetup)
+            } else {
+                Text("Windows Knot 도우미 → 파일 전송 → 자동 파일 설정에 아래 연결을 붙여 넣으세요. 2분 뒤 만료됩니다.")
+                Text(model.enrollmentLink).font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    .privacySensitive()
+                if let qr = EnrollmentQR.image(model.enrollmentLink) {
+                    Image(nsImage: qr).interpolation(.none).resizable().frame(width: 200, height: 200)
+                        .accessibilityLabel("일회용 파일 설정 연결 QR 코드").privacySensitive()
+                }
+                Button("자동 설정 취소") { model.cancelEnrollment() }
+            }
+            Text("이 설정 연결은 받은 PC가 1회 사용할 수 있습니다. 신뢰하는 Windows에만 전달하세요. 개인 키와 암호는 보내지 않습니다.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+        }.padding(16).quietPanel()
     }
 
     private var connectionIntroduction: some View {
@@ -284,7 +320,7 @@ struct FilesPage: View {
     }
 
     private var setupExchange: some View {
-        DisclosureGroup("Windows 설정 파일 교환", isExpanded: $exchangeExpanded) {
+        DisclosureGroup("설정 파일로 복구 · 수동 교환", isExpanded: $exchangeExpanded) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("1. Mac 키를 만든 뒤, Windows에서 허용할 이 Mac의 IPv4 주소를 확인하세요.")
                 HStack(spacing: 8) {
