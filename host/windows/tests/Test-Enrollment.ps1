@@ -71,7 +71,11 @@ $type=($namespace+'.SyntheticChecks') -as [type]
 $count=$type.GetMethod('Run').Invoke($null,@())
 # Parse modified WinForms code without loading it or executing native leaves.
 $tokens=$null; $errors=$null
-[void][Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Setup-DeskBridge.ps1'),[ref]$tokens,[ref]$errors)
+# PS5 ParseFile/Extent.Text can expose a different newline/BOM view from its
+# absolute offsets. Decode explicitly and parse one normalized string buffer.
+$utf8=New-Object Text.UTF8Encoding($false,$true)
+$guiSource=[IO.File]::ReadAllText((Join-Path $root 'Setup-DeskBridge.ps1'),$utf8).Replace("`r`n","`n").Replace("`r","`n")
+[void][Management.Automation.Language.Parser]::ParseInput($guiSource,[ref]$tokens,[ref]$errors)
 if ($errors.Count) { throw 'Enrollment setup UI has PowerShell parse errors.' }
 # The real broker rebuilds a public reply from the CURRENT request even when
 # the existing, identical managed deployment is reused. Execute only that
@@ -97,11 +101,27 @@ foreach ($id in @('11111111-1111-4111-8111-111111111111','22222222-2222-4222-822
 # Execute the ACTUAL UI operation and failure handler, replacing only native
 # user/approval/process/file-dialog/read leaves with inert callbacks. In
 # particular the real try/catch/status assignments and sanitizer are retained.
-$guiAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Setup-DeskBridge.ps1'),[ref]$tokens,[ref]$errors)
-function Get-InertEnrollmentHandler([string] $Name) {
+function Assert-EnrollmentFixtureSyntax([string] $Source,[string] $Stage) {
+    $fixtureTokens=$null; $fixtureErrors=$null
+    $ast=[Management.Automation.Language.Parser]::ParseInput($Source,[ref]$fixtureTokens,[ref]$fixtureErrors)
+    if ($fixtureErrors.Count) {
+        # Stable parser IDs and positions only; never dump transformed source,
+        # exception text, fixture values or any runtime/user data.
+        $safe=@($fixtureErrors | ForEach-Object { $_.ErrorId+'@'+$_.Extent.StartLineNumber+':'+$_.Extent.StartColumnNumber })
+        throw ('Enrollment fixture syntax failure at '+$Stage+': '+($safe -join ', '))
+    }
+    return $ast
+}
+function Get-InertEnrollmentHandler([string] $Name,[string] $Source) {
+    $normalized=$Source.Replace("`r`n","`n").Replace("`r","`n")
+    $guiAst=Assert-EnrollmentFixtureSyntax $normalized 'input'
     $definition=@($guiAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $Name},$true))
     if ($definition.Count -ne 1) { throw 'Enrollment handler fixture extraction failed.' }
-    $function=$definition[0]; $text=$function.Extent.Text; $edits=@()
+    $function=$definition[0]
+    # Slice the SAME buffer that ParseInput indexed, rather than relying on
+    # engine-specific formatting returned by IScriptExtent.Text.
+    $text=$normalized.Substring($function.Extent.StartOffset,$function.Extent.EndOffset-$function.Extent.StartOffset)
+    $edits=@()
     foreach ($node in $function.FindAll({param($item) $item -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $item.Static},$true)) {
         if ($node.Expression -isnot [Management.Automation.Language.TypeExpressionAst]) { continue }
         $typeName=$node.Expression.TypeName.FullName
@@ -116,11 +136,53 @@ function Get-InertEnrollmentHandler([string] $Name) {
             $edits+=@{Offset=$node.Extent.StartOffset-$function.Extent.StartOffset;Length=$node.Extent.EndOffset-$node.Extent.StartOffset;Text="([pscustomobject]@{Filter='';FileName=''})"}
         }
     }
-    foreach ($edit in @($edits | Sort-Object Offset -Descending)) { $text=$text.Remove($edit.Offset,$edit.Length).Insert($edit.Offset,$edit.Text) }
+    foreach ($edit in @($edits | Sort-Object @{Expression={[int]$_['Offset']}} -Descending)) {
+        # Explicit dictionary access avoids PS5 adapted-member differences
+        # (notably Length) while applying original-source offsets.
+        $offset=[int]$edit['Offset']; $length=[int]$edit['Length']; $replacement=[string]$edit['Text']
+        if ($offset -lt 0 -or $length -lt 1 -or $offset+$length -gt $text.Length) { throw 'Enrollment fixture edit bounds are invalid.' }
+        $text=$text.Remove($offset,$length).Insert($offset,$replacement)
+    }
+    [void](Assert-EnrollmentFixtureSyntax $text 'transformed-handler')
     return $text
 }
-$operationSource=Get-InertEnrollmentHandler 'Invoke-FileSetup'
-$failureSource=Get-InertEnrollmentHandler 'Show-Failure'
+$operationSource=Get-InertEnrollmentHandler 'Invoke-FileSetup' $guiSource
+$failureSource=Get-InertEnrollmentHandler 'Show-Failure' $guiSource
+$lineEndingChecks=0
+foreach ($name in @('Invoke-FileSetup','Show-Failure')) {
+    $lf=Get-InertEnrollmentHandler $name $guiSource
+    $crlf=Get-InertEnrollmentHandler $name ($guiSource.Replace("`n","`r`n"))
+    if ($lf -cne $crlf) { throw 'Actual enrollment handler changes with CRLF source.' }
+    $lineEndingChecks++
+}
+# New inert Unicode/quoted-argument fixture stresses edit offsets before the
+# exact syntax that failed in native PS5 CI. It is parsed, never executed.
+$quotedFixture=@'
+# 앞선 Unicode text shifts character offsets; this is synthetic source only.
+function SyntheticEnrollmentHandler {
+    $arguments='--operation synthetic'
+    if ([Windows.Forms.MessageBox]::Show('한글 "안내"','Knot','OKCancel','Information') -eq 'OK') {
+        $sid=([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+        $arguments='-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "' + $script + '" -Operation ' + $Operation
+        $save=New-Object Windows.Forms.SaveFileDialog
+    }
+}
+'@
+$quotedLF=Get-InertEnrollmentHandler 'SyntheticEnrollmentHandler' $quotedFixture
+$quotedCRLF=Get-InertEnrollmentHandler 'SyntheticEnrollmentHandler' ($quotedFixture.Replace("`n","`r`n"))
+if ($quotedLF -cne $quotedCRLF -or -not $quotedLF.Contains('$arguments=''-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "'' + $script + ''" -Operation '' + $Operation')) { throw 'Quoted enrollment fixture changed outside the approved native leaves.' }
+$lineEndingChecks++
+# A deliberately invalid new fixture proves syntax assertions fail before any
+# ScriptBlock.Create/handler invocation, with parser IDs/positions only.
+$invalidRejected=$false
+try { [void](Assert-EnrollmentFixtureSyntax 'function Broken { "' 'synthetic-invalid') }
+catch {
+    $invalidRejected=$_.Exception.Message.StartsWith('Enrollment fixture syntax failure at synthetic-invalid: ')
+    if ($_.Exception.Message.Contains('function Broken')) { throw 'Fixture syntax diagnostics exposed source text.' }
+}
+if (-not $invalidRejected) { throw 'Enrollment fixture failed to reject invalid transformed syntax.' }
+$lineEndingChecks++
+$count+=$lineEndingChecks
 Import-Module (Join-Path $root 'SetupStatus.psm1') -Force
 $handlerCases=0
 foreach ($operation in @('EnableFiles','Export','DisableFiles')) {
@@ -197,4 +259,4 @@ foreach ($operation in @('EnableFiles','Export','DisableFiles')) {
         $handlerCases++
     }
 }
-@{status='passed';checks=$count+3;freshSyntheticOnly=$true;network=$false;ui=$false;services=$false;actualBrokerReplyProjection=$true;actualUIHandlerCases=$handlerCases} | ConvertTo-Json -Compress
+@{status='passed';checks=$count+3;freshSyntheticOnly=$true;network=$false;ui=$false;services=$false;actualBrokerReplyProjection=$true;actualUIHandlerCases=$handlerCases;lineEndingChecks=$lineEndingChecks} | ConvertTo-Json -Compress
