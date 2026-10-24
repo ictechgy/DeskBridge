@@ -17,7 +17,7 @@ def render_installation_links(text, revision):
     """Render the distribution guide independently of its extracted directory."""
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Installation guide links require an exact source commit.")
-    relative_targets = {"host/windows/README.md", "docs/BRAND_COMPATIBILITY.md",
+    relative_targets = {"host/windows/README.md", "docs/BRAND_COMPATIBILITY.md", "docs/FILE_ENROLLMENT.md",
                         "docs/RELEASING.md", "docs/HEADLESS_WINDOWS.md"}
 
     def render_target(target):
