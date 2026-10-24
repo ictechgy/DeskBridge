@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-only
 # Runs a copied, actual packaging script against NEW synthetic fixtures only.
 # Signing, certificate access, launcher compilation and Inno compilation are mocked.

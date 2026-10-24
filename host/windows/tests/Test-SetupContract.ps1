@@ -238,10 +238,19 @@ foreach ($state in @('Installed','InstalledPendingRestart','RemovalPending','Rec
 Expect ((Get-KnotHeadlessAvailabilityText 'manifest-invalid') -match '새 Knot 배포') 'Invalid package metadata has distinct recovery guidance'
 Expect ((Get-KnotHeadlessAvailabilityText 'upstream-ipc-review') -match '보안 검토') 'Driver policy hold keeps its existing explanation'
 # Parse every shipped PowerShell file, without running the GUI or elevated backend.
-foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object { $_.Extension -in @('.ps1','.psm1') }) {
- $tokens=$null;$errors=$null
- [void][Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
- Expect ($errors.Count -eq 0) ('PowerShell parse: ' + $file.Name)
+$repository=Split-Path (Split-Path $root -Parent) -Parent
+foreach ($scriptRoot in @($root,(Join-Path $repository 'scripts'),(Join-Path $repository 'packaging'))) {
+ foreach ($file in Get-ChildItem -LiteralPath $scriptRoot -Recurse -File | Where-Object { $_.Extension -in @('.ps1','.psm1') }) {
+  # Windows PowerShell 5.1 treats BOM-less source as ANSI. Require explicit
+  # UTF-8 for translated text before parsing, including installer tooling.
+  $bytes=[IO.File]::ReadAllBytes($file.FullName); $asciiOnly=$true
+  foreach ($byte in $bytes) { if ($byte -gt 127) { $asciiOnly=$false; break } }
+  $utf8Bom=$bytes.Length -ge 3 -and $bytes[0] -eq 239 -and $bytes[1] -eq 187 -and $bytes[2] -eq 191
+  Expect ($asciiOnly -or $utf8Bom) ('PowerShell 5.1 source encoding: ' + $file.Name)
+  $tokens=$null;$errors=$null
+  [void][Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
+  Expect ($errors.Count -eq 0) ('PowerShell parse: ' + $file.Name)
+ }
 }
 @{status='passed';checks=$count;scope='pure synthetic contract and syntax checks, no Windows configuration or GUI'} | ConvertTo-Json
 

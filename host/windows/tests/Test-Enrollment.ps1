@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # SPDX-License-Identifier: GPL-3.0-only
 # Actual client parser/certificate pin/framing, with MemoryStreams only. No GUI,
 # service, network connection, existing identity, preferences or user data.
