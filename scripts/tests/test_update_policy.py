@@ -47,7 +47,7 @@ class PublisherChecks(unittest.TestCase):
     def test_configured_requires_signed_feed_and_archive(self):
         (self.root/'VERSION').write_text('0.2.0-preview.17'); self.check(self.config)
         result=sparkle_info(self.root)
-        self.assertTrue(result['SURequireSignedFeed']); self.assertTrue(result['SUVerifyUpdateBeforeExtraction']); self.assertFalse(result['SUAutomaticallyUpdate'])
+        self.assertTrue(result['SURequireSignedFeed']); self.assertTrue(result['SUVerifyUpdateBeforeExtraction']); self.assertFalse(result['SUAutomaticallyUpdate']); self.assertFalse(result['SUAllowsAutomaticUpdates'])
 
 class OfficialRuntimeChecks(unittest.TestCase):
     def test_only_pinned_in_bundle_links_and_linkage_are_admitted(self):

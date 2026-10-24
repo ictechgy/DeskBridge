@@ -124,7 +124,7 @@ def sparkle_info(root, *, enabled=True):
             'KnotUpdatesConfigured': bool(record)}
     if record:
         info.update(SUFeedURL=record['macFeedURL'], SUPublicEDKey=record['publicEDKey'],
-                    SUEnableAutomaticChecks=True, SUAutomaticallyUpdate=False,
+                    SUEnableAutomaticChecks=True, SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=False,
                     SUVerifyUpdateBeforeExtraction=True, SURequireSignedFeed=True,
                     SUSignedFeedFailureExpirationInterval=0)
     return info
