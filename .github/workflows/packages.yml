@@ -232,6 +232,15 @@ jobs:
       - name: Build Windows installer
         shell: powershell
         run: .\packaging\windows\Build-Installer.ps1 -Compiler $env:INNO_COMPILER -NativeCompiler $env:DESKBRIDGE_NATIVE_COMPILER
+      - name: Validate actual installer product metadata
+        shell: powershell
+        run: |
+          $version = [IO.File]::ReadAllText((Join-Path $PWD 'VERSION')).Trim()
+          $path = Join-Path $PWD ('dist\release\Knot-' + $version + '-windows-x64-setup.exe')
+          $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+          if ($info.ProductName -cne 'Knot' -or $info.FileDescription -cne 'Knot Windows x64 Setup' -or $info.ProductVersion -cne $version) {
+            throw 'Installer product metadata does not match the signed updater contract'
+          }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-installer-preview

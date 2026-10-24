@@ -543,6 +543,7 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
     let forkStarted = temporary.appendingPathComponent("fork-escaped.started")
     let forkDenied = temporary.appendingPathComponent("fork-escaped.denied")
     let companionMarker = temporary.appendingPathComponent("companion-completed")
+    let lingerReady = temporary.appendingPathComponent("linger-ready")
     let code = """
     #include <unistd.h>
     #include <stdio.h>
@@ -565,7 +566,11 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
           usleep(30000); return 0;
         }
       } else if (strcmp(argv[1], "linger") == 0) {
-        signal(SIGTERM, SIG_IGN);
+        if (signal(SIGTERM, SIG_IGN) == SIG_ERR) return 6;
+        FILE *ready = fopen(argv[2], "wx"); if (!ready) return 7;
+        int written = fputs("SYNTHETIC SIGTERM READY", ready);
+        int closed = fclose(ready);
+        if (written == EOF || closed != 0) return 8;
         for (;;) pause();
       }
       usleep(400000);
@@ -595,8 +600,18 @@ private final class SyntheticMacHostRedirectResult: @unchecked Sendable {
           FileManager.default.fileExists(atPath: companionMarker.path) else {
         throw ModelCheckFailure(message: "owned host fork was not denied or cleanup affected unrelated companion")
     }
-    let linger = try MacHostChild(executable: executable, arguments: ["linger", forkMarker.path])
-    try await Task.sleep(for: .milliseconds(30))
+    let linger = try MacHostChild(executable: executable, arguments: ["linger", lingerReady.path])
+    defer { linger.forceStop() }
+    // Spawning the supervisor does not mean its sandboxed child has exec'd.
+    // Stop only after the inert child confirms its SIGTERM handler is installed.
+    let ready = Data("SYNTHETIC SIGTERM READY".utf8)
+    let readinessDeadline = ContinuousClock.now + .seconds(5)
+    while linger.running && (try? Data(contentsOf: lingerReady)) != ready && ContinuousClock.now < readinessDeadline {
+        try await Task.sleep(for: .milliseconds(2))
+    }
+    guard linger.running, (try? Data(contentsOf: lingerReady)) == ready else {
+        throw ModelCheckFailure(message: "owned process fixture did not become ready for forced group stop")
+    }
     linger.stop(); try await Task.sleep(for: .milliseconds(20))
     guard linger.running else { throw ModelCheckFailure(message: "fixture did not exercise forced group stop") }
     linger.forceStop()

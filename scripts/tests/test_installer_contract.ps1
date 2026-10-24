@@ -19,6 +19,10 @@ function Expect([bool] $Condition,[string] $Message) {
 function Hash([string] $Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
 # Read the actual Pascal uninstall function as data. No Inno/native process is run.
 $innoSource=[IO.File]::ReadAllText((Join-Path $sourceRoot 'packaging/windows/DeskBridge.iss'))
+# Inno's numeric ProductVersion cannot contain prerelease text. The signed
+# updater reads the textual ProductVersion, which must retain the full VERSION.
+Expect ([regex]::Matches($innoSource,'(?m)^VersionInfoProductTextVersion=\{#AppVersion\}\r?$').Count -eq 1 -and
+        -not [regex]::IsMatch($innoSource,'(?m)^VersionInfoProductVersion=\{#AppVersion\}\r?$')) 'Full prerelease versions must use the textual Inno product version field.'
 # Rebranding must overwrite the existing broker, not strand a privileged old copy.
 Expect ($innoSource.Contains('AppId={{7BB82A17-E531-4D04-A1FA-E8912E9E8E99}') -and
         $innoSource.Contains('UsePreviousAppDir=yes')) 'Installer identity and previous installation directory must remain stable on upgrades.'
