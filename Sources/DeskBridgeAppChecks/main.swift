@@ -149,6 +149,8 @@ struct AppModelChecks {
         print("{\"desktopEnrollmentAdmissionChecks\":\(enrollmentAdmission),\"scope\":\"actual model entry points; inert operations; no network\"}")
         let screenVerification = try await runScreenVerificationChecks(temporary: temporary)
         let desktopReopen = try await runDesktopReopenChecks(temporary: temporary)
+        let desktopQuality = try await runDesktopQualityChecks(temporary: temporary)
+        print("{\"desktopQualityChecks\":\(desktopQuality),\"scope\":\"actual model to stream configuration; synthetic settings; no network or UI\"}")
         let desktopRecovery = try runDesktopRecoveryChecks()
         let termination = try await runDesktopTerminationChecks()
         let linuxContext = try await runLinuxContextChecks(temporary: temporary)

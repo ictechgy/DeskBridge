@@ -168,6 +168,7 @@ function SyntheticEnrollmentHandler {
     }
 }
 '@
+$quotedFixture=$quotedFixture.Replace("`r`n","`n").Replace("`r","`n")
 $quotedLF=Get-InertEnrollmentHandler 'SyntheticEnrollmentHandler' $quotedFixture
 $quotedCRLF=Get-InertEnrollmentHandler 'SyntheticEnrollmentHandler' ($quotedFixture.Replace("`n","`r`n"))
 if ($quotedLF -cne $quotedCRLF -or -not $quotedLF.Contains('$arguments=''-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "'' + $script + ''" -Operation '' + $Operation')) { throw 'Quoted enrollment fixture changed outside the approved native leaves.' }

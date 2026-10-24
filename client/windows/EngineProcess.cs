@@ -20,8 +20,7 @@ namespace DeskBridge.Reverse
         }
         internal static string[] Stream(string address, string resolution, int fps, int bitrate, bool fullscreen, bool macCommandKeys = false)
         {
-            if (resolution != "1920x1080" && resolution != "2560x1440" && resolution != "1280x720") throw new ArgumentException("지원되지 않는 해상도입니다.");
-            if (fps != 30 && fps != 60 || bitrate != 10000 && bitrate != 20000 && bitrate != 40000) throw new ArgumentException("지원되지 않는 화면 설정입니다.");
+            StreamQualityPolicy.Validate(resolution, fps, bitrate);
             if (macCommandKeys && !fullscreen) throw new ArgumentException("Mac Command 키 전달은 전체 화면에서만 선택하세요.");
             return new[] { "stream", ConnectionPolicy.Address(address), "Desktop", "--display-mode", fullscreen ? "fullscreen" : "windowed",
                 "--resolution", resolution, "--fps", fps.ToString(System.Globalization.CultureInfo.InvariantCulture),

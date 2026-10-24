@@ -46,6 +46,7 @@ final class DesktopModel: ObservableObject {
     @Published var fingerprint = ""
     @Published var resolution = 1080
     @Published var frameRate = 60
+    @Published var bitrateKbps = 0
     @Published var keyboardMode: DesktopKeyboardMode = .localIME {
         didSet { stream.keyboardMode = keyboardMode }
     }
@@ -363,8 +364,11 @@ final class DesktopModel: ObservableObject {
     func start(_ app: HostApp) {
         guard !enrollmentEngaged else { errorMessage = "자동 파일 설정을 마치거나 취소한 뒤 화면 작업을 시작하세요."; return }
         guard !stream.isEngaged, !peerEngaged else { errorMessage = "현재 PC의 화면 연결과 정리를 마친 뒤 다른 화면을 여세요."; return }
+        let requestedResolution = resolution, requestedFrameRate = frameRate, requestedBitrate = bitrateKbps
         perform { [self] in
             guard paired, let network, let server else { throw AppFailure("먼저 PC를 페어링하세요.") }
+            let video = try DesktopVideoPolicy(resolution: requestedResolution,
+                frameRate: requestedFrameRate, bitrateKbps: requestedBitrate)
             try targetBinding.require(input: address, expectedAddress: server.address)
             // Disconnect leaves the Windows application running. Refresh occupancy
             // through the existing certificate pin before choosing launch vs resume.
@@ -379,9 +383,8 @@ final class DesktopModel: ObservableObject {
             }
             refreshed.serverName = Self.displayName(refreshed.serverName, fallback: server.address)
             self.server = refreshed
-            let width = resolution == 1440 ? 2560 : 1920
-            let config = StreamConfiguration(width: width, height: resolution, fps: frameRate,
-                                             bitrateKbps: resolution == 1440 ? 30000 : 20000,
+            let config = StreamConfiguration(width: video.width, height: video.height, fps: video.frameRate,
+                                             bitrateKbps: video.bitrateKbps,
                                              remote: refreshed.address.hasPrefix("100."))
             do {
                 try await operations.openStream(stream, network, refreshed, String(app.id), config)
