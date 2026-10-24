@@ -21,6 +21,8 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
         (IdentityStorageError.incompleteIdentity, "인증 파일 전체를 복원"),
         (StreamSecurityPolicy.Failure.plaintextSignalling, "필수 화면 암호화"),
         (StreamSecurityPolicy.Failure.missingEncryption(7), "필수 화면 암호화"),
+        (StreamError.securityNegotiation(.plaintextSignalling), "[S01]"),
+        (StreamError.securityNegotiation(.missingEncryption(2)), "[S02]"),
         (PairingFailure.invalidAddress, "IPv4 주소"),
         (PairingFailure.unreachable, "네트워크 연결"),
         (PairingFailure.gameStream, "Sunshine 호스트"),
@@ -59,6 +61,11 @@ func runDesktopFailureGuidanceChecks(temporary: URL) async throws -> Int {
                    "failed desktop operation retained its PIN or busy status")
     }
     let localMessage = "합성 설정 오류를 확인하세요."
+    let missingVideo = DesktopModel.failureMessage(StreamError.securityNegotiation(.missingEncryption(2)))
+    try expect(missingVideo.contains("Windows 브라우저") && missingVideo.contains("Required for all clients") && missingVideo.contains("Save → Apply") && !missingVideo.contains("Mandatory"),
+               "video encryption failure lost the actual pinned Sunshine settings labels and device context")
+    try expect(!DesktopModel.failureMessage(StreamError.crypto(raw)).contains("암호화 설정"),
+               "unrelated crypto failures must not claim a missing Sunshine encryption setting")
     try expect(DesktopModel.failureMessage(AppFailure(localMessage)) == localMessage,
                "local actionable app errors must retain their specific guidance")
     let unknown = DesktopModel.failureMessage(NSError(domain: raw, code: -1, userInfo: [NSLocalizedDescriptionKey: raw]))
