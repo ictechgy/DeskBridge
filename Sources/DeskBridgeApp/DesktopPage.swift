@@ -112,7 +112,7 @@ struct DesktopPage: View {
                         Picker("열 화면", selection: appSelection) {
                             if launchApp == nil { Text("화면 선택").tag(Optional<Int>.none) }
                             ForEach(model.apps) { app in Text(app.name).tag(Optional(app.id)) }
-                        }.frame(maxWidth: 260).disabled(model.busy || model.stream.isEngaged || model.peerEngaged)
+                        }.frame(maxWidth: 260).disabled(model.busy || model.stream.isEngaged || model.peerEngaged || model.enrollmentEngaged)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 MonitorIllustration(platform: model.platformName).frame(width: 190)
@@ -127,7 +127,7 @@ struct DesktopPage: View {
                 Label(launchApp?.name.localizedCaseInsensitiveContains("desktop") == false ? "앱 열기" : "\(model.platformName) 열기",
                       systemImage: "arrow.up.left.and.arrow.down.right")
                     .padding(.horizontal, 5).padding(.vertical, 4)
-            }.buttonStyle(.borderedProminent).disabled(model.busy || model.stream.isEngaged || model.peerEngaged || launchApp == nil)
+            }.buttonStyle(.borderedProminent).disabled(model.busy || model.stream.isEngaged || model.peerEngaged || model.enrollmentEngaged || launchApp == nil)
             if model.apps.isEmpty {
                 Text("Sunshine에 Desktop 앱을 추가한 뒤 PC를 다시 확인하세요.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -136,7 +136,7 @@ struct DesktopPage: View {
             Button("저장된 PC 다시 확인") { model.connect() }
                 .buttonStyle(.borderedProminent).disabled(!model.canVerifyCurrentPC)
         } else if !model.serverName.isEmpty {
-            Button("PIN으로 연결") { model.pair() }.buttonStyle(.borderedProminent).disabled(model.busy)
+            Button("PIN으로 연결") { model.pair() }.buttonStyle(.borderedProminent).disabled(model.busy || model.enrollmentEngaged)
         } else {
             Button(model.settings.host == nil ? "PC 확인" : "저장된 PC 확인") { model.connect() }
                 .buttonStyle(.borderedProminent).disabled(!model.canVerifyCurrentPC || model.address.isEmpty)

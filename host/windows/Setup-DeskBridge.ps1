@@ -330,6 +330,8 @@ $load = Add-Button 'Mac 설정 파일 불러오기…' {
     } catch { $requestBox.Text=''; Show-Failure $_ }
 }
 function Invoke-FileSetup([string] $Operation, $AutomaticRequest=$null, $AutomaticClient=$null) {
+    # Set only after a validated native completion and canonical current reply.
+    $confirmedAutomaticReply=$null
     Set-Busy $true
     if ($AutomaticClient) { $enrollmentCancel.Enabled=$true }
     try {
@@ -395,6 +397,7 @@ function Invoke-FileSetup([string] $Operation, $AutomaticRequest=$null, $Automat
         $reply=Get-Content -LiteralPath $replyPath -Raw | ConvertFrom-Json
         if ($reply.requestID -cne $expected.requestID -or $reply.clientPublicKey -cne $expected.clientPublicKey -or $reply.address -cne $selectedAddress) { throw 'Windows 연결 결과가 현재 Mac 설정과 다릅니다. 설정 파일과 선택한 PC 주소를 다시 확인하세요.' }
         $fingerprint=Get-KeyFingerprint $reply.serverPublicKey
+        $confirmedAutomaticReply=[pscustomobject]@{Fingerprint=$fingerprint}
         $status.Text="Windows SSH 지문 (Mac 화면과 비교):`r`n" + $fingerprint
         if ($AutomaticClient) {
             if (-not $AutomaticClient.Active) { throw 'Windows 파일 설정은 완료됐지만 Mac 자동 연결이 만료되었습니다. 새 Mac 연결로 다시 시도하거나 연결 파일 다시 저장을 사용하세요. 설정을 제거할 필요가 없습니다.' }
@@ -412,7 +415,15 @@ function Invoke-FileSetup([string] $Operation, $AutomaticRequest=$null, $Automat
             $detail=if ($saved -eq 'Cancelled') {'연결 파일 저장을 취소했습니다.'} else {'연결 파일을 저장하지 못했습니다.'}
             $status.Text="파일 설정 완료 · " + $detail + "`r`nWindows SSH 지문: " + $fingerprint + "`r`n‘이미 설정한 연결 파일 다시 저장’으로 다시 저장하세요. 설정을 다시 설치할 필요가 없습니다."
         }
-    } catch { Show-Failure $_ }
+    } catch {
+        if ($AutomaticClient -and $null -ne $confirmedAutomaticReply) {
+            # Native provisioning/export succeeded and this request's public
+            # reply was validated. Delivery failure must not erase its verified
+            # SSH fingerprint or misreport Windows activation as failed. Render
+            # fixed authored guidance only; never surface transport exceptions.
+            $status.Text="Windows 파일 설정 완료 · Mac으로 연결 결과를 전달하지 못했습니다.`r`nWindows SSH 지문: " + $confirmedAutomaticReply.Fingerprint + "`r`nMac에서 새 자동 파일 설정 연결을 만든 뒤 같은 Mac 키로 다시 시도하세요. 또는 「이미 설정한 연결 파일 다시 저장」으로 전달하세요. 파일 접속을 해제하거나 다시 설치할 필요는 없습니다. Mac에서 SSH 지문을 직접 비교한 뒤 등록하세요."
+        } else { Show-Failure $_ }
+    }
     finally { Set-Busy $false }
 }
 $enable = Add-Button '파일 전송 설정 · 연결 파일 만들기…' { Invoke-FileSetup 'EnableFiles' }

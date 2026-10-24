@@ -94,4 +94,107 @@ foreach ($id in @('11111111-1111-4111-8111-111111111111','22222222-2222-4222-822
     if ($reply.requestID -cne $id -or $reply.requestID -ceq $previousID -or $reply.clientPublicKey -cne $clientKey -or $reply.address -cne $address -or $reply.serverPublicKey -cne $key) { throw 'Reused setup returned stale public enrollment identity.' }
     $previousID=$reply.requestID; $count++
 }
-@{status='passed';checks=$count+3;freshSyntheticOnly=$true;network=$false;ui=$false;services=$false;actualBrokerReplyProjection=$true} | ConvertTo-Json -Compress
+# Execute the ACTUAL UI operation and failure handler, replacing only native
+# user/approval/process/file-dialog/read leaves with inert callbacks. In
+# particular the real try/catch/status assignments and sanitizer are retained.
+$guiAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Setup-DeskBridge.ps1'),[ref]$tokens,[ref]$errors)
+function Get-InertEnrollmentHandler([string] $Name) {
+    $definition=@($guiAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $Name},$true))
+    if ($definition.Count -ne 1) { throw 'Enrollment handler fixture extraction failed.' }
+    $function=$definition[0]; $text=$function.Extent.Text; $edits=@()
+    foreach ($node in $function.FindAll({param($item) $item -is [Management.Automation.Language.InvokeMemberExpressionAst] -and $item.Static},$true)) {
+        if ($node.Expression -isnot [Management.Automation.Language.TypeExpressionAst]) { continue }
+        $typeName=$node.Expression.TypeName.FullName
+        if ($typeName -ceq 'Windows.Forms.MessageBox' -and $node.Member.Value -ceq 'Show') {
+            $edits+=@{Offset=$node.Extent.StartOffset-$function.Extent.StartOffset;Length=$node.Extent.EndOffset-$node.Extent.StartOffset;Text="'OK'"}
+        } elseif ($typeName -ceq 'Security.Principal.WindowsIdentity' -and $node.Member.Value -ceq 'GetCurrent') {
+            $edits+=@{Offset=$node.Extent.StartOffset-$function.Extent.StartOffset;Length=$node.Extent.EndOffset-$node.Extent.StartOffset;Text="([pscustomobject]@{User=[pscustomobject]@{Value='S-1-5-21-100-200-300-1001'}})"}
+        }
+    }
+    foreach ($node in $function.FindAll({param($item) $item -is [Management.Automation.Language.CommandAst] -and $item.GetCommandName() -ceq 'New-Object'},$true)) {
+        if ($node.CommandElements.Count -eq 2 -and $node.CommandElements[1].Value -ceq 'Windows.Forms.SaveFileDialog') {
+            $edits+=@{Offset=$node.Extent.StartOffset-$function.Extent.StartOffset;Length=$node.Extent.EndOffset-$node.Extent.StartOffset;Text="([pscustomobject]@{Filter='';FileName=''})"}
+        }
+    }
+    foreach ($edit in @($edits | Sort-Object Offset -Descending)) { $text=$text.Remove($edit.Offset,$edit.Length).Insert($edit.Offset,$edit.Text) }
+    return $text
+}
+$operationSource=Get-InertEnrollmentHandler 'Invoke-FileSetup'
+$failureSource=Get-InertEnrollmentHandler 'Show-Failure'
+Import-Module (Join-Path $root 'SetupStatus.psm1') -Force
+$handlerCases=0
+foreach ($operation in @('EnableFiles','Export','DisableFiles')) {
+    $modes=if ($operation -ceq 'DisableFiles') { @('disable') } else { @('expired','send-failed','before-provision','native-failed','wrong-reply','bad-server-key','success','manual-save-cancel') }
+    foreach ($mode in $modes) {
+        $caseResult = & {
+            param($OperationSource,$FailureSource,$Operation,$Mode,$ClientKey,$ServerKey)
+            . ([scriptblock]::Create($OperationSource))
+            . ([scriptblock]::Create($FailureSource))
+            $script:deliveryTestMode=$Mode; $script:deliveryNativeCompleted=$false; $script:deliveryReadCount=0; $script:deliverySendCount=0; $script:deliveryBusyDepth=0
+            $status=[pscustomobject]@{Text=''}; $enrollmentCancel=[pscustomobject]@{Enabled=$false}
+            $LauncherPath='synthetic-not-executed.exe'; $addresses=[pscustomobject]@{SelectedItem='192.168.1.30'}
+            $requestBox=[pscustomobject]@{Text='synthetic-not-opened.json'}
+            $expectedRequest=[pscustomobject]@{kind='deskbridge.mac-setup';version=1;requestID='11111111-1111-4111-8111-111111111111';clientPublicKey=$ClientKey;allowedClientAddresses=@('192.168.1.20')}
+            $script:deliveryReply=[pscustomobject]@{kind='deskbridge.windows-connection';version=1;requestID=$expectedRequest.requestID;clientPublicKey=$ClientKey;address='192.168.1.30';port=22;username='deskbridge-transfer';serverPublicKey=$ServerKey}
+            if ($Mode -ceq 'wrong-reply') { $script:deliveryReply.requestID='22222222-2222-4222-8222-222222222222' }
+            if ($Mode -ceq 'bad-server-key') { $script:deliveryReply.serverPublicKey='ssh-ed25519 invalid' }
+            $rawMarker='SYNTHETIC_PRIVATE_TOKEN_DO_NOT_DISPLAY'
+            function Set-Busy([bool] $Busy) { if ($Busy) { $script:deliveryBusyDepth++ } else { $script:deliveryBusyDepth-- } }
+            function Resolve-DesktopUser($Sid) { return [pscustomobject]@{Name='Synthetic Desktop';SID=[pscustomobject]@{Value='S-1-5-21-100-200-300-1001'}} }
+            function Read-MacSetup($Path) { return $expectedRequest }
+            function Join-Path($Path,$ChildPath) { return 'synthetic-result-not-opened' }
+            function Get-Content($LiteralPath,[switch]$Raw) {
+                if ($LiteralPath -cne 'synthetic-result-not-opened') { throw 'Unexpected fixture file request.' }
+                $script:deliveryReadCount++
+                return $script:deliveryReply | ConvertTo-Json -Compress
+            }
+            function Save-DeskBridgeConnectionReply($Reply,$Dialog) { return 'Cancelled' }
+            function Start-Process($FilePath,$Verb,$ArgumentList,[switch]$PassThru) {
+                if ($script:deliveryTestMode -ceq 'before-provision') { throw 'SYNTHETIC_PRIVATE_TOKEN_DO_NOT_DISPLAY C:\synthetic-untrusted-path' }
+                $exitCode=if ($script:deliveryTestMode -ceq 'native-failed') {1} else {0}
+                $process=[pscustomobject]@{Handle=1;HasExited=$true;ExitCode=$exitCode}
+                $process | Add-Member ScriptMethod WaitForExit { $script:deliveryNativeCompleted=$true }
+                return $process
+            }
+            $client=New-Object PSObject
+            $client | Add-Member ScriptProperty Active { return -not ($script:deliveryTestMode -ceq 'expired' -and $script:deliveryNativeCompleted) }
+            $client | Add-Member ScriptMethod SendReplyAsync {
+                param($Text)
+                $script:deliverySendCount++
+                if ($script:deliveryTestMode -ceq 'send-failed') { return [Threading.Tasks.Task]::FromException([InvalidOperationException]::new('SYNTHETIC_PRIVATE_TOKEN_DO_NOT_DISPLAY C:\synthetic-untrusted-path')) }
+                $completion=[Threading.Tasks.TaskCompletionSource[object]]::new()
+                $completion.SetResult($null)
+                return $completion.Task
+            }
+            if ($Mode -in @('manual-save-cancel','disable')) { Invoke-FileSetup $Operation }
+            else { Invoke-FileSetup $Operation -AutomaticRequest $expectedRequest -AutomaticClient $client }
+            $checks=0; $fingerprint=Get-KeyFingerprint $ServerKey
+            if ($status.Text.Contains($rawMarker) -or $status.Text.Contains('C:\synthetic-untrusted-path')) { throw 'Enrollment delivery leaked a raw exception/path.' }; $checks++
+            if ($script:deliveryBusyDepth -ne 0) { throw 'Enrollment handler failed to restore UI admission.' }; $checks++
+            if ($Mode -in @('expired','send-failed')) {
+                if (-not $status.Text.Contains('Windows 파일 설정 완료') -or -not $status.Text.Contains($fingerprint)) { throw 'Confirmed setup lost its success state or SSH fingerprint after delivery failure.' }; $checks++
+                foreach ($text in @('새 자동 파일 설정 연결','같은 Mac 키','이미 설정한 연결 파일 다시 저장','해제하거나 다시 설치할 필요는 없습니다')) {
+                    if (-not $status.Text.Contains($text)) { throw 'Confirmed setup lost actionable non-destructive delivery recovery.' }; $checks++
+                }
+                if ($script:deliveryReadCount -ne 1 -or ($Mode -ceq 'expired' -and $script:deliverySendCount -ne 0) -or ($Mode -ceq 'send-failed' -and $script:deliverySendCount -ne 1)) { throw 'Delivery recovery was reached without the validated native/public reply sequence.' }; $checks++
+            } elseif ($Mode -ceq 'success') {
+                if (-not $status.Text.Contains('Mac에 전달했습니다') -or -not $status.Text.Contains($fingerprint) -or $script:deliverySendCount -ne 1) { throw 'Successful automatic delivery behavior regressed.' }; $checks++
+            } elseif ($Mode -ceq 'disable') {
+                if (-not $status.Text.Contains('파일 접속을 해제했습니다') -or $status.Text.Contains($fingerprint) -or $script:deliveryReadCount -ne 0 -or $script:deliverySendCount -ne 0) { throw 'Legacy confirmed file revocation behavior regressed.' }; $checks++
+            } elseif ($Mode -ceq 'manual-save-cancel') {
+                if (-not $status.Text.Contains('연결 파일 저장을 취소') -or -not $status.Text.Contains($fingerprint) -or $script:deliverySendCount -ne 0) { throw 'Legacy manual export/save cancellation behavior regressed.' }; $checks++
+            } else {
+                if (-not $status.Text.StartsWith('완료하지 못했습니다.') -or $status.Text.Contains('Windows 파일 설정 완료') -or $status.Text.Contains($fingerprint) -or $script:deliverySendCount -ne 0) { throw 'Unconfirmed Windows activation was promoted to delivery-only success.' }; $checks++
+                if ($Mode -in @('before-provision','native-failed') -and $script:deliveryReadCount -ne 0) { throw 'Unsuccessful native activation read/published a public result.' }; $checks++
+            }
+            return $checks
+        } $operationSource $failureSource $operation $mode $clientKey $key
+        # PowerShell may expose the reflection-only VoidTaskResult/null of an
+        # awaited successful native Task; it carries no fixture/status value.
+        $results=@($caseResult | Where-Object { $null -ne $_ -and $_.GetType().FullName -cne 'System.Threading.Tasks.VoidTaskResult' })
+        if ($results.Count -ne 1 -or $results[0] -isnot [int]) { throw ('Unexpected inert handler outputs for ' + $operation + '/' + $mode) }
+        $count += $results[0]
+        $handlerCases++
+    }
+}
+@{status='passed';checks=$count+3;freshSyntheticOnly=$true;network=$false;ui=$false;services=$false;actualBrokerReplyProjection=$true;actualUIHandlerCases=$handlerCases} | ConvertTo-Json -Compress

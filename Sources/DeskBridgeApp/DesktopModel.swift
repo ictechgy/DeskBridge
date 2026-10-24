@@ -50,12 +50,13 @@ final class DesktopModel: ObservableObject {
         didSet { stream.keyboardMode = keyboardMode }
     }
     @Published private(set) var settings: SavedSettings
-    var canForgetHost: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && settings.host != nil && !busy && !streaming && !stream.isEngaged }
+    var canForgetHost: Bool { !enrollmentEngaged && !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && settings.host != nil && !busy && !streaming && !stream.isEngaged }
     let platform: HostPlatform
     var supportsFiles: Bool { platform == .windows }
     var platformName: String { platform.displayName }
     weak var peerDesktop: DesktopModel?
-    var peerEngaged: Bool { peerDesktop.map { $0.busy || $0.stream.isEngaged } ?? false }
+    var enrollmentEngaged: Bool { fileActivity?.enrollmentActive == true || peerDesktop?.fileActivity?.enrollmentActive == true }
+    var peerEngaged: Bool { peerDesktop.map { $0.busy || $0.stream.isEngaged || $0.fileActivity?.enrollmentActive == true } ?? false }
     let store: SettingsStore
     private let identity: IdentityManager
     private let operations: DesktopOperations
@@ -70,9 +71,9 @@ final class DesktopModel: ObservableObject {
     let stream: DesktopStreamController
     let nearby = NearbyPCBrowser()
     weak var fileActivity: FilesModel?
-    var canChoosePC: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && !busy && !streaming && !stream.isEngaged && !peerEngaged && fileActivity?.busy != true && fileActivity?.connected != true }
+    var canChoosePC: Bool { !KnotUpdates.shared.installationPending && !shuttingDown && settingsReadable && !busy && !streaming && !stream.isEngaged && !peerEngaged && fileActivity?.enrollmentModalActive != true && fileActivity?.busy != true && fileActivity?.connected != true }
     var canVerifyCurrentPC: Bool {
-        guard !KnotUpdates.shared.installationPending, !shuttingDown, settingsReadable, !busy, !streaming, !stream.isEngaged, !peerEngaged, fileActivity?.busy != true else { return false }
+        guard !enrollmentEngaged, !KnotUpdates.shared.installationPending, !shuttingDown, settingsReadable, !busy, !streaming, !stream.isEngaged, !peerEngaged, fileActivity?.busy != true else { return false }
         guard fileActivity?.connected == true else { return true }
         guard let checked = try? EndpointPolicy.validatedAddress(address) else { return false }
         return fileActivity?.isConnected(toValidatedAddress: checked) == true
@@ -145,13 +146,16 @@ final class DesktopModel: ObservableObject {
     func assertFileCapability() throws {
         guard supportsFiles else { throw AppFailure("Linux 연결은 화면만 지원합니다. 파일 기능은 Windows 연결에서 사용하세요.") }
     }
-    func perform(allowDuringUpdate: Bool = false, _ body: @escaping @MainActor () async throws -> Void) {
+    func perform(allowCleanup: Bool = false, _ body: @escaping @MainActor () async throws -> Void) {
         guard !shuttingDown else { return }
-        guard allowDuringUpdate || !KnotUpdates.shared.installationPending else {
+        guard allowCleanup || !KnotUpdates.shared.installationPending else {
             errorMessage = "업데이트 설치를 기다리고 있습니다. 연결을 마친 뒤 앱을 다시 여세요."; return
         }
+        guard allowCleanup || !enrollmentEngaged else {
+            errorMessage = "자동 파일 설정을 마치거나 취소한 뒤 화면 작업을 시작하세요."; return
+        }
         guard !busy else { errorMessage = "현재 작업을 마친 뒤 다시 시도하세요."; return }
-        guard !peerEngaged else { errorMessage = "다른 PC의 화면 작업을 마친 뒤 다시 시도하세요."; return }
+        guard allowCleanup || !peerEngaged else { errorMessage = "다른 PC의 화면 작업을 마친 뒤 다시 시도하세요."; return }
         errorMessage = nil; busy = true
         let current = UUID(); generation = current
         operation = Task { [weak self] in
@@ -357,6 +361,7 @@ final class DesktopModel: ObservableObject {
         status = apps.isEmpty ? "Sunshine에서 Desktop 앱을 추가한 뒤 다시 연결하세요." : "연결할 Desktop 또는 앱을 선택하세요."
     }
     func start(_ app: HostApp) {
+        guard !enrollmentEngaged else { errorMessage = "자동 파일 설정을 마치거나 취소한 뒤 화면 작업을 시작하세요."; return }
         guard !stream.isEngaged, !peerEngaged else { errorMessage = "현재 PC의 화면 연결과 정리를 마친 뒤 다른 화면을 여세요."; return }
         perform { [self] in
             guard paired, let network, let server else { throw AppFailure("먼저 PC를 페어링하세요.") }
@@ -389,7 +394,7 @@ final class DesktopModel: ObservableObject {
         }
     }
     func disconnect() {
-        perform(allowDuringUpdate: true) { [self] in
+        perform(allowCleanup: true) { [self] in
             await stream.disconnect()
             streaming = false
             status = "화면 연결을 끊었습니다. \(platformName) 앱은 계속 실행됩니다."

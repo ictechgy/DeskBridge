@@ -145,6 +145,8 @@ struct AppModelChecks {
         let updateReconnect = try runUpdateReconnectChecks(temporary: temporary)
         print("{\"updateReconnectChecks\":\(updateReconnect),\"scope\":\"new synthetic receipts and settings; no network\"}")
         let setupExchangeGate = try runSetupExchangeGateChecks(temporary: temporary)
+        let enrollmentAdmission = try await runDesktopEnrollmentAdmissionChecks(temporary: temporary)
+        print("{\"desktopEnrollmentAdmissionChecks\":\(enrollmentAdmission),\"scope\":\"actual model entry points; inert operations; no network\"}")
         let screenVerification = try await runScreenVerificationChecks(temporary: temporary)
         let desktopReopen = try await runDesktopReopenChecks(temporary: temporary)
         let desktopRecovery = try runDesktopRecoveryChecks()
