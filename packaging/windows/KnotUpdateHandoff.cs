@@ -80,6 +80,26 @@ namespace Knot.Updates
             catch (InvalidDataException) { return false; }
         }
 
+        // Inno Setup's loader can retain ASCII-space resource placeholders after
+        // these values. Normalize only bounded installer fields, never metadata
+        // from the installed application or the semantic version policy itself.
+        private static string InstallerResourceField(string value, int maximumCharacters)
+        {
+            if (value == null || value.Length > maximumCharacters) throw new InvalidDataException("Invalid installer metadata.");
+            return value.TrimEnd(' ');
+        }
+        internal static bool AllowedInstallerResourceMetadata(string product, string description, string version, string currentBuild)
+        {
+            try
+            {
+                return AllowedInstallerMetadata(InstallerResourceField(product, 60), InstallerResourceField(description, 60),
+                    InstallerResourceField(version, 50), currentBuild);
+            }
+            catch (InvalidDataException) { return false; }
+        }
+        internal static ulong InstallerVersionBuild(string version)
+        { return VersionBuild(InstallerResourceField(version, 50)); }
+
         internal static string Hash(Stream input)
         {
             input.Position = 0;
@@ -199,7 +219,7 @@ namespace Knot.Updates
                 throw new InvalidDataException("Update file changed.");
             VerifyPublisher(lockedFile, path);
             FileVersionInfo version = FileVersionInfo.GetVersionInfo(path);
-            if (!AllowedInstallerMetadata(version.ProductName, version.FileDescription, version.ProductVersion, minimumBuild))
+            if (!AllowedInstallerResourceMetadata(version.ProductName, version.FileDescription, version.ProductVersion, minimumBuild))
                 throw new InvalidDataException("The update is not a newer Knot Windows x64 installer.");
         }
 
@@ -338,7 +358,7 @@ namespace Knot.Updates
                         UpdateSecurity.VerifyPublisher(current, outer);
                         FileVersionInfo installed = FileVersionInfo.GetVersionInfo(outer);
                         if (installed.ProductName != "Knot" || installed.FileDescription != "Knot Windows" ||
-                            UpdateSecurity.VersionBuild(installed.ProductVersion) < UpdateSecurity.VersionBuild(FileVersionInfo.GetVersionInfo(installer).ProductVersion))
+                            UpdateSecurity.VersionBuild(installed.ProductVersion) < UpdateSecurity.InstallerVersionBuild(FileVersionInfo.GetVersionInfo(installer).ProductVersion))
                             throw new InvalidDataException("The installed Knot version was not advanced.");
                     }
                 }

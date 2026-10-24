@@ -238,7 +238,18 @@ jobs:
           $version = [IO.File]::ReadAllText((Join-Path $PWD 'VERSION')).Trim()
           $path = Join-Path $PWD ('dist\release\Knot-' + $version + '-windows-x64-setup.exe')
           $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
-          if ($info.ProductName -cne 'Knot' -or $info.FileDescription -cne 'Knot Windows x64 Setup' -or $info.ProductVersion -cne $version) {
+          # Pinned Inno overwrites fixed space-filled version-resource slots.
+          # Retain raw source-controlled fields/lengths to diagnose that boundary.
+          [pscustomobject]@{ productName=$info.ProductName; description=$info.FileDescription; version=$info.ProductVersion;
+            productNameLength=$info.ProductName.Length; descriptionLength=$info.FileDescription.Length; versionLength=$info.ProductVersion.Length } | ConvertTo-Json -Compress
+          function Read-InnoMetadata([string] $Value, [int] $Limit) {
+            if ($Value.Length -gt $Limit) { throw 'Installer metadata exceeds the pinned resource slot' }
+            return $Value.TrimEnd([char[]]@([char]0x20))
+          }
+          $product = Read-InnoMetadata $info.ProductName 60
+          $description = Read-InnoMetadata $info.FileDescription 60
+          $productVersion = Read-InnoMetadata $info.ProductVersion 50
+          if ($product -cne 'Knot' -or $description -cne 'Knot Windows x64 Setup' -or $productVersion -cne $version) {
             throw 'Installer product metadata does not match the signed updater contract'
           }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
